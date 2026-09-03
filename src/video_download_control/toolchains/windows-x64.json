@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "bundle_id": "windows-x64-yt-dlp-2026.08.19-ffmpeg-9.0.1-20260820",
+  "target": {
+    "system": "Windows",
+    "machines": [
+      "AMD64",
+      "x86_64"
+    ]
+  },
+  "yt_dlp": {
+    "version": "2026.08.19",
+    "execution": "python-zipimport",
+    "entrypoint": "yt-dlp/yt-dlp",
+    "license_expression": "Unlicense AND MIT AND ISC",
+    "artifact": {
+      "cache_name": "yt-dlp",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp",
+      "size": 3072469,
+      "sha256": "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6"
+    },
+    "source_artifact": {
+      "cache_name": "yt-dlp.tar.gz",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.tar.gz",
+      "install_path": "evidence/yt-dlp/yt-dlp.tar.gz",
+      "size": 6020567,
+      "sha256": "072aad4f2a7604e92155f61a275a4752dc64046c8f6d90df3710525d94cd37c1"
+    },
+    "checksums_artifact": {
+      "cache_name": "SHA2-256SUMS",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/SHA2-256SUMS",
+      "install_path": "evidence/yt-dlp/SHA2-256SUMS",
+      "size": 1595,
+      "sha256": "a63701f30755cb4d9317950d69703e9d751d490cb1b7059e1bb501a353fe7dcb"
+    },
+    "signature_artifact": {
+      "cache_name": "SHA2-256SUMS.sig",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/SHA2-256SUMS.sig",
+      "install_path": "evidence/yt-dlp/SHA2-256SUMS.sig",
+      "size": 566,
+      "sha256": "8d6f9a7c84c57222e3650c61699185878a3468308de702993ce4f20b5f9cf199"
+    },
+    "license": {
+      "archive_path": "yt-dlp/LICENSE",
+      "install_path": "licenses/yt-dlp/LICENSE",
+      "size": 1211,
+      "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+    }
+  },
+  "ffmpeg": {
+    "version": "n9.0.1-6-g9d4ca21220-20260820",
+    "archive_root": "ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-shared-9.0",
+    "license_expression": "LGPL-3.0-or-later",
+    "configuration_sha256": "c216644f4c95559096e92778b637deb459a9f23830838f8923eca4376a0e5899",
+    "required_configuration_flags": [
+      "--enable-version3",
+      "--enable-shared",
+      "--disable-static",
+      "--disable-libx264",
+      "--disable-libx265"
+    ],
+    "forbidden_configuration_flags": [
+      "--enable-gpl",
+      "--enable-nonfree"
+    ],
+    "artifact": {
+      "cache_name": "ffmpeg.zip",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-20-13-45/ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-shared-9.0.zip",
+      "size": 67200662,
+      "sha256": "138fe84aa6e4836920f615704115d7ecf4cfbfc20f9a3d5c60f27c1e604fc12b"
+    },
+    "source_project_url": "https://github.com/FFmpeg/FFmpeg",
+    "build_project_url": "https://github.com/BtbN/FFmpeg-Builds",
+    "payload": [
+      {
+        "archive_path": "bin/avcodec-63.dll",
+        "install_path": "ffmpeg/bin/avcodec-63.dll",
+        "size": 71069184,
+        "sha256": "40c288d969589ff7f2f00338857c1a5a756fe41283fed0cb31fc118f51837e68"
+      },
+      {
+        "archive_path": "bin/avdevice-63.dll",
+        "install_path": "ffmpeg/bin/avdevice-63.dll",
+        "size": 3923968,
+        "sha256": "753001a5872614d0008fa7fa93a03c78fb6677315b5a574550628cb2053d8f68"
+      },
+      {
+        "archive_path": "bin/avfilter-12.dll",
+        "install_path": "ffmpeg/bin/avfilter-12.dll",
+        "size": 30014976,
+        "sha256": "1f8566b1cecb54eae39dab87615043c915779252726ddda66e486cd95a55a22d"
+      },
+      {
+        "archive_path": "bin/avformat-63.dll",
+        "install_path": "ffmpeg/bin/avformat-63.dll",
+        "size": 22153728,
+        "sha256": "6e5e274b89423fe52b772fc2b0c51a9d77a57a8a2663aac97ac88286e4509c58"
+      },
+      {
+        "archive_path": "bin/avutil-61.dll",
+        "install_path": "ffmpeg/bin/avutil-61.dll",
+        "size": 2939392,
+        "sha256": "532ea8e8b5864bfc1714d6c37cccf483aa3633965f7e0b647c4141e5dc297538"
+      },
+      {
+        "archive_path": "bin/ffmpeg.exe",
+        "install_path": "ffmpeg/bin/ffmpeg.exe",
+        "size": 538112,
+        "sha256": "4c7f8a53bb415a2c6a22877b1bd2cd4567e8ce8d053ec702729230457bd37ed9"
+      },
+      {
+        "archive_path": "bin/ffprobe.exe",
+        "install_path": "ffmpeg/bin/ffprobe.exe",
+        "size": 227328,
+        "sha256": "ad2da768b955a0012deb328be8ce37bd818508e96801835f148b285194e96519"
+      },
+      {
+        "archive_path": "bin/swresample-7.dll",
+        "install_path": "ffmpeg/bin/swresample-7.dll",
+        "size": 722944,
+        "sha256": "847dfe44bd80e1fa8e469447858a47a4bd4a88a386ce456ba1ed246d6b58b0d0"
+      },
+      {
+        "archive_path": "bin/swscale-10.dll",
+        "install_path": "ffmpeg/bin/swscale-10.dll",
+        "size": 2479616,
+        "sha256": "6e43504825fb3148d207f418714e1b2e090988e059e0bfdd9e2a7a20bb694938"
+      }
+    ],
+    "license": {
+      "archive_path": "LICENSE.txt",
+      "install_path": "licenses/ffmpeg/LICENSE.txt",
+      "size": 7651,
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    }
+  },
+  "policy": {
+    "network_download_enabled": false,
+    "isolated_worker_ready": false,
+    "platform_download_verified": false,
+    "redistribution_status": "blocked_pending_third_party_source_and_notice_audit"
+  }
+}

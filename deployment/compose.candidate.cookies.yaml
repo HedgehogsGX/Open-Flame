@@ -1,0 +1,26 @@
+services:
+  worker:
+    entrypoint:
+      - /bin/sh
+      - /run/vdc-cookie-runner.sh
+    volumes:
+      - type: bind
+        source: "${VDC_COOKIE_SOURCE_ROOT:?set the root-owned Cookie source root}"
+        target: /run/vdc-cookie-sources
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${VDC_COOKIE_MAPPING_FILE:?set the root-owned Cookie mapping file}"
+        target: /run/vdc-cookie-mapping.env
+        read_only: true
+        bind:
+          create_host_path: false
+    configs:
+      - source: cookie-runner
+        target: /run/vdc-cookie-runner.sh
+        mode: 0444
+
+configs:
+  cookie-runner:
+    file: ./cookies/run-candidate-worker.sh

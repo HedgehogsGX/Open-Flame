@@ -1,0 +1,71 @@
+# The default tool image is deliberately unresolvable. A build must supply a
+# reviewed, immutable image reference ending in @sha256:<64 lowercase hex>.
+ARG VDC_TOOL_IMAGE=replace.invalid/vdc-tool-bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+FROM ${VDC_TOOL_IMAGE} AS tool_bundle
+
+FROM python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2 AS wheel_builder
+WORKDIR /build
+COPY deployment/requirements.build.lock deployment/requirements.runtime.lock ./
+RUN python -m pip download --disable-pip-version-check --no-cache-dir \
+      --no-deps --only-binary=:all: --require-hashes --dest /locked-wheels \
+      --requirement requirements.build.lock \
+      --requirement requirements.runtime.lock
+RUN --network=none python -m pip install \
+      --disable-pip-version-check --no-cache-dir \
+      --no-deps --no-index --only-binary=:all: --find-links=/locked-wheels \
+      --require-hashes --requirement requirements.build.lock
+COPY pyproject.toml README.md ./
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md ./
+COPY licenses ./licenses
+COPY src ./src
+RUN --network=none python -m pip wheel \
+      --disable-pip-version-check --no-cache-dir \
+      --no-deps --no-index --no-build-isolation --wheel-dir /project-wheel .
+
+FROM python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2 AS runtime
+ARG VDC_TOOL_IMAGE
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/opt/vdc-tools:/usr/local/bin:/usr/bin:/bin
+
+RUN --network=none printf '%s' "${VDC_TOOL_IMAGE}" \
+      | grep -Eq '^.+@sha256:[0-9a-f]{64}$' \
+    && groupadd --gid 10001 vdc \
+    && useradd --uid 10001 --gid 10001 --no-create-home \
+         --home-dir /nonexistent --shell /usr/sbin/nologin vdc \
+    && install -d -o 10001 -g 10001 -m 0750 \
+         /var/lib/vdc /run/vdc-egress /etc/vdc /opt/vdc-tools
+
+COPY deployment/requirements.runtime.lock /tmp/requirements.runtime.lock
+COPY --from=wheel_builder /locked-wheels /wheels
+COPY --from=wheel_builder /project-wheel/video_download_control-0.9.1-py3-none-any.whl /tmp/video_download_control-0.9.1-py3-none-any.whl
+RUN --network=none python -m pip install --no-cache-dir --no-index \
+      --no-deps --only-binary=:all: --find-links=/wheels --require-hashes \
+      --requirement /tmp/requirements.runtime.lock \
+    && python -m pip install --no-cache-dir --no-index \
+      --only-binary=:all: --no-deps \
+      /tmp/video_download_control-0.9.1-py3-none-any.whl \
+    && python -m pip check \
+    && rm -rf /wheels /tmp/requirements.runtime.lock \
+      /tmp/video_download_control-0.9.1-py3-none-any.whl
+
+# Tool-bundle contract: self-contained executables plus hash-verified provenance
+# and license evidence. Runtime preflight additionally checks exact versions.
+COPY deployment/validate_tool_bundle.py /usr/local/libexec/vdc-validate-tool-bundle.py
+COPY --from=tool_bundle --chown=10001:10001 /opt/vdc-tools/ /opt/vdc-tools/
+RUN --network=none test -x /opt/vdc-tools/yt-dlp \
+    && test -x /opt/vdc-tools/ffmpeg \
+    && test -x /opt/vdc-tools/ffprobe \
+    && test -f /opt/vdc-tools/bundle-manifest.json \
+    && python -I /usr/local/libexec/vdc-validate-tool-bundle.py \
+         --execute-version-checks /opt/vdc-tools
+
+LABEL org.opencontainers.image.title="video-download-control candidate worker" \
+      org.opencontainers.image.version="0.9.1" \
+      org.opencontainers.image.description="Default-disabled deployment candidate; not Stage-0 verified"
+
+USER 10001:10001
+WORKDIR /var/lib/vdc
+HEALTHCHECK NONE
+CMD ["python", "-I", "-c", "raise SystemExit('candidate image requires an explicit service command')"]

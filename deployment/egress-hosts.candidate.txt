@@ -1,0 +1,3 @@
+# Safe placeholder. It permits no real platform traffic.
+# Replace this file outside the repository with Stage-0-observed, reviewed hosts.
+replace.invalid

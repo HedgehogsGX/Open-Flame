@@ -1,0 +1,263 @@
+name: video-download-control-candidate
+
+x-candidate-common: &candidate-common
+  image: "${VDC_CANDIDATE_IMAGE:?set an immutable image reference ending in @sha256}"
+  pull_policy: never
+  profiles: ["candidate-real-worker"]
+  user: "10001:10001"
+  read_only: true
+  init: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  sandbox:
+    <<: *candidate-common
+    network_mode: none
+    command:
+      - python
+      - -I
+      - -c
+      - >-
+        import signal,threading;
+        stopped=threading.Event();
+        signal.signal(signal.SIGTERM,lambda *_:stopped.set());
+        signal.signal(signal.SIGINT,lambda *_:stopped.set());
+        stopped.wait()
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: "0.25"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -I
+        - -c
+        - >-
+          names={line.split(':',1)[0].strip() for line in open('/proc/net/dev') if ':' in line};
+          raise SystemExit(0 if names == {'lo'} else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    stop_grace_period: 10s
+
+  egress-proxy:
+    <<: *candidate-common
+    command:
+      - video-download-egress-proxy
+      - --unix-socket
+      - /run/vdc-egress/proxy.sock
+      - --allowed-host-file
+      - /etc/vdc/egress-hosts.txt
+      - --max-connections
+      - "64"
+      - --max-upload-bytes
+      - "67108864"
+      - --max-download-bytes
+      - "536870912"
+      - --connect-timeout
+      - "10"
+      - --idle-timeout
+      - "30"
+      - --total-timeout
+      - "300"
+    volumes:
+      - type: bind
+        source: "${VDC_SOCKET_ROOT:?set a pre-created UID 10001 socket directory}"
+        target: /run/vdc-egress
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${VDC_EGRESS_POLICY_FILE:?set an operator-reviewed policy file}"
+        target: /etc/vdc/egress-hosts.txt
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0700
+    networks: ["egress"]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: "0.50"
+    ulimits:
+      nofile: {soft: 1024, hard: 1024}
+      core: {soft: 0, hard: 0}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -I
+        - -c
+        - >-
+          import os,stat;
+          value=os.stat('/run/vdc-egress/proxy.sock',follow_symlinks=False);
+          raise SystemExit(0 if stat.S_ISSOCK(value.st_mode) else 1)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 15s
+
+  relay:
+    <<: *candidate-common
+    network_mode: "service:sandbox"
+    depends_on:
+      sandbox:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+    command:
+      - video-download-unix-relay
+      - --upstream-socket
+      - /run/vdc-egress/proxy.sock
+      - --listen-host
+      - 127.0.0.1
+      - --listen-port
+      - "18080"
+      - --max-connections
+      - "16"
+      - --max-upload-bytes
+      - "67108864"
+      - --max-download-bytes
+      - "536870912"
+      - --connect-timeout
+      - "5"
+      - --idle-timeout
+      - "30"
+      - --total-timeout
+      - "300"
+    volumes:
+      - type: bind
+        source: "${VDC_SOCKET_ROOT:?set a pre-created UID 10001 socket directory}"
+        target: /run/vdc-egress
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: "0.25"
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -I
+        - -c
+        - >-
+          import socket;
+          connection=socket.create_connection(('127.0.0.1',18080),2);
+          connection.close()
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 15s
+
+  worker:
+    <<: *candidate-common
+    network_mode: "service:sandbox"
+    depends_on:
+      sandbox:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    environment:
+      VDC_ENABLE_CANDIDATE_REAL_WORKER: "${VDC_ENABLE_CANDIDATE_REAL_WORKER:?must explicitly equal 1}"
+    command:
+      - video-download-candidate-worker
+      - --data-root
+      - /var/lib/vdc
+      - --database-path
+      - /var/lib/vdc/control.sqlite3
+      - --yt-dlp-executable
+      - /opt/vdc-tools/yt-dlp
+      - --ffmpeg-directory
+      - /opt/vdc-tools
+      - --ffmpeg-executable
+      - /opt/vdc-tools/ffmpeg
+      - --ffprobe-executable
+      - /opt/vdc-tools/ffprobe
+      - --unix-socket-path
+      - /run/vdc-egress/proxy.sock
+      - --yt-dlp-version
+      - "${VDC_YT_DLP_VERSION:?set the exact observed version}"
+      - --ffmpeg-version
+      - "${VDC_FFMPEG_VERSION:?set the exact observed version token}"
+      - --ffprobe-version
+      - "${VDC_FFPROBE_VERSION:?set the exact observed version token}"
+      - --egress-policy-version
+      - "${VDC_EGRESS_POLICY_VERSION:?set a reviewed policy identity}"
+      - --relay-port
+      - "18080"
+      - --max-height
+      - "1080"
+      - --max-file-bytes
+      - "8589934592"
+      - --storage-min-free-bytes
+      - "1073741824"
+      - --socket-timeout-seconds
+      - "20"
+      - --probe-timeout-seconds
+      - "120"
+      - --download-timeout-seconds
+      - "1800"
+      - --ffprobe-timeout-seconds
+      - "60"
+      - --attempt-timeout-seconds
+      - "1800"
+      - --max-items-per-source
+      - "50"
+      - --max-cookie-bytes
+      - "16777216"
+      - --worker-id
+      - compose-candidate-1
+      - --poll-interval-seconds
+      - "2"
+    volumes:
+      - type: bind
+        source: "${VDC_DATA_ROOT:?set a pre-created local data directory}"
+        target: /var/lib/vdc
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${VDC_SOCKET_ROOT:?set a pre-created UID 10001 socket directory}"
+        target: /run/vdc-egress
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: "2.0"
+    ulimits:
+      nofile: {soft: 1024, hard: 1024}
+      core: {soft: 0, hard: 0}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -I
+        - -c
+        - >-
+          from pathlib import Path;
+          raise SystemExit(0 if Path('/var/lib/vdc/control.sqlite3').is_file() else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
+
+networks:
+  egress:
+    driver: bridge
+    internal: false

@@ -1,0 +1,5 @@
+*
+!.gitignore
+!cookie-sources.env.example
+!run-candidate-worker.sh
+!validate-cookie-sources.sh

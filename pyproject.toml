@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-download-control"
+version = "0.9.1"
+description = "Local-first control plane for auditable multi-platform media download jobs"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python/*/*"]
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx2==2.12.0",
+  "pytest==9.1.1",
+]
+
+[project.scripts]
+video-download-control = "video_download_control.cli:main"
+video-download-worker = "video_download_control.worker_cli:main"
+video-download-validation = "video_download_control.validation_cli:main"
+video-download-unix-relay = "video_download_control.relay_cli:main"
+video-download-egress-proxy = "video_download_control.egress_proxy_cli:main"
+video-download-short-link-egress = "video_download_control.short_link_transport_cli:main"
+video-download-candidate-worker = "video_download_control.candidate_worker_cli:main"
+video-download-credentials = "video_download_control.credential_cli:main"
+video-download-backup = "video_download_control.backup_cli:main"
+video-download-tools = "video_download_control.toolchain_cli:main"
+video-download-local-worker = "video_download_control.local_worker_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_download_control"]
+
+[tool.hatch.build.targets.sdist]
+# This audit record contains the final sdist digest. Excluding only that record
+# prevents a self-referential archive while keeping the rest of validation/ in
+# the source distribution.
+exclude = ["/validation/apache-2.0-license-migration-evidence.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
