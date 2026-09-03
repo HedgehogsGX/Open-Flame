@@ -8,6 +8,8 @@ class Platform(StrEnum):
     YOUTUBE = "youtube"
     BILIBILI = "bilibili"
     DOUYIN = "douyin"
+    TIKTOK = "tiktok"
+    INSTAGRAM = "instagram"
 
 
 class SourceType(StrEnum):
@@ -17,6 +19,8 @@ class SourceType(StrEnum):
     YOUTUBE_SHORT = "youtube_short"
     BILIBILI_VIDEO = "bilibili_video"
     DOUYIN_VIDEO = "douyin_video"
+    TIKTOK_VIDEO = "tiktok_video"
+    INSTAGRAM_REEL = "instagram_reel"
     SHORT_LINK = "short_link"
 
 

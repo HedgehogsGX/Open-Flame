@@ -255,13 +255,16 @@ class YtDlpCommandFactory:
         # pinned YouTube extractor otherwise ranks an HLS variant first for
         # some videos; its merged timestamps can decode with duplicate-DTS
         # diagnostics even though an equivalent direct stream is clean.  The
-        # final branches retain HLS as a compatibility fallback.
+        # final branches retain HLS as a compatibility fallback while keeping
+        # the configured height ceiling.  An unqualified final ``/b`` would
+        # silently bypass that ceiling when a platform exposes no smaller
+        # rendition (common for vertical short-form video).
         format_selector = (
             f"bv*[height<={self.max_height}][protocol!*=m3u8]"
             f"+ba[protocol!*=m3u8]/"
             f"b[height<={self.max_height}][protocol!*=m3u8]/"
             f"bv*[height<={self.max_height}]+ba/"
-            f"b[height<={self.max_height}]/b"
+            f"b[height<={self.max_height}]"
         )
         arguments = [
             *self._base_arguments(root, request.platform, cookie),

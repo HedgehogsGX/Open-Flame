@@ -33,18 +33,26 @@ x_ref=
 youtube_ref=
 bilibili_ref=
 douyin_ref=
+tiktok_ref=
+instagram_ref=
 x_seen=0
 youtube_seen=0
 bilibili_seen=0
 douyin_seen=0
+tiktok_seen=0
+instagram_seen=0
 x_validated_path=
 youtube_validated_path=
 bilibili_validated_path=
 douyin_validated_path=
+tiktok_validated_path=
+instagram_validated_path=
 x_validated_snapshot=
 youtube_validated_snapshot=
 bilibili_validated_snapshot=
 douyin_validated_snapshot=
+tiktok_validated_snapshot=
+instagram_validated_snapshot=
 
 fail() {
     printf '%s\n' "Cookie deployment metadata validation failed for $1 ($2)." >&2
@@ -240,11 +248,22 @@ parse_mapping() {
                 douyin_ref=$reference
                 douyin_seen=1
                 ;;
+            VDC_COOKIE_TIKTOK_OPAQUE_REF)
+                assign_reference tiktok "$reference" "$tiktok_seen"
+                tiktok_ref=$reference
+                tiktok_seen=1
+                ;;
+            VDC_COOKIE_INSTAGRAM_OPAQUE_REF)
+                assign_reference instagram "$reference" "$instagram_seen"
+                instagram_ref=$reference
+                instagram_seen=1
+                ;;
             *) fail mapping "mapping key is unsupported" ;;
         esac
     done <&3
     exec 3<&-
-    for seen_flag in "$x_seen" "$youtube_seen" "$bilibili_seen" "$douyin_seen"; do
+    for seen_flag in "$x_seen" "$youtube_seen" "$bilibili_seen" "$douyin_seen" \
+        "$tiktok_seen" "$instagram_seen"; do
         [ "$seen_flag" = 1 ] || fail mapping "mapping key is missing"
     done
     read_file_metadata mapping "$VDC_COOKIE_MAPPING_FILE" "$MAX_MAPPING_BYTES"
@@ -318,6 +337,14 @@ validate_platform() {
             douyin_validated_path=$source_path
             douyin_validated_snapshot=$file_snapshot
             ;;
+        tiktok)
+            tiktok_validated_path=$source_path
+            tiktok_validated_snapshot=$file_snapshot
+            ;;
+        instagram)
+            instagram_validated_path=$source_path
+            instagram_validated_snapshot=$file_snapshot
+            ;;
     esac
 }
 
@@ -342,7 +369,7 @@ require_tool stat
 : "${VDC_SOCKET_ROOT:?set the Unix socket root}"
 VDC_COOKIE_STAGING_PLATFORM=${VDC_COOKIE_STAGING_PLATFORM:-}
 case "$VDC_COOKIE_STAGING_PLATFORM" in
-    ""|x|youtube|bilibili|douyin) ;;
+    ""|x|youtube|bilibili|douyin|tiktok|instagram) ;;
     *) fail staging "platform is unsupported" ;;
 esac
 
@@ -377,6 +404,7 @@ for protected_root in "$VDC_DATA_ROOT" "$VDC_SOCKET_ROOT" "$repository_root"; do
 done
 unexpected_root=$(find "$VDC_COOKIE_SOURCE_ROOT" -mindepth 1 -maxdepth 1 \
     ! -name x ! -name youtube ! -name bilibili ! -name douyin \
+    ! -name tiktok ! -name instagram \
     -print -quit 2>/dev/null) || fail root "directory entries cannot be inspected"
 [ -z "$unexpected_root" ] || fail root "directory contains an unexpected entry"
 case "$VDC_COOKIE_MAPPING_FILE" in
@@ -398,6 +426,8 @@ validate_platform x "$x_ref"
 validate_platform youtube "$youtube_ref"
 validate_platform bilibili "$bilibili_ref"
 validate_platform douyin "$douyin_ref"
+validate_platform tiktok "$tiktok_ref"
+validate_platform instagram "$instagram_ref"
 
 revalidate_source_snapshot x "$x_validated_path" "$x_validated_snapshot"
 revalidate_source_snapshot youtube \
@@ -406,6 +436,10 @@ revalidate_source_snapshot bilibili \
     "$bilibili_validated_path" "$bilibili_validated_snapshot"
 revalidate_source_snapshot douyin \
     "$douyin_validated_path" "$douyin_validated_snapshot"
+revalidate_source_snapshot tiktok \
+    "$tiktok_validated_path" "$tiktok_validated_snapshot"
+revalidate_source_snapshot instagram \
+    "$instagram_validated_path" "$instagram_validated_snapshot"
 
 if [ -n "$VDC_COOKIE_STAGING_PLATFORM" ]; then
     printf '%s\n' "Cookie deployment metadata validated for one same-directory staging source."

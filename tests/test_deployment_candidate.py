@@ -17,6 +17,8 @@ COOKIE_PLATFORMS = {
     "youtube": ("YOUTUBE", "/run/vdc-cookie-sources/youtube/cookies.txt"),
     "bilibili": ("BILIBILI", "/run/vdc-cookie-sources/bilibili/cookies.txt"),
     "douyin": ("DOUYIN", "/run/vdc-cookie-sources/douyin/cookies.txt"),
+    "tiktok": ("TIKTOK", "/run/vdc-cookie-sources/tiktok/cookies.txt"),
+    "instagram": ("INSTAGRAM", "/run/vdc-cookie-sources/instagram/cookies.txt"),
 }
 
 
@@ -59,7 +61,7 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
     assert "ARG VDC_PYTHON_IMAGE" not in dockerfile
     assert "@sha256:[0-9a-f]{64}" in dockerfile
     assert "USER 10001:10001" in dockerfile
-    assert "video_download_control-0.9.1-py3-none-any.whl" in dockerfile
+    assert "video_download_control-0.10.0-py3-none-any.whl" in dockerfile
     assert not dockerfile.startswith("# syntax=")
     assert "requirements.build.lock" in dockerfile
     assert "requirements.runtime.lock" in dockerfile
@@ -72,8 +74,8 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
     assert dockerfile.count("python -m pip ") == 6
     assert (
         "COPY --from=wheel_builder "
-        "/project-wheel/video_download_control-0.9.1-py3-none-any.whl "
-        "/tmp/video_download_control-0.9.1-py3-none-any.whl"
+        "/project-wheel/video_download_control-0.10.0-py3-none-any.whl "
+        "/tmp/video_download_control-0.10.0-py3-none-any.whl"
     ) in dockerfile
 
     download_start = dockerfile.index("RUN python -m pip download")
@@ -126,7 +128,7 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
         assert flag in dependency_install
     assert "--no-deps" in project_install
     assert "--no-index" in project_install
-    assert "/tmp/video_download_control-0.9.1-py3-none-any.whl" in project_install
+    assert "/tmp/video_download_control-0.10.0-py3-none-any.whl" in project_install
     for required in ("yt-dlp", "ffmpeg", "ffprobe", "bundle-manifest.json"):
         assert f"/opt/vdc-tools/{required}" in dockerfile
     assert ":latest" not in dockerfile
@@ -490,7 +492,7 @@ def test_cookie_deployment_paths_do_not_enter_control_plane_modules() -> None:
         assert not any(value in content for value in forbidden)
 
 
-@pytest.mark.parametrize("source_count", [0, 1, 3, 4])
+@pytest.mark.parametrize("source_count", [0, 1, 3, 6])
 @pytest.mark.skipif(
     os.name != "posix"
     or not hasattr(os, "geteuid")
@@ -499,7 +501,7 @@ def test_cookie_deployment_paths_do_not_enter_control_plane_modules() -> None:
     or not Path("/srv").is_dir(),
     reason="real metadata contract requires a root POSIX host with getfacl",
 )
-def test_cookie_validator_accepts_zero_to_four_synthetic_sources(
+def test_cookie_validator_accepts_zero_to_six_synthetic_sources(
     source_count: int,
 ) -> None:
     test_root = Path(tempfile.mkdtemp(prefix="vdc-cookie-contract-", dir="/srv"))

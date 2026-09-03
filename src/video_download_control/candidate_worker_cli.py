@@ -448,6 +448,7 @@ def build_candidate_worker(
         ),
         verifier=verifier,
         attempt_timeout_seconds=config.attempt_timeout_seconds,
+        max_height=config.max_height,
         max_items_per_source=config.max_items_per_source,
         network_guard=guard,
         runtime_logger=runtime_logger,

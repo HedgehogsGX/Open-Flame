@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.9.1"
+version = "0.10.0"
 description = "Local-first control plane for auditable multi-platform media download jobs"
 readme = "README.md"
 license = "Apache-2.0"

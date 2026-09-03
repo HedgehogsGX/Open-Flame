@@ -34,6 +34,18 @@ Version 0.9.1 的
 0.9.1 只在项目自有源码许可范围取代它们，不解除第三方 binary/container/tool-bundle
 发布门禁。
 
+Iteration 0.10.0 的
+[六平台下载能力与 Worker 路由工程证据](iteration-0.10.0-multiplatform-routing-evidence.md)
+记录 Bilibili、Douyin、TikTok、Instagram 的窄范围 URL、声明式能力矩阵、精确
+Worker claim 过滤、离线 fake 资产链、前端、打包、隐私和许可证复核。该工程记录本身
+没有执行真实媒体请求；同轮稍后的
+[Instagram 单样本本机全链路证据](iteration-0.10.0-instagram-live-evidence.md)
+记录一条 NASA 官方公开 Reel 在全新 data root、Windows direct/no-cookie/Node 下达到
+`1/1 ready`，并覆盖 DB、manifest/API copy、完整解码、清理、JSONL 日志和浏览器 UI。
+Bilibili 真实尝试遇 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，未提供 Cookie 时
+正确归类为 `authentication_required`；TikTok 未实跑。单样本不是 Stage 0，全部能力仍为
+`candidate`。
+
 1. Copy `sample_manifest.template.csv` to a private location outside Git.
 2. Add at least 10 current, public, browser-accessible positive samples for every `platform × source_type` cell, plus separate negative samples.
 3. Record each execution in a results CSV using `results.template.csv`.

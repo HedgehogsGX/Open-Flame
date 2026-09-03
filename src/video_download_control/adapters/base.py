@@ -19,6 +19,7 @@ from ..diagnostics import (
     MAX_DIAGNOSTIC_LENGTH as MAX_DIAGNOSTIC_LENGTH,
     sanitize_diagnostic,
 )
+from ..capabilities import AdapterRoute
 from ..domain import ErrorCode, Platform, SourceType
 
 
@@ -184,6 +185,7 @@ class DownloadAdapter(Protocol):
     version: str
     network_mode: AdapterNetworkMode
     supports_exact_selector: bool
+    supported_routes: frozenset[AdapterRoute]
 
     def probe(
         self,

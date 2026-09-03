@@ -90,6 +90,21 @@ class MissingProducedFileAdapter(ScriptedFakeAdapter):
         )
 
 
+class RecordingMaxHeightAdapter(ScriptedFakeAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.probe_max_height: int | None = None
+        self.download_max_height: int | None = None
+
+    def probe(self, request, context):
+        self.probe_max_height = request.max_height
+        return super().probe(request, context)
+
+    def download(self, request, context, progress, cancellation):
+        self.download_max_height = request.max_height
+        return super().download(request, context, progress, cancellation)
+
+
 class RejectingCommitRepository(WorkerRepository):
     def finalize_asset_commit_intents(self, lease, **kwargs):
         del kwargs
@@ -251,6 +266,30 @@ def test_offline_fake_adapter_runs_probe_to_immutable_asset(
     assert "https://" not in serialized_log
     assert "authorization" not in serialized_log
     assert "offline-e2e" not in serialized_log
+
+
+def test_worker_propagates_configured_max_height_to_adapter_requests(
+    service: BatchService, settings, database
+) -> None:
+    service.create_batch(
+        name="bounded height",
+        raw_inputs=["https://www.youtube.com/watch?v=bounded-height"],
+    )
+    adapter = RecordingMaxHeightAdapter()
+    worker = Worker(
+        worker_id="offline-test-worker",
+        repository=WorkerRepository(database),
+        adapter=adapter,
+        asset_store=AssetStore(settings.data_root),
+        verifier=NonEmptyTestVerifier(),
+        max_height=480,
+    )
+
+    result = worker.run_once()
+
+    assert result and result.status == "ready"
+    assert adapter.probe_max_height == 480
+    assert adapter.download_max_height == 480
 
 
 def test_transient_fake_failure_respects_backoff_then_succeeds(

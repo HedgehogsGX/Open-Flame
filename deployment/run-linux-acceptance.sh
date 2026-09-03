@@ -611,14 +611,14 @@ for flag in (
     if execution_mode:
         assert not value.startswith("replace-")
 
-assert len(cookie_specs) <= 4
+assert len(cookie_specs) <= 6
 cookie_platforms = set()
 cookie_references = set()
 cookie_targets = set()
 for spec in cookie_specs:
     identity, target = spec.split("=", 1)
     platform, opaque_ref = identity.split(":", 1)
-    assert platform in {"x", "youtube", "bilibili", "douyin"}
+    assert platform in {"x", "youtube", "bilibili", "douyin", "tiktok", "instagram"}
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", opaque_ref)
     assert platform not in cookie_platforms
     assert opaque_ref not in cookie_references
@@ -1357,6 +1357,8 @@ expected = {
     "VDC_COOKIE_YOUTUBE_OPAQUE_REF",
     "VDC_COOKIE_BILIBILI_OPAQUE_REF",
     "VDC_COOKIE_DOUYIN_OPAQUE_REF",
+    "VDC_COOKIE_TIKTOK_OPAQUE_REF",
+    "VDC_COOKIE_INSTAGRAM_OPAQUE_REF",
 }
 entries = {}
 for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
@@ -1368,11 +1370,11 @@ for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     entries[key] = value
 assert set(entries) == expected
 values = list(entries.values())
-assert len(set(values)) == 4
+assert len(set(values)) == 6
 assert all(re.fullmatch(r"acceptance-[A-Za-z0-9_.-]{1,53}", value) for value in values)
 PY
     then
-        fatal_check cookie_host_metadata four_synthetic_refs_required_for_acceptance
+        fatal_check cookie_host_metadata six_synthetic_refs_required_for_acceptance
     fi
     pass_check cookie_host_metadata optional_wrapper_and_synthetic_ceiling_validated
 else
@@ -1485,7 +1487,7 @@ expected = {
     "typing-extensions": "4.16.0",
     "typing-inspection": "0.4.4",
     "uvicorn": "0.52.4",
-    "video-download-control": "0.9.1",
+    "video-download-control": "0.10.0",
 }
 assert all(version(name) == expected_version for name, expected_version in expected.items())
 for build_only in ("hatchling", "packaging", "pathspec", "pluggy", "trove-classifiers"):
@@ -1755,7 +1757,7 @@ for process in Path("/proc").iterdir():
 assert len(workers) == 1
 arguments = workers[0]
 specs = [arguments[index + 1] for index, value in enumerate(arguments[:-1]) if value == "--cookie-source"]
-assert len(specs) == 4
+assert len(specs) == 6
 platforms = set()
 references = set()
 paths = set()
@@ -1789,7 +1791,11 @@ for spec in specs:
     references.add(opaque_ref)
     paths.add(path)
     identities.add(identity)
-raise SystemExit(0 if platforms == {"x", "youtube", "bilibili", "douyin"} else 1)
+raise SystemExit(
+    0
+    if platforms == {"x", "youtube", "bilibili", "douyin", "tiktok", "instagram"}
+    else 1
+)
 ' >/dev/null 2>&1; then
     pass_check cookie_mount_permissions synthetic_sources_readonly_and_private
 else

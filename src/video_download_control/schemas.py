@@ -4,6 +4,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .capabilities import (
+    AdapterJobKind,
+    AuthenticationMode,
+    CapabilityStatus,
+    ShortLinkStatus,
+)
 from .domain import (
     BatchStatus,
     ErrorCode,
@@ -209,6 +215,20 @@ class PlatformCircuitResponse(BaseModel):
     opened_at: str | None
     cooldown_until: str | None
     requires_manual_reset: bool
+
+
+class DownloadCapabilityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: Platform
+    source_type: SourceType
+    job_kind: AdapterJobKind
+    adapter: str
+    status: CapabilityStatus
+    authentication: AuthenticationMode
+    adapter_version: str | None
+    environment: str | None
+    short_link_status: ShortLinkStatus
 
 
 class JobCountMetric(BaseModel):

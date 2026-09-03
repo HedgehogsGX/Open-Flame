@@ -38,7 +38,7 @@ INDEX_HTML = """<!doctype html>
 <body>
   <main>
     <h1>多平台视频下载控制面</h1>
-    <p class="muted">迭代 0.9.1：Apache-2.0 开源、接收与排队、Windows 本机下载 Worker、成品下载和脱敏运行日志。</p>
+    <p class="muted">迭代 0.10.0：六平台显式能力路由、Windows 本机下载 Worker、成品下载和脱敏运行日志。</p>
     <p class="notice">本机直连 Worker 已接入，但由单独进程显式运行；页面不会自行启动或推断它是否在线。Worker 在线时会处理任务并显示成品链接，离线时任务会保持排队。</p>
     <section class="card">
       <h2>运行状态</h2>
@@ -47,6 +47,8 @@ INDEX_HTML = """<!doctype html>
         <button id="resume-queue" type="button" hidden>确认磁盘恢复并继续队列</button>
       </div>
       <div id="circuit-status" class="muted">正在读取平台状态…</div>
+      <h3>下载能力</h3>
+      <div id="capability-status" class="muted">正在读取平台能力矩阵…</div>
     </section>
     <section class="card" aria-labelledby="toolchain-heading">
       <div class="row row-spread">
@@ -86,7 +88,7 @@ INDEX_HTML = """<!doctype html>
         <label for="name">批次名称（可选）</label>
         <input id="name" maxlength="200" placeholder="例如：9 月素材">
         <label for="inputs">URL 或包含 URL 的分享文本（每行一条）</label>
-        <textarea id="inputs" placeholder="https://www.youtube.com/watch?v=...&#10;https://x.com/.../status/..."></textarea>
+        <textarea id="inputs" placeholder="https://www.bilibili.com/video/BV...&#10;https://www.douyin.com/video/...&#10;https://www.tiktok.com/@user/video/...&#10;https://www.instagram.com/reel/..."></textarea>
         <label for="import-file">或导入 UTF-8 TXT/CSV（最多 256 KiB）</label>
         <input id="import-file" type="file" accept=".txt,.csv,text/plain,text/csv">
         <button id="submit" type="submit">创建批次</button>
@@ -113,6 +115,7 @@ INDEX_HTML = """<!doctype html>
     const queueStatus = document.querySelector('#queue-status');
     const resumeQueue = document.querySelector('#resume-queue');
     const circuitStatus = document.querySelector('#circuit-status');
+    const capabilityStatus = document.querySelector('#capability-status');
     const refreshTools = document.querySelector('#refresh-tools');
     const toolStatus = document.querySelector('#tool-status');
     const toolOutput = document.querySelector('#tool-output');
@@ -207,8 +210,47 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function loadCapabilityState() {
+      try {
+        const capabilities = await fetchJson(
+          '/api/v1/download-capabilities',
+          {},
+          '读取平台能力矩阵'
+        );
+        capabilityStatus.replaceChildren();
+        capabilityStatus.className = 'muted';
+        const labels = {
+          disabled: '未启用',
+          candidate: '候选（尚未完成平台级验收）',
+          verified: '已验证'
+        };
+        const shortLinkLabels = {
+          not_applicable: '短链不适用',
+          supported: '短链可直接使用',
+          gated: '短链需单独启用解析服务',
+          deferred: '短链尚未接入'
+        };
+        for (const capability of capabilities) {
+          const line = document.createElement('p');
+          line.textContent = `${capability.platform} / ${capability.source_type}: `
+            + `${labels[capability.status] || capability.status}`
+            + `；${capability.authentication}`
+            + `；${shortLinkLabels[capability.short_link_status] || capability.short_link_status}`
+            + `；证据环境 ${capability.environment || '未绑定'}`;
+          capabilityStatus.append(line);
+        }
+      } catch (error) {
+        capabilityStatus.textContent = `平台能力读取失败：${error}`;
+        capabilityStatus.className = 'danger';
+      }
+    }
+
     async function loadOperations() {
-      await Promise.all([loadQueueState(), loadCircuitState()]);
+      await Promise.all([
+        loadQueueState(),
+        loadCircuitState(),
+        loadCapabilityState()
+      ]);
     }
 
     async function refreshOperations() {

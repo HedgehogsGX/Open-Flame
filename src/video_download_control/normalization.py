@@ -151,6 +151,16 @@ def normalize_url(url: str) -> NormalizedURL:
                 ErrorCode.UNSUPPORTED_LINK_TYPE,
                 "MVP 仅接受 Bilibili 普通投稿 BV/av 链接",
             )
+        page_values = parse_qs(parts.query, keep_blank_values=True).get("p", [])
+        if page_values and (
+            len(page_values) != 1
+            or not page_values[0].isdigit()
+            or int(page_values[0]) != 1
+        ):
+            raise URLNormalizationError(
+                ErrorCode.UNSUPPORTED_LINK_TYPE,
+                "当前仅接受 Bilibili 投稿默认分 P；暂不支持选择其他分 P",
+            )
         source_id = match.group(1)
         if source_id.lower().startswith("bv"):
             source_id = "BV" + source_id[2:]
@@ -204,6 +214,50 @@ def normalize_url(url: str) -> NormalizedURL:
             Platform.DOUYIN,
             SourceType.SHORT_LINK,
             None,
+        )
+
+    if host in {"vm.tiktok.com", "vt.tiktok.com"}:
+        raise URLNormalizationError(
+            ErrorCode.UNSUPPORTED_LINK_TYPE,
+            "TikTok 短链已识别，但当前版本尚未接入短链展开",
+        )
+
+    if host in {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}:
+        match = re.fullmatch(
+            r"/@([A-Za-z0-9._]{1,32})/video/(\d{5,32})",
+            path,
+        )
+        if not match:
+            raise URLNormalizationError(
+                ErrorCode.UNSUPPORTED_LINK_TYPE,
+                "当前仅接受 TikTok 单视频 /@handle/video/{id} 链接",
+            )
+        handle = match.group(1).lower()
+        source_id = match.group(2)
+        canonical = f"https://www.tiktok.com/@{handle}/video/{source_id}"
+        return NormalizedURL(
+            submitted,
+            canonical,
+            Platform.TIKTOK,
+            SourceType.TIKTOK_VIDEO,
+            source_id,
+        )
+
+    if host in {"instagram.com", "www.instagram.com", "m.instagram.com"}:
+        match = re.fullmatch(r"/(?:reel|reels)/([A-Za-z0-9_-]{5,64})", path)
+        if not match:
+            raise URLNormalizationError(
+                ErrorCode.UNSUPPORTED_LINK_TYPE,
+                "当前仅接受 Instagram 单条 Reel 链接",
+            )
+        source_id = match.group(1)
+        canonical = f"https://www.instagram.com/reel/{source_id}"
+        return NormalizedURL(
+            submitted,
+            canonical,
+            Platform.INSTAGRAM,
+            SourceType.INSTAGRAM_REEL,
+            source_id,
         )
 
     raise URLNormalizationError(

@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..capabilities import DEFAULT_DOWNLOAD_CAPABILITIES
 from ..domain import ErrorCode, Platform
 from ..subprocess_runner import (
     CommandCancelled,
@@ -117,11 +118,13 @@ _AUTH_MARKERS = (
     "authentication required",
     "confirm you're not a bot",
     "cookies are needed",
+    "fresh cookies",
     "login required",
     "not a bot",
     "sign in to",
     "use --cookies",
 )
+_FORMAT_UNAVAILABLE_MARKERS = ("requested format is not available",)
 _UNAVAILABLE_MARKERS = (
     "content is unavailable",
     "has been deleted",
@@ -177,6 +180,9 @@ class YtDlpAdapter:
     # Real X attachment selection remains disabled until an authorized Stage 0
     # sample proves that the pinned extractor downloads exactly one sibling.
     supports_exact_selector = False
+    supported_routes = DEFAULT_DOWNLOAD_CAPABILITIES.claimable_routes(
+        adapter="yt_dlp"
+    )
 
     def __init__(
         self,
@@ -536,6 +542,11 @@ def _classify_exit(stderr: bytes, *, operation: str) -> tuple[ErrorCode, str]:
         (_GEO_MARKERS, ErrorCode.GEO_RESTRICTED, "geo-restricted content"),
         (_PRIVATE_MARKERS, ErrorCode.PRIVATE_CONTENT, "private content"),
         (_AUTH_MARKERS, ErrorCode.AUTHENTICATION_REQUIRED, "authentication"),
+        (
+            _FORMAT_UNAVAILABLE_MARKERS,
+            ErrorCode.CONTENT_UNAVAILABLE,
+            "no media format within policy",
+        ),
         (_UNAVAILABLE_MARKERS, ErrorCode.CONTENT_UNAVAILABLE, "unavailable content"),
         (_UNSUPPORTED_MARKERS, ErrorCode.ADAPTER_UNSUPPORTED, "an unsupported URL"),
         (_NETWORK_MARKERS, ErrorCode.NETWORK_ERROR, "a network failure"),

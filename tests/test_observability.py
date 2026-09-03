@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,9 +12,6 @@ from video_download_control.graph import (
     XPostIdentity,
     build_x_attachment_discovery,
 )
-
-NOW = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)
-
 
 def test_metrics_are_aggregate_only_and_include_disk_and_queue(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
@@ -85,12 +82,15 @@ def test_graph_metrics_count_discover_as_work_but_only_children_as_outcomes(
             json={"inputs": ["https://x.com/example/status/950001"]},
         ).json()
         parent = created["jobs"][0]
+        claim_time = datetime.fromisoformat(created["created_at"]) + timedelta(
+            seconds=1
+        )
         worker_repository = app.state.worker_repository
         lease = worker_repository.claim_next(
             worker_id="metrics-graph-worker",
             adapter="metrics-graph-fake",
             adapter_version="1",
-            now=NOW,
+            now=claim_time,
             supports_exact_selector=True,
         )
         assert lease is not None
@@ -113,7 +113,7 @@ def test_graph_metrics_count_discover_as_work_but_only_children_as_outcomes(
             probe_items=items,
             discovery_snapshot_hash=discovery.snapshot_hash,
             sanitized_source={},
-            now=NOW + timedelta(seconds=1),
+            now=claim_time + timedelta(seconds=1),
         )
         with app.state.database.connect() as connection:
             children = connection.execute(

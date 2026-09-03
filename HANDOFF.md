@@ -2,10 +2,10 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。  
 > 最后更新：2026-09-03  
-> 当前迭代：Iteration 0.9.1 — Apache-2.0 开源发布与供应链边界拆分  
-> 当前版本：`0.9.1`；数据库：Schema `8`
+> 当前迭代：Iteration 0.10.0 — 六平台显式下载能力与 Worker 路由
+> 当前版本：`0.10.0`；数据库：Schema `8`
 
-Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、ready 资产列表/下载和 `local-worker` 结构化日志能力，并由权利人将项目自有源码、文档与脚本正式授权为 Apache-2.0，版权声明为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu`。用户指定的 YouTube/X 双样本此前已完整经过“API Batch → Worker claim → 真实 yt-dlp/FFmpeg/ffprobe → AssetStore/manifest → API 下载”，并由前端重新打开和取回成品；公开记录省略输入 URL、运行时标识和媒体指纹。该结论只覆盖两个样本与 Windows 本机直连路径；Linux 隔离 Worker、Docker、真实 Cookie、完整 Stage 0 和平台级认证仍未完成。源码许可已闭合，但 dependency wheelhouse、冻结可执行文件、OCI/container image 与 yt-dlp/FFmpeg 工具包的第三方再分发门禁不因此放宽。
+Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力注册表、公开能力 API/UI，以及 Worker 对 `platform × source_type × job_kind` 的原子领取过滤。Bilibili、Douyin、TikTok、Instagram 采用现有固定 `yt-dlp` 子进程边界，不增加第三方依赖；直接 URL 的离线队列/Worker/资产链已覆盖。随后一条 NASA 官方公开 Instagram Reel 在全新 data root、Windows 本机直连、无 Cookie、显式 Node 和固定工具链下以 `1/1 ready` 完成 DB、AssetStore/manifest、API copy、完整解码、清理、JSONL 日志与浏览器 UI 闭环。Bilibili 真实尝试遇 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，未提供 Cookie 时正确归类为 `authentication_required`；TikTok 未实跑。单个 Instagram 样本不是 Stage 0，六个平台仍全部为 `candidate`。Linux 隔离 Worker、Docker、真实 Cookie、完整 Stage 0 和平台级认证均未完成。源码许可已闭合，但 dependency wheelhouse、冻结可执行文件、OCI/container image 与 yt-dlp/FFmpeg 工具包的第三方再分发门禁不因此放宽。
 
 ## 1. 权威规格与边界
 
@@ -20,13 +20,13 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 | 决策 | 当前值 | 证据状态 |
 |---|---|---|
 | 产品 | 单机/NAS、单管理员、私有自托管 | FastAPI 已实现；Windows 本机可独立使用；无认证且强制 loopback |
-| 批量/并发 | 每批 1–50；总活动 2；单平台 1 | 输入验证与 SQLite claim 事务强制；双样本已实际经过 Batch/claim/terminal 链 |
+| 批量/并发 | 每批 1–50；总活动 2；单平台 1 | 输入验证与 SQLite claim 事务强制；YouTube/X 双样本和 Instagram 单样本均已实际经过 Batch/claim/terminal 链 |
 | 数据 | Schema 8；旧 flat-v1 保留 | graph-v2 离线编排/恢复已验证；真实 X exact selector 未验证 |
-| 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；两个精确 URL 已经本机直连 Worker 实跑，平台整体未验证 |
+| 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；YouTube、X、Instagram 共三个精确输入已经本机直连 Worker 实跑，平台整体未验证 |
 | 短链 | 可信 egress 逐跳展开 | UDS/HMAC/replay/peer attestation 已离线实现；gate=0 |
 | 凭证 | 按平台 opaque ref；网页不编辑秘密 | DB 只存 ref；Cookie override 已静态验证；真实 Cookie 未挂载 |
-| 资产 | 不可变原件 + 脱敏 manifest/sidecar | fake/crash recovery 与双样本真实 Worker/AssetStore/manifest/API 下载链均已验证；API 不暴露本机路径 |
-| 前端/API | Batch 提交、最近批次、状态、ready 资产与运行日志 | 双样本可从最近批次重开并通过资产下载链接取回；浏览器验收无 error/warn |
+| 资产 | 不可变原件 + 脱敏 manifest/sidecar | fake/crash recovery、YouTube/X 双样本和 Instagram 单样本的真实 Worker/AssetStore/manifest/API 下载链均已验证；API 不暴露本机路径 |
+| 前端/API | Batch 提交、最近批次、状态、ready 资产、运行日志与声明式下载能力矩阵 | YouTube/X 双样本和 Instagram 单样本均可从最近批次重开并通过资产下载链接取回；能力 API/UI 只显示声明状态，不构成平台证明 |
 | 运行日志 | 控制面/Worker allowlist JSONL + 近期事件 API/UI | `local-worker` 已纳入既有脱敏、轮转、读取和前端展示契约；日志仍为 best-effort |
 | 部署 | Windows 控制面 + 本机直连 Worker；Docker Compose 单机候选 | 本机 direct Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
 | 备份 | DB 快照 + 已发布资产；秘密单独恢复 | Schema 8 Windows 小数据恢复已验证；无 Linux/NAS 证据 |
@@ -36,7 +36,7 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 
 ### 3.1 前六轮保留能力
 
-- 四平台 MVP URL 白名单/规范化/去重、Batch/API、持久化队列、Attempt/lease/retry/cancel、queue/circuit 和脱敏 metrics。
+- 六平台窄范围 URL 白名单/规范化/去重、Batch/API、持久化队列、Attempt/lease/retry/cancel、queue/circuit 和脱敏 metrics。当前新增范围为 TikTok 单视频、Instagram Reel，Bilibili 只接受默认分 P。
 - 不可变资产、sidecar、SHA-256 manifest、commit intent、三阶段 crash recovery 和 Schema 8 备份/独立根恢复审计。
 - X graph-v2 parent discovery、snapshot、exact child target、active generation、partial success、Input cancel/rediscover 和 ready-asset reuse。只有 `ScriptedGraphFakeAdapter` 离线 exact-selector=true；真实 `YtDlpAdapter.supports_exact_selector=False`。
 - admin-only CredentialProfile CLI 只存 bounded opaque ref，claim 时检查平台/禁用/过期；公开 Batch API 拒绝 credential 字段。
@@ -54,7 +54,7 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 
 ### 3.3 Iteration 0.7：Cookie 边界
 
-- credential-free base Compose 无 Cookie。显式 [`compose.candidate.cookies.yaml`](deployment/compose.candidate.cookies.yaml) 才把 source root、固定四 key mapping 和 reviewed wrapper 只读绑定给 Worker。产品 contract 允许 0–4 source；full acceptance 故意要求四个 synthetic source。
+- Iteration 0.7 当时的 credential-free base Compose 无 Cookie；显式 [`compose.candidate.cookies.yaml`](deployment/compose.candidate.cookies.yaml) 才把 source root、固定 mapping 和 reviewed wrapper 只读绑定给 Worker。0.10.0 已把当前资产扩到六 key、产品 contract 0–6 source，full acceptance 要求六个 synthetic source。
 - host validator 把 mapping 当数据解析，不 source dotenv，不打开/哈希/打印 Cookie；检查 canonical path、owner/group/mode、nlink、base ACL、安全祖先链、唯一 identity/ref、overlap 和 snapshot。
 - standalone validator 只经绝对 `/usr/bin/env -i` 传五个值，再以绝对 `/bin/sh` 执行，避免把 `BASH_FUNC_*`/`ENV`/PATH 带入子 shell。
 - Worker 通过 no-follow descriptor 重验 source，每次复制到新的 Attempt-private `0600` 文件，核对 identity/大小/时间/fsync。失败清理使用已 attested directory FD，不被 path swap 诱导。
@@ -66,7 +66,7 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 - 必须由 clean trusted root launcher 以绝对路径启动；execute 要求 effective root。runner 要求 `bash -p`、固定 `/usr/bin/python3` 且验证 Python 3.12+，所有 host Python 均用 `-I`。
 - Docker endpoint 正确尊重非空 `DOCKER_CONTEXT` 高于 `DOCKER_HOST` 的官方优先级，任何 current/default context 也只能解析到 local Unix Linux daemon。execute 拒绝 inherited `DOCKER_CONTEXT`、`DOCKER_HOST`、`DOCKER_CONFIG`、`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY`、`BUILDKIT_HOST`、`BUILDX_BUILDER`、`COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`、`COMPOSE_PROFILES`。
 - private env/override 精确 `root:root 0600`；policy 精确 `root:10001 0440`，并检查 nlink/size/ACL/祖先/snapshot。baseline/effective Compose 逐 service 精确比较；除 reviewed Cookie wrapper 和两个 Worker-only read-only bind 外，任何 command、healthcheck、namespace、mount、network/IPAM/name、secret、hook 或非 Worker 变化均拒绝。
-- Dockerfile 无外部 syntax image；`wheel_builder`/`runtime` 两个 Python `FROM` 硬编码同一 3.12.13 digest，无 ARG override。`pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`，build/runtime lock 均 exact+hashed。唯一 package 联网步骤是 hash-checked、wheel-only `pip download`；后续 install/build 均 `RUN --network=none` + `--no-index`，项目 wheel 关闭 build isolation/deps 并按精确路径安装，runtime 最后 `pip check`。Lock 同时存在 wheel/sdist hashes 不会放行 sdist，`--only-binary=:all:` 会拒绝它。Runner 的 network-none runtime contract 另精确核对 13 个 runtime-lock distributions + project `0.9.1`，并拒绝 hatchling/packaging/pathspec/pluggy/trove-classifiers 五个 build-only distributions 泄漏；target Linux 尚未执行。
+- Dockerfile 无外部 syntax image；`wheel_builder`/`runtime` 两个 Python `FROM` 硬编码同一 3.12.13 digest，无 ARG override。`pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`，build/runtime lock 均 exact+hashed。唯一 package 联网步骤是 hash-checked、wheel-only `pip download`；后续 install/build 均 `RUN --network=none` + `--no-index`，项目 wheel 关闭 build isolation/deps 并按精确路径安装，runtime 最后 `pip check`。Lock 同时存在 wheel/sdist hashes 不会放行 sdist，`--only-binary=:all:` 会拒绝它。Runner 的 network-none runtime contract 另精确核对 13 个 runtime-lock distributions + project `0.10.0`，并拒绝 hatchling/packaging/pathspec/pluggy/trove-classifiers 五个 build-only distributions 泄漏；target Linux 尚未执行。
 - Fresh local build tag 只作初始定位；runner 立即捕获/验证不可变 `sha256:...` image ID，把该 ID 写进 effective Compose，递归拒绝任意 string key/value 中的 `$`，在 env 同目录创建 `root:root 0600` frozen JSON。二次 `compose config` 必须与原 JSON 深等值、重过完整 validator 且 identity/snapshot 不变；之后 Compose mutation、direct runs、checkpoint image inspect 与 runtime container `Image` 校验全部绑定同一 ID，避免 tag rebind。正常退出按 identity 删除 frozen file，crash/identity drift 则保留供人工定点审计。
 - full mode 同时要求 non-pipe host `/proc/sys/kernel/core_pattern` 与 `RLIMIT_CORE=(0,0)`，并用 Docker inspect 确认 Cookie bind exact Source/Type/`RW=false`。
 - Full-mode 代码路径及静态测试设计覆盖 cold start、health、namespace/UDS、SSRF、peer attestation、SIGTERM/lease recovery、stale socket 和独立 Schema 8 restore。首个 Compose `up` 前已武装 scoped cleanup，因此部分启动后失败也会 stop；脚本无 recursive delete。目标 Linux/Compose execute 尚未发生。
@@ -118,6 +118,14 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 - 浏览器从最近批次打开该 Batch，看到 `ready`、`2/2 ready` 与两个下载链接；页面操作、资产列表和实际下载均正常，验收期间浏览器控制台无 error/warn。gitignored 原始状态、资产、API 下载与运行日志位于 `validation/local/local-worker-e2e-20260903-v3/`；可提交汇总见 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md)。
 - 准确边界：该 E2E 取代的是 0.8.1 “仅一次性工具调用”的缺口，不升级 `network_download_enabled`、`isolated_worker_ready` 或 `platform_download_verified`。它仍只证明两个精确样本在当前 Windows 本机直连模式可用；X graph-v2 保持关闭，Linux/Docker/Cookie/Stage 0 均未完成。0.9.1 后项目源码已获 Apache-2.0 授权，但第三方 binary/container/tool-bundle 门禁仍未完成。
 
+### 3.10 Iteration 0.10.0：六平台路由修复与 Instagram 单样本真实闭环
+
+- 在六平台静态路由基础上修复四个真实下载路径问题：Worker 现将配置的 `max_height` 传给 Adapter；yt-dlp 格式选择已移除不受高度限制的 `/b` 回退；平台明确要求 fresh cookies 时由 `extractor_broken` 改为 `authentication_required`；当高度策略找不到可用格式时以 `content_unavailable` 终止，不再误计为 extractor breakage 或触发平台熔断。
+- 2026-09-03 使用全新 data root，在 Windows `local-worker` direct/non-isolated 模式下，以固定 yt-dlp `2026.08.19`、FFmpeg/ffprobe `n9.0.1`、显式 Node 且不提供 Cookie，对一条 NASA 官方公开 Instagram Reel 完成 `1/1 ready`。
+- 数据库 `quick_check`、外键检查和 pending commit intent 均正常；原件、DB、manifest 与 API copy 的 size/hash 相等且具体值不进入公开记录；原件一遍完整流解码 clean，`temporary` 与 staging 无残留。
+- 控制端与 `local-worker` 的字段白名单 JSONL 生命周期事件可读取；前端显示 0.10.0、`ready`、`1/1 ready` 和成品下载链接，实际下载可用，验收期间浏览器控制台无 error/warn。
+- 同轮探索中，Bilibili 公开电影样本遇 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，因未提供 Cookie 正确终止为 `authentication_required`；TikTok 未实跑。精确 URL/Reel ID、账号内部 ID、运行 UUID、本机绝对路径、媒体指纹、签名 URL、Cookie 和日志原文均不进入公开证据。权威脱敏汇总见 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md)。这一条正向样本不是 Stage 0，所有能力继续为 `candidate`。
+
 ## 4. 已执行验证
 
 2026-09-03，Windows / Python 3.12.13 / uv 0.11.25。0.8.0–0.9.0 的历史基线保留；0.9.1 用独立版本承载 Apache-2.0 迁移，避免复用 proprietary 0.9.0 的制品版本号：
@@ -128,18 +136,22 @@ Iteration 0.9.1 保留 0.9.0 的 Windows 本机直连 Worker、最近批次、re
 | 0.8.1 全套 pytest 历史基线 | `853 passed, 8 skipped in 47.79s`；该版本构建、隔离 wheel 安装和本机服务复验均已完成 |
 | 0.9.0 全套 pytest 最终结果 | `881 passed, 8 skipped in 49.45s`；`compileall` 与 `uv lock --check --offline` 同步通过 |
 | 0.9.1 Apache 迁移后全套 pytest | `882 passed, 8 skipped in 50.46s`；`compileall` 与 `uv lock --check --offline` 通过 |
+| 0.10.0 六平台路由阶段性 pytest | `914 passed, 8 skipped in 53.84s`；该数字早于本轮真实下载修复，只作为路由切片的时间点记录 |
+| 0.10.0 本轮最终全套 pytest | `920 passed, 8 skipped in 52.23s`；`compileall`、`uv lock --check --offline` 与 `git diff --check` 通过 |
+| 0.10.0 Instagram 单样本本机 E2E | 全新 data root、Windows direct/no-cookie/Node、固定 yt-dlp/FFmpeg；`1/1 ready`，DB/manifest/API copy/完整解码/清理/JSONL/UI 均通过；不是 Stage 0 |
 | 0.9.0 本机 Worker/API/UI/日志 | Windows-only direct Worker 的双重显式启用、Schema/toolchain/logger/singleton lock、claim/phase/terminal；最近批次、ready asset list/download、路径/identity/size 拒绝；`local-worker` 日志读取均已纳入当前测试集 |
 | 最终 v3 双样本 E2E | 两个 Job 均被真实 Worker claim 并 `ready`；输入 URL、运行时 UUID 与媒体指纹不进入公开记录，完整值保留在 gitignored 本机证据中 |
 | 资产 API 与完整解码 | 两个 `/api/v1/assets/{asset_id}/download` 均返回完整原件；下载文件 size/SHA-256 与 DB/manifest 一致，两个文件完整流解码 clean |
 | 浏览器使用验收 | 最近批次可打开，页面显示 `ready`、`2/2 ready` 与两个下载链接；实际下载可用，控制台无 error/warn |
 | 0.9.0 package 历史 metadata | 当时的 sdist/wheel 为 `0.9.0`、`LicenseRef-Proprietary`、11 个 console scripts、31 个 legal files；不得作为当前 Apache 发布包 |
 | 0.9.1 Apache package | sdist/wheel 独立构建并隔离安装通过；metadata `0.9.1`、`Apache-2.0`、11 个 console scripts、32 个 legal files；不含日志、数据库、媒体、`runtime-tools` 或 `validation/local` |
+| 0.10.0 package | sdist/wheel 离线构建成功；metadata `0.10.0`、`Apache-2.0`、11 个项目 console scripts 与包内容隐私边界通过；临时验证产物已删除 |
 
-8 个 skip 均为明示环境边界：1 个 POSIX Cookie directory-FD cleanup、4 个 root POSIX/getfacl 的 0/1/3/4 source metadata contract、1 个真实 AF_UNIX roundtrip、2 个 POSIX path-swap/permission test。必须在目标 Linux 重跑，不得当作通过。
+最终 0.10.0 回归中的 8 个 skip 均为明示环境边界：1 个 POSIX Cookie directory-FD cleanup、4 个 root POSIX/getfacl 的 0/1/3/6 source metadata contract、1 个真实 AF_UNIX roundtrip、2 个 POSIX path-swap/permission test。必须在目标 Linux 重跑，不得当作通过。
 
-0.9.0 最终 v3 的 gitignored 原始数据库、资产/manifest、API 下载和 JSONL 位于 `validation/local/local-worker-e2e-20260903-v3/`，可提交汇总见 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md)。0.8.1 的一次性工具样本见 [Iteration 0.8.1 live platform evidence](validation/iteration-0.8.1-live-platform-evidence.md)；[Iteration 0.8.0 local toolchain evidence](validation/iteration-0.8.0-local-toolchain-evidence.md)、[Iteration 0.7.2 runtime logging evidence](validation/iteration-0.7.2-runtime-logging-evidence.md) 与 0.7.1 的 [debug/use/license evidence](validation/iteration-0.7.1-debug-use-license-evidence.md) 保留为历史基线。`dist/` 中的 0.9.0 及更早制品都是 proprietary 历史包，不得发布或使用通配符上传；当前 Apache-2.0 构建必须使用 0.9.1，并在 gitignored 独立目录验证。
+0.9.0 最终 v3 的 gitignored 原始数据库、资产/manifest、API 下载和 JSONL 位于 `validation/local/local-worker-e2e-20260903-v3/`，可提交汇总见 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md)。0.10.0 的 Instagram 单样本临时 data root 已在取证后定点删除，只提交 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md) 的去标识汇总。0.8.1 的一次性工具样本见 [Iteration 0.8.1 live platform evidence](validation/iteration-0.8.1-live-platform-evidence.md)；[Iteration 0.8.0 local toolchain evidence](validation/iteration-0.8.0-local-toolchain-evidence.md)、[Iteration 0.7.2 runtime logging evidence](validation/iteration-0.7.2-runtime-logging-evidence.md) 与 0.7.1 的 [debug/use/license evidence](validation/iteration-0.7.1-debug-use-license-evidence.md) 保留为历史基线。`dist/` 中的 0.9.0 及更早制品都是 proprietary 历史包，不得发布或使用通配符上传；当前 Apache-2.0 构建必须使用 0.10.0，并在 gitignored 独立目录验证。
 
-明确未执行：Docker build/pull/up、Linux namespace/UDS/ACL/resource/core-pattern/runtime bind、真实 Cookie 流程、完整 Stage 0、X exact selector、Linux/NAS 恢复验收，以及任何第三方 binary/container/tool-bundle 发布。项目自有源码已获 Apache-2.0 授权；除上述两个 Windows 本机端到端样本外，没有执行其他真实平台请求，不得把双样本成功外推为平台级兼容性。
+明确未执行：TikTok 真实下载请求、Docker build/pull/up、Linux namespace/UDS/ACL/resource/core-pattern/runtime bind、真实 Cookie 流程、完整 Stage 0、X exact selector、Linux/NAS 恢复验收，以及任何第三方 binary/container/tool-bundle 发布。Bilibili 与 Douyin 已发起真实尝试但未形成 ready 资产；Instagram 仅有一条成功样本。项目自有源码已获 Apache-2.0 授权；不得把离线链路、失败探索或 YouTube/X/Instagram 三个精确输入的成功外推为平台级兼容性。
 
 ## 5. 继续工作入口
 
@@ -213,7 +225,7 @@ uv run video-download-local-worker `
 
 ## 6. 未完成项与残余风险
 
-1. Stage 0 未执行；YouTube/X 各一个明确样本的 Windows 本机全链路成功仍不足以完成平台认证，四平台继续为 `candidate`，X graph-v2 另外保持 `disabled`。
+1. Stage 0 未执行；YouTube/X 各一个明确样本和 Instagram 一个 NASA 官方公开样本的 Windows 本机全链路成功仍不足以完成平台认证，六平台继续为 `candidate`，X graph-v2 另外保持 `disabled`。Bilibili 的 HTTP 412 与 Douyin 的 `authentication_required` 是当前单次尝试结果，不是平台级否定结论。
 2. Cookie override 只是 service-level isolation：单个被攻陷的 Worker/downloader 可读全部平台 source。真凭据前必须改为 credential sidecar、per-platform Worker 或 per-Attempt mount namespace。
 3. DNS/replay OS blocking I/O 不可强制取消；slot 有界并 fail-fast，但 replay root 必须是可靠本地文件系统，更强保证需 process isolation。injected resolver 仍须遵守 timeout contract。
 4. short-link egress 还没进 Compose/supervisor；真实 POSIX owner/mode、TLS/SNI、DNS rebinding、restart/replay 和 redirect chain 仍是 target gate。
@@ -228,19 +240,19 @@ uv run video-download-local-worker `
 13. 项目权利人已明确授予 Apache-2.0，版权声明为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu`。这只闭合项目自有源码、文档和脚本的公开许可，不重新许可任何第三方材料。
 14. `pydantic-core` 的原生 Rust 闭包必须按实际 target/architecture 生成 Cargo SBOM、依赖映射和法律文件包；Linux amd64 调查不能外推到 Windows、macOS、ARM 或其他目标。
 15. Python base image 必须按目标平台的 OCI child manifest 审计 OS packages 与许可证；multi-arch index digest 和上游 `NOASSERTION` SBOM 不能代替这一工作。
-16. Windows x64 yt-dlp/FFmpeg/ffprobe 本机 bundle 已安装、hash/version/configuration 校验并完成离线 smoke，两个精确样本也已经过 Worker/AssetStore/manifest/API/UI 全链路；但对应源码/build closure、完整 SBOM、目标架构法律文本和人工批准仍未闭合，故该第三方工具包及包含它的容器/二进制再分发继续 blocked。detached signature 目前只保留，未完成密码学验签。
+16. Windows x64 yt-dlp/FFmpeg/ffprobe 本机 bundle 已安装、hash/version/configuration 校验并完成离线 smoke，YouTube、X、Instagram 共三个精确输入也已经过 Worker/AssetStore/manifest/API/UI 全链路；但对应源码/build closure、完整 SBOM、目标架构法律文本和人工批准仍未闭合，故该第三方工具包及包含它的容器/二进制再分发继续 blocked。detached signature 目前只保留，未完成密码学验签。
 17. 0.9.0 最终回归为 `881 passed, 8 skipped`；sdist/wheel、隔离安装、31 个法律文件、11 个命令入口与包外 SHA-256 已复验。`pip-audit` 只是 2026-09-03 的时间点扫描；Bandit 仍保留已逐项审阅的 low 告警，全库默认 Ruff 仍有 91 条非门禁历史建议。
 18. Candidate tool validator 现在会实际读取 `sources/` 下的 source artifact，拒绝缺失、路径越界、目录、symlink/reparse、hardlink、空文件和 SHA-256 不符；但其 SBOM 检查仍只验证受 hash 约束的非空 JSON 形状，不能替代组件语义审计或法律批准。
 19. 0.9.1 Apache 迁移后全量回归为 `882 passed, 8 skipped`；独立 sdist/wheel 构建、隔离安装、`Apache-2.0` metadata、32 个法律文件与 11 个命令入口已复验。构建只写入 gitignored 验收目录，不覆盖 proprietary 0.9.0 制品。
 
-## 7. Iteration 0.9.1 收尾与后续精确入口
+## 7. Iteration 0.10.0 收尾与后续精确入口
 
-1. 保留 `validation/local/local-worker-e2e-20260903-v3/` 的 exact batch、SQLite、manifest、API 下载与 JSONL，并保持 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md) 与最终制品状态一致；不要把 gitignored 原始媒体纳入可分发制品。
+1. 保留 `validation/local/local-worker-e2e-20260903-v3/` 的历史 YouTube/X exact batch；Instagram 单样本的临时 data root 已删除，只保留 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md) 的公开脱敏汇总。继续保持 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md) 的既有边界，不把原始媒体、精确 URL 或运行标识纳入可分发制品。
 2. 在用户明确授权准备系统运行时后，于 clean target Linux/WSL 或 Docker 环境用 synthetic-only 输入先跑 preflight；修正环境后再由用户/运维明确授权 full mode，保留 JSONL、restore root 和 stale socket。
 3. 在发布环境记录/验证 daemon-bundled Dockerfile frontend 与 BuildKit，证明所有 post-download `RUN --network=none` 生效；批准 base/tool registry manifests、target wheels 和包/镜像 provenance；固定 local Docker/BuildKit default context、exclusive checkout 和无 path alias/bind-mount 条件，并演练 image-ID 绑定、frozen Compose 正常删除与 crash-remnant exact-identity 清理。
 4. 将 short-link egress 纳入 supervisor/隔离 topology，在 target POSIX 测 AF_UNIX、mode/owner、restart/replay、TLS/SNI、DNS rebinding、SIGTERM/stale socket 和最坏延迟。
 5. 用 credential sidecar/per-platform Worker/per-Attempt namespace 将 Cookie source exposure 缩到一个平台/Attempt；先用 synthetic file 验证 rotation/durability。
-6. 只在用户确认授权样本后进 Stage 0；每个 evidence identity 完成 10+ 正向、独立负向和连续三轮。X 只在真实 stable key/exact-one-selector 通过后才考虑开 graph gate。
+6. 延续 Bilibili → Douyin → TikTok → Instagram 的验收优先级：先调查 Bilibili HTTP 412 的可复现边界；Douyin 仅在用户提供 fresh cookies 并确认授权后重跑；再执行 TikTok 首个真实样本；最后把 Instagram 从当前一个正向样本扩展到正式 Stage 0。每个 evidence identity 仍需 10+ 正向、独立负向和连续三轮；X 只在真实 stable key/exact-one-selector 通过后才考虑开 graph gate。
 7. 项目自有源码已按 Apache-2.0 公开；如需发布 dependency wheelhouse、冻结可执行文件、OCI/container image 或 tool bundle，仍须按实际目标架构完成 `pydantic-core` Cargo closure、Python base OS/OCI child image 与精确 tool bundle 的 SBOM/法律文件/源码义务审计，并对 source artifact 与 SBOM 做语义核验，通过第三方发布门禁后才允许交付。
 
 ## 8. 迭代历史
@@ -258,3 +270,4 @@ uv run video-download-local-worker `
 - **0.8.1 — 2026-09-03**：v0.8.1 / Schema 8；对用户指定的 YouTube/X 各一个 URL 完成无 Cookie 一次性真实下载、ffprobe、SHA-256 与全流解码；新增受校验的可选显式单一 JS runtime 接线，未配置时维持 `--no-js-runtimes`，并为 yt-dlp probe/download 固定 UTF-8。`853 passed, 8 skipped`；0.8.1 sdist/wheel、隔离 wheel 安装、法律文件/命令入口、源码一致性和本机 0.8.1 服务复验均通过。该证据仍不是前端/API/candidate Worker/AssetStore E2E，Stage 0 与平台级验证未完成，公开再分发保持 blocked。
 - **0.9.0 — 2026-09-03**：v0.9.0 / Schema 8；新增 Windows 本机 direct Worker、显式启用/直连确认/单实例锁，最近批次与 ready 资产列表/下载 API/UI，并把 `local-worker` 纳入结构化日志。最终 v3 完成用户指定 YouTube/X 双样本从 API 队列到 AssetStore/manifest 和 API/UI 下载的真实 E2E；输入 URL、运行时 UUID 与媒体指纹不进入公开记录，API 下载 hash 与本机 manifest 一致、完整解码 clean、浏览器无 error/warn。最终回归 `881 passed, 8 skipped`；0.9.0 sdist/wheel、隔离安装、11 个命令入口、31 个法律文件与包外哈希均通过。项目仍 proprietary，公开/容器/二进制再分发保持 blocked。
 - **0.9.1 — 2026-09-03**：项目自有源码、文档与脚本迁移到 Apache-2.0，加入 `NOTICE` 与双版权人声明；公开隐私清理移除本机路径、位置时区、真实验收 URL/账号/运行 UUID/媒体指纹。版本独立于 proprietary 0.9.0 制品；全量回归 `882 passed, 8 skipped`，Apache sdist/wheel、隔离安装、32 个法律文件和 11 个入口通过；第三方 binary/container/tool-bundle gate 保持 blocked。
+- **0.10.0 — 2026-09-03**：新增六平台静态能力矩阵和 `platform × source_type × job_kind` Worker claim 过滤；接入 TikTok 单视频、Instagram Reel，收紧 Bilibili 默认分 P 并明确 TikTok 短链 deferred；扩展六平台 Cookie/acceptance 资产与能力 API/UI。修复 Worker `max_height` 透传、不受限 `/b` 格式回退、fresh-cookie 错误分类，以及高度策略无匹配格式时误触平台熔断；Instagram 一个 NASA 官方公开 Reel 已完成 Windows direct/no-cookie/Node `1/1 ready` 全链路，Bilibili 尝试遇 HTTP 412，Douyin 无 Cookie 尝试为 `authentication_required`，TikTok 未实跑。真实 Stage 0 未执行。最终回归数字见本文件验证表；`compileall`、`uv lock --check --offline`、`git diff --check` 通过；0.10.0 sdist/wheel 离线构建成功，临时验证产物已删除。

@@ -8,6 +8,7 @@ import pytest
 from video_download_control.adapters import (
     AdapterContext,
     AdapterFailure,
+    AdapterRoute,
     AdapterNetworkMode,
     DownloadAdapter,
     DownloadRequest,
@@ -31,6 +32,9 @@ class _OfflineFakeAdapter:
     version = "test-v1"
     network_mode = AdapterNetworkMode.OFFLINE
     supports_exact_selector = False
+    supported_routes = frozenset(
+        {AdapterRoute(Platform.YOUTUBE, SourceType.YOUTUBE_VIDEO)}
+    )
 
     def probe(
         self, request: ProbeRequest, context: AdapterContext

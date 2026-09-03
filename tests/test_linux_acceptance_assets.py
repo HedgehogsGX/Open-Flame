@@ -265,7 +265,7 @@ def test_runner_covers_each_required_target_acceptance_area() -> None:
         "UnixRelayNetworkGuard(",
         '"169.254.169.254:80"',
         "assert_connected_peer",
-        "assert len(specs) == 4",
+        "assert len(specs) == 6",
         'item.get("RW") is False',
         'item.get("Destination")',
         "docker kill --signal TERM",
@@ -676,7 +676,7 @@ def test_embedded_compose_validator_accepts_optional_wrapper_contract() -> None:
     direct_worker.pop("configs")
     direct_worker["volumes"] = [data_volume, worker_socket_volume]
     direct_document.pop("configs")
-    for platform in ("x", "youtube", "bilibili", "douyin"):
+    for platform in ("x", "youtube", "bilibili", "douyin", "tiktok", "instagram"):
         target = f"/run/direct-cookies/{platform}.txt"
         direct_worker["command"].extend(
             ["--cookie-source", f"{platform}:acceptance-{platform}={target}"]
@@ -696,16 +696,16 @@ def test_embedded_compose_validator_accepts_optional_wrapper_contract() -> None:
     assert rejected.returncode != 0
 
 
-def test_cookie_acceptance_preserves_optional_zero_to_four_product_contract() -> None:
+def test_cookie_acceptance_preserves_optional_zero_to_six_product_contract() -> None:
     runner = read(RUNNER)
     checklist = read(CHECKLIST)
 
-    assert "assert len(cookie_specs) <= 4" in runner
+    assert "assert len(cookie_specs) <= 6" in runner
     assert "assert wrapper_mode" in runner
     assert "reviewed_wrapper_required" in runner
-    assert "zero to four optional platform sources" in checklist
-    assert "four non-secret synthetic sources" in checklist
-    assert "Normal deployments may configure zero to four sources" in checklist
+    assert "zero to six optional platform sources" in checklist
+    assert "six non-secret synthetic sources" in checklist
+    assert "Normal deployments may configure zero to six sources" in checklist
 
 
 def test_runner_has_no_path_derived_or_broad_cleanup_primitives() -> None:

@@ -56,11 +56,32 @@ from video_download_control.normalization import (
             "BV1xx411c7mD",
         ),
         (
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=1&spm_id_from=333.1",
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            Platform.BILIBILI,
+            SourceType.BILIBILI_VIDEO,
+            "BV1xx411c7mD",
+        ),
+        (
             "https://www.douyin.com/video/7123456789012345678?previous_page=app_code_link",
             "https://www.douyin.com/video/7123456789012345678",
             Platform.DOUYIN,
             SourceType.DOUYIN_VIDEO,
             "7123456789012345678",
+        ),
+        (
+            "https://www.tiktok.com/@Example.User/video/7461234567890123456?is_from_webapp=1",
+            "https://www.tiktok.com/@example.user/video/7461234567890123456",
+            Platform.TIKTOK,
+            SourceType.TIKTOK_VIDEO,
+            "7461234567890123456",
+        ),
+        (
+            "https://m.instagram.com/reels/AbC_def-123/?igsh=tracking",
+            "https://www.instagram.com/reel/AbC_def-123",
+            Platform.INSTAGRAM,
+            SourceType.INSTAGRAM_REEL,
+            "AbC_def-123",
         ),
     ],
 )
@@ -97,13 +118,34 @@ def test_x_aliases_share_stable_canonical_identity() -> None:
 @pytest.mark.parametrize(
     ("url", "code"),
     [
-        ("https://www.tiktok.com/@x/video/1", ErrorCode.UNSUPPORTED_PLATFORM),
+        ("https://www.tiktok.com/@x/video/1", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://www.tiktok.com/@x", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://vm.tiktok.com/ZMshort/", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://vt.tiktok.com/ZShort/", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://www.instagram.com/p/AbC_def-123/", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://www.instagram.com/example/", ErrorCode.UNSUPPORTED_LINK_TYPE),
         ("https://127.0.0.1/video/1", ErrorCode.UNSUPPORTED_PLATFORM),
         ("https://user:secret@www.youtube.com/watch?v=abc", ErrorCode.INVALID_URL),
         ("https://www.youtube.com:8443/watch?v=abc", ErrorCode.INVALID_URL),
         ("https://www.youtube.com:80/watch?v=abc", ErrorCode.INVALID_URL),
         ("http://www.youtube.com:443/watch?v=abc", ErrorCode.INVALID_URL),
         ("https://www.youtube.com/playlist?list=abc", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        (
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=2",
+            ErrorCode.UNSUPPORTED_LINK_TYPE,
+        ),
+        (
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=first",
+            ErrorCode.UNSUPPORTED_LINK_TYPE,
+        ),
+        (
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=",
+            ErrorCode.UNSUPPORTED_LINK_TYPE,
+        ),
+        (
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=1&p=",
+            ErrorCode.UNSUPPORTED_LINK_TYPE,
+        ),
     ],
 )
 def test_rejects_unsafe_or_out_of_scope_links(url: str, code: ErrorCode) -> None:

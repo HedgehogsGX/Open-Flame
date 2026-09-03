@@ -20,6 +20,7 @@ from .base import (
     ProgressReporter,
     ProgressUpdate,
 )
+from ..capabilities import AdapterJobKind, AdapterRoute
 from .fake import ScriptedFakeAdapter, ScriptedGraphFakeAdapter
 from .yt_dlp import CookieResolver, YtDlpAdapter
 from .yt_dlp_contract import (
@@ -36,7 +37,9 @@ from .yt_dlp_contract import (
 __all__ = [
     "AdapterContext",
     "AdapterFailure",
+    "AdapterJobKind",
     "AdapterNetworkMode",
+    "AdapterRoute",
     "CancellationToken",
     "ControlledEgressEndpoint",
     "CookieMount",

@@ -13,10 +13,14 @@ x_ref=
 youtube_ref=
 bilibili_ref=
 douyin_ref=
+tiktok_ref=
+instagram_ref=
 x_seen=0
 youtube_seen=0
 bilibili_seen=0
 douyin_seen=0
+tiktok_seen=0
+instagram_seen=0
 seen_references=""
 
 fail() {
@@ -79,12 +83,23 @@ while IFS= read -r line || [ -n "$line" ]; do
             douyin_ref=$reference
             douyin_seen=1
             ;;
+        VDC_COOKIE_TIKTOK_OPAQUE_REF)
+            assign_reference tiktok "$reference" "$tiktok_seen"
+            tiktok_ref=$reference
+            tiktok_seen=1
+            ;;
+        VDC_COOKIE_INSTAGRAM_OPAQUE_REF)
+            assign_reference instagram "$reference" "$instagram_seen"
+            instagram_ref=$reference
+            instagram_seen=1
+            ;;
         *) fail mapping "mapping key is unsupported" ;;
     esac
 done <&3
 exec 3<&-
 
-for seen_flag in "$x_seen" "$youtube_seen" "$bilibili_seen" "$douyin_seen"; do
+for seen_flag in "$x_seen" "$youtube_seen" "$bilibili_seen" "$douyin_seen" \
+    "$tiktok_seen" "$instagram_seen"; do
     [ "$seen_flag" = 1 ] || fail mapping "mapping key is missing"
 done
 
@@ -105,15 +120,21 @@ x_source=$SOURCE_ROOT/x/cookies.txt
 youtube_source=$SOURCE_ROOT/youtube/cookies.txt
 bilibili_source=$SOURCE_ROOT/bilibili/cookies.txt
 douyin_source=$SOURCE_ROOT/douyin/cookies.txt
+tiktok_source=$SOURCE_ROOT/tiktok/cookies.txt
+instagram_source=$SOURCE_ROOT/instagram/cookies.txt
 
 validate_optional_source x "$x_ref" "$x_source"
 validate_optional_source youtube "$youtube_ref" "$youtube_source"
 validate_optional_source bilibili "$bilibili_ref" "$bilibili_source"
 validate_optional_source douyin "$douyin_ref" "$douyin_source"
+validate_optional_source tiktok "$tiktok_ref" "$tiktok_source"
+validate_optional_source instagram "$instagram_ref" "$instagram_source"
 
 [ -z "$x_ref" ] || set -- "$@" --cookie-source "x:$x_ref=$x_source"
 [ -z "$youtube_ref" ] || set -- "$@" --cookie-source "youtube:$youtube_ref=$youtube_source"
 [ -z "$bilibili_ref" ] || set -- "$@" --cookie-source "bilibili:$bilibili_ref=$bilibili_source"
 [ -z "$douyin_ref" ] || set -- "$@" --cookie-source "douyin:$douyin_ref=$douyin_source"
+[ -z "$tiktok_ref" ] || set -- "$@" --cookie-source "tiktok:$tiktok_ref=$tiktok_source"
+[ -z "$instagram_ref" ] || set -- "$@" --cookie-source "instagram:$instagram_ref=$instagram_source"
 
 exec "$@"

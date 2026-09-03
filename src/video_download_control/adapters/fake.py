@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..domain import ErrorCode, Platform, SourceType
+from ..capabilities import AdapterJobKind, AdapterRoute, DEFAULT_DOWNLOAD_CAPABILITIES
 from ..graph import (
     MAX_DISCOVERY_ITEMS,
     GraphValidationError,
@@ -38,6 +39,9 @@ class ScriptedFakeAdapter:
     version = "1"
     network_mode = AdapterNetworkMode.OFFLINE
     supports_exact_selector = False
+    supported_routes = DEFAULT_DOWNLOAD_CAPABILITIES.claimable_routes(
+        adapter="yt_dlp"
+    )
 
     def __init__(
         self,
@@ -176,6 +180,20 @@ class ScriptedGraphFakeAdapter:
     version = "1"
     network_mode = AdapterNetworkMode.OFFLINE
     supports_exact_selector = True
+    supported_routes = frozenset(
+        {
+            AdapterRoute(
+                Platform.X,
+                SourceType.X_POST,
+                AdapterJobKind.DISCOVER,
+            ),
+            AdapterRoute(
+                Platform.X,
+                SourceType.X_ATTACHMENT,
+                AdapterJobKind.DOWNLOAD,
+            ),
+        }
+    )
 
     def __init__(
         self,

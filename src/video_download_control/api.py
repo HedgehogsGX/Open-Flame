@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from . import __version__
+from .capabilities import DEFAULT_DOWNLOAD_CAPABILITIES
 from .config import Settings
 from .database import SCHEMA_VERSION, Database
 from .domain import Platform
@@ -25,6 +26,7 @@ from .schemas import (
     BatchCreateRequest,
     BatchResponse,
     BatchSummaryResponse,
+    DownloadCapabilityResponse,
     HealthResponse,
     InputCancelResponse,
     InputRediscoverResponse,
@@ -349,6 +351,7 @@ def create_app(
     app.state.worker_repository = worker_repository
     app.state.runtime_logger = active_logger
     app.state.toolchain_status = cached_toolchain_status
+    app.state.download_capabilities = DEFAULT_DOWNLOAD_CAPABILITIES
 
     @app.middleware("http")
     async def runtime_log_middleware(request: Request, call_next):
@@ -385,6 +388,7 @@ def create_app(
             "/api/v1/operations/logs",
             "/api/v1/operations/queue",
             "/api/v1/operations/tools",
+            "/api/v1/download-capabilities",
             "/api/v1/platform-circuits",
         }:
             level = "DEBUG"
@@ -648,6 +652,16 @@ def create_app(
     )
     def toolchain_status() -> ToolchainStatusResponse:
         return cached_toolchain_status
+
+    @app.get(
+        "/api/v1/download-capabilities",
+        response_model=list[DownloadCapabilityResponse],
+    )
+    def download_capabilities() -> list[DownloadCapabilityResponse]:
+        return [
+            DownloadCapabilityResponse.model_validate(item.to_public_dict())
+            for item in DEFAULT_DOWNLOAD_CAPABILITIES.list(adapter="yt_dlp")
+        ]
 
     @app.post(
         "/api/v1/operations/queue/resume",

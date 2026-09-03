@@ -551,6 +551,7 @@ def build_local_worker(
         ),
         verifier=verifier,
         attempt_timeout_seconds=config.attempt_timeout_seconds,
+        max_height=config.max_height,
         max_items_per_source=config.max_items_per_source,
         skip_unsupported_graph_jobs=True,
         network_guard=LocalDirectNetworkGuard(

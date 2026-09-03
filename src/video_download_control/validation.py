@@ -7,9 +7,9 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from pathlib import Path
 
+from .capabilities import CapabilityStatus
 from .domain import ErrorCode, Platform, SourceType
 from .normalization import URLNormalizationError, normalize_url
 
@@ -26,11 +26,6 @@ ALLOWED_EXPECTED_OUTCOMES = frozenset(
     }
 )
 _SAMPLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-class CapabilityStatus(StrEnum):
-    CANDIDATE = "candidate"
-    VERIFIED = "verified"
 
 
 class ValidationManifestError(ValueError):

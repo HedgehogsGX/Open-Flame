@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from . import __version__
+from .capabilities import AdapterRoute
 from .credentials import CredentialProfileError, validate_opaque_reference
 from .database import Database
 from .diagnostics import sanitize_diagnostic
@@ -253,6 +254,7 @@ class WorkerRepository:
         recovery_limit: int = ASSET_INTENT_RECOVERY_LIMIT,
         supports_exact_selector: bool = False,
         skip_unsupported_graph_jobs: bool = False,
+        supported_routes: frozenset[AdapterRoute] | None = None,
     ) -> JobLease | None:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
@@ -262,6 +264,37 @@ class WorkerRepository:
             raise ValueError("recovery_limit must be positive")
         if not isinstance(skip_unsupported_graph_jobs, bool):
             raise ValueError("graph skip policy must be boolean")
+        route_clause = ""
+        route_parameters: list[str] = []
+        if supported_routes is not None:
+            if not isinstance(supported_routes, frozenset) or not all(
+                isinstance(route, AdapterRoute) for route in supported_routes
+            ):
+                raise ValueError("supported_routes must be a frozenset of AdapterRoute")
+            if len(supported_routes) > 64:
+                raise ValueError("supported_routes exceeds the route limit")
+            if not supported_routes:
+                return None
+            ordered_routes = sorted(
+                supported_routes,
+                key=lambda route: (
+                    route.platform.value,
+                    route.source_type.value,
+                    route.job_kind.value,
+                ),
+            )
+            route_clause = "\n                      AND (" + " OR ".join(
+                "(s.platform = ? AND s.source_type = ? AND j.job_kind = ?)"
+                for _ in ordered_routes
+            ) + ")"
+            for route in ordered_routes:
+                route_parameters.extend(
+                    (
+                        route.platform.value,
+                        route.source_type.value,
+                        route.job_kind.value,
+                    )
+                )
         now_text = utc_text(now)
         expires_text = utc_text(now + timedelta(seconds=lease_seconds))
 
@@ -299,7 +332,7 @@ class WorkerRepository:
             self._recover_expired(connection, now_text)
             while True:
                 row = connection.execute(
-                    """
+                    f"""
                     SELECT
                         j.id, j.source_item_id, j.job_kind, j.attempt_count,
                         j.run_generation, j.generation_attempt_count,
@@ -335,6 +368,7 @@ class WorkerRepository:
                               AND s.source_type <> ?
                           )
                       )
+                      {route_clause}
                       AND NOT EXISTS (
                           SELECT 1 FROM asset_commit_intents AS pending
                           WHERE pending.job_id = j.id
@@ -374,6 +408,7 @@ class WorkerRepository:
                     (
                         int(skip_unsupported_graph_jobs),
                         X_ATTACHMENT_SOURCE_TYPE,
+                        *route_parameters,
                         now_text,
                         MAX_ATTEMPTS,
                         now_text,

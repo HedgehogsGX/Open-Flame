@@ -69,6 +69,52 @@ def test_probe_is_skip_download_single_json_and_forces_proxy(tmp_path: Path) -> 
     )
 
 
+@pytest.mark.parametrize(
+    ("platform", "source_type", "canonical_url"),
+    (
+        (
+            Platform.BILIBILI,
+            SourceType.BILIBILI_VIDEO,
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+        ),
+        (
+            Platform.DOUYIN,
+            SourceType.DOUYIN_VIDEO,
+            "https://www.douyin.com/video/1234567890123456789",
+        ),
+        (
+            Platform.TIKTOK,
+            SourceType.TIKTOK_VIDEO,
+            "https://www.tiktok.com/@example/video/1234567890123456789",
+        ),
+        (
+            Platform.INSTAGRAM,
+            SourceType.INSTAGRAM_REEL,
+            "https://www.instagram.com/reel/Example_123",
+        ),
+    ),
+)
+def test_candidate_platform_routes_preserve_the_exact_canonical_url(
+    tmp_path: Path,
+    platform: Platform,
+    source_type: SourceType,
+    canonical_url: str,
+) -> None:
+    attempt = (tmp_path / platform.value).resolve()
+    attempt.mkdir()
+    request = ProbeRequest(
+        job_id=str(uuid4()),
+        canonical_url=canonical_url,
+        platform=platform,
+        source_type=source_type,
+    )
+
+    command = factory(tmp_path).probe_command(request, temporary_root=attempt)
+
+    assert "--no-playlist" in command.arguments
+    assert command.arguments[-2:] == ("--", canonical_url)
+
+
 def test_explicit_direct_egress_omits_proxy_without_weakening_other_options(
     tmp_path: Path,
 ) -> None:
@@ -217,7 +263,7 @@ def test_download_output_and_options_are_fixed_inside_attempt(tmp_path: Path) ->
     assert command.arguments[command.arguments.index("--format") + 1] == (
         "bv*[height<=1080][protocol!*=m3u8]+ba[protocol!*=m3u8]/"
         "b[height<=1080][protocol!*=m3u8]/"
-        "bv*[height<=1080]+ba/b[height<=1080]/b"
+        "bv*[height<=1080]+ba/b[height<=1080]"
     )
     assert "--no-playlist" in command.arguments
     assert "--abort-on-error" in command.arguments

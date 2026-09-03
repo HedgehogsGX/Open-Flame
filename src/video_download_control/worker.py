@@ -10,6 +10,7 @@ from threading import Event, Lock, Thread
 from time import perf_counter
 
 from . import __version__
+from .capabilities import AdapterRoute
 from .adapters.base import (
     AdapterContext,
     AdapterFailure,
@@ -164,6 +165,7 @@ class Worker:
         lease_seconds: int = 60,
         heartbeat_interval_seconds: float | None = None,
         attempt_timeout_seconds: float = 3600.0,
+        max_height: int = 1080,
         max_items_per_source: int = 20,
         skip_unsupported_graph_jobs: bool = False,
         network_guard: NetworkExecutionGuard | None = None,
@@ -182,6 +184,12 @@ class Worker:
             )
         if attempt_timeout_seconds <= 0:
             raise ValueError("attempt_timeout_seconds must be positive")
+        if (
+            isinstance(max_height, bool)
+            or not isinstance(max_height, int)
+            or not 144 <= max_height <= 2160
+        ):
+            raise ValueError("max_height must be between 144 and 2160")
         if not 1 <= max_items_per_source <= 50:
             raise ValueError("max_items_per_source must be between 1 and 50")
         if not isinstance(skip_unsupported_graph_jobs, bool):
@@ -190,6 +198,14 @@ class Worker:
             network_mode = AdapterNetworkMode(adapter.network_mode)
         except (AttributeError, ValueError) as exc:
             raise ValueError("adapter must declare a valid network_mode") from exc
+        try:
+            supported_routes = frozenset(adapter.supported_routes)
+        except (AttributeError, TypeError) as exc:
+            raise ValueError("adapter must declare supported_routes") from exc
+        if not supported_routes or not all(
+            isinstance(route, AdapterRoute) for route in supported_routes
+        ):
+            raise ValueError("adapter supported_routes must contain AdapterRoute values")
         if network_mode is not AdapterNetworkMode.OFFLINE and network_guard is None:
             raise ValueError(
                 "networked adapter requires a deployment-owned network guard"
@@ -204,8 +220,10 @@ class Worker:
         self.lease_seconds = lease_seconds
         self.heartbeat_interval_seconds = heartbeat_interval
         self.attempt_timeout_seconds = attempt_timeout_seconds
+        self.max_height = max_height
         self.max_items_per_source = max_items_per_source
         self.skip_unsupported_graph_jobs = skip_unsupported_graph_jobs
+        self.supported_routes = supported_routes
         self.network_mode = network_mode
         self.network_guard = network_guard
         self.runtime_logger = runtime_logger
@@ -284,6 +302,7 @@ class Worker:
                     self.adapter, "supports_exact_selector", False
                 ),
                 skip_unsupported_graph_jobs=self.skip_unsupported_graph_jobs,
+                supported_routes=self.supported_routes,
             )
         except OSError as exc:
             # Recovery cleanup is part of claiming.  A filesystem denial must
@@ -387,6 +406,7 @@ class Worker:
                         platform=lease.platform,
                         source_type=lease.source_type,
                         credential_ref=lease.credential_ref,
+                        max_height=self.max_height,
                         max_items=self.max_items_per_source,
                     ),
                     context,
@@ -493,6 +513,7 @@ class Worker:
                     expected_media_keys=tuple(probe_items),
                     selector_key=lease.selector_key,
                     credential_ref=lease.credential_ref,
+                    max_height=self.max_height,
                 ),
                 context,
                 report_progress,

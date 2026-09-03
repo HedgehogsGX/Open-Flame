@@ -343,7 +343,15 @@ def test_nonzero_version_command_is_always_extractor_breakage(tmp_path: Path) ->
         (b"ERROR: not available in your country", ErrorCode.GEO_RESTRICTED),
         (b"ERROR: Private video", ErrorCode.PRIVATE_CONTENT),
         (b"ERROR: Sign in to confirm you're not a bot", ErrorCode.AUTHENTICATION_REQUIRED),
+        (
+            b"ERROR: Fresh cookies (not necessarily logged in) are needed",
+            ErrorCode.AUTHENTICATION_REQUIRED,
+        ),
         (b"ERROR: Video unavailable", ErrorCode.CONTENT_UNAVAILABLE),
+        (
+            b"ERROR: Requested format is not available. Use --list-formats",
+            ErrorCode.CONTENT_UNAVAILABLE,
+        ),
         (b"ERROR: Unsupported URL", ErrorCode.ADAPTER_UNSUPPORTED),
         (b"ERROR: Temporary failure in name resolution", ErrorCode.NETWORK_ERROR),
         (b"ERROR: new extractor traceback token=secret", ErrorCode.EXTRACTOR_BROKEN),

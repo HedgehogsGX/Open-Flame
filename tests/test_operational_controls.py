@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from video_download_control.api import create_app
@@ -184,8 +185,12 @@ def test_expired_half_open_probe_is_recovered_without_sticking_circuit(
     assert circuit["state"] == "half_open"
 
 
-def test_authentication_failure_does_not_globally_trip_platform(
-    service, database
+@pytest.mark.parametrize(
+    "error_code",
+    [ErrorCode.AUTHENTICATION_REQUIRED, ErrorCode.CONTENT_UNAVAILABLE],
+)
+def test_content_specific_failure_does_not_globally_trip_platform(
+    service, database, error_code: ErrorCode
 ) -> None:
     repository = WorkerRepository(database)
     first_job = make_job(service, "https://www.youtube.com/watch?v=auth-one")
@@ -195,8 +200,8 @@ def test_authentication_failure_does_not_globally_trip_platform(
 
     repository.finish_failure(
         first,
-        error_code=ErrorCode.AUTHENTICATION_REQUIRED,
-        diagnostic="credential required",
+        error_code=error_code,
+        diagnostic="content-specific terminal failure",
         now=NOW,
     )
 

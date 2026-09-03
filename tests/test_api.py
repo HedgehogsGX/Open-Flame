@@ -81,7 +81,7 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert "多平台视频下载控制面" in page.text
     assert "本机直连 Worker 已接入" in page.text
     assert "TXT/CSV" in page.text
-    assert "迭代 0.9.1" in page.text
+    assert "迭代 0.10.0" in page.text
     assert "迭代 0.3" not in page.text
     assert r".split(/\r?\n/)" in page.text
     assert "async function fetchJson" in page.text
@@ -90,6 +90,13 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert "requestId !== pollRequestId" in page.text
     assert "jobActions.replaceChildren();" in page.text
     assert "不代表 Worker 已启动" in page.text
+    assert "下载能力" in page.text
+    assert "/api/v1/download-capabilities" in page.text
+    assert "candidate: '候选（尚未完成平台级验收）'" in page.text
+    assert "gated: '短链需单独启用解析服务'" in page.text
+    assert "deferred: '短链尚未接入'" in page.text
+    assert "https://www.tiktok.com/@user/video/..." in page.text
+    assert "https://www.instagram.com/reel/..." in page.text
     assert "状态轮询失败" in page.text
     assert "本机工具链" in page.text
     assert "控制端启动时检查固定的 yt-dlp" in page.text
@@ -107,6 +114,50 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert r".join('\n')" in page.text
     assert "cdn.jsdelivr.net" not in page.text
     assert "fonts.googleapis.com" not in page.text
+
+
+def test_download_capability_matrix_is_public_and_candidate_only(
+    settings: Settings,
+) -> None:
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/v1/download-capabilities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {item["platform"] for item in payload} == {
+        "x",
+        "youtube",
+        "bilibili",
+        "douyin",
+        "tiktok",
+        "instagram",
+    }
+    assert all(item["adapter"] == "yt_dlp" for item in payload)
+    assert all(item["status"] == "candidate" for item in payload)
+    assert all(item["adapter_version"] is None for item in payload)
+    assert all(item["environment"] is None for item in payload)
+    by_platform_and_type = {
+        (item["platform"], item["source_type"]): item["short_link_status"]
+        for item in payload
+    }
+    assert by_platform_and_type[("youtube", "youtube_video")] == "supported"
+    assert by_platform_and_type[("bilibili", "bilibili_video")] == "gated"
+    assert by_platform_and_type[("tiktok", "tiktok_video")] == "deferred"
+    assert all(
+        set(item)
+        == {
+            "platform",
+            "source_type",
+            "job_kind",
+            "adapter",
+            "status",
+            "authentication",
+            "adapter_version",
+            "environment",
+            "short_link_status",
+        }
+        for item in payload
+    )
 
 
 def test_liveness_and_readiness_detect_broken_schema(settings: Settings) -> None:

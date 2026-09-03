@@ -6,8 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from video_download_control.adapters import AdapterJobKind, AdapterRoute
 from video_download_control.assets import CommittedAsset, VerificationResult
-from video_download_control.domain import ErrorCode, JobStatus
+from video_download_control.domain import ErrorCode, JobStatus, Platform, SourceType
 from video_download_control.service import BatchService
 from video_download_control.worker_repository import (
     InvalidTransition,
@@ -53,6 +54,101 @@ def test_two_workers_cannot_claim_the_same_job(
     attempts = worker_repository.attempts_for(claimed[0].job_id)
     assert len(attempts) == 1
     assert attempts[0]["status"] == "running"
+
+
+def test_worker_claim_filters_platform_source_and_job_route(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+    database,
+) -> None:
+    youtube_job = make_job(
+        service, "https://www.youtube.com/watch?v=route-youtube"
+    )
+    bilibili_job = make_job(
+        service, "https://www.bilibili.com/video/BV1xx411c7mD"
+    )
+
+    lease = worker_repository.claim_next(
+        worker_id="bilibili-only",
+        adapter="yt_dlp",
+        adapter_version="test",
+        now=NOW,
+        supported_routes=frozenset(
+            {AdapterRoute(Platform.BILIBILI, SourceType.BILIBILI_VIDEO)}
+        ),
+    )
+
+    assert lease is not None
+    assert lease.job_id == bilibili_job
+    assert lease.platform is Platform.BILIBILI
+    with database.connect() as connection:
+        untouched = connection.execute(
+            "SELECT status FROM download_jobs WHERE id = ?", (youtube_job,)
+        ).fetchone()
+    assert untouched is not None
+    assert untouched["status"] == "queued"
+
+
+def test_worker_with_no_supported_routes_claims_nothing(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=no-route")
+
+    lease = worker_repository.claim_next(
+        worker_id="no-routes",
+        adapter="yt_dlp",
+        adapter_version="test",
+        now=NOW,
+        supported_routes=frozenset(),
+    )
+
+    assert lease is None
+    assert worker_repository.get_job(job_id)["status"] == "queued"
+
+
+def test_route_filter_skips_same_source_with_wrong_job_kind(
+    service: BatchService,
+    repository,
+    settings,
+    worker_repository: WorkerRepository,
+) -> None:
+    graph_service = BatchService(
+        repository=repository,
+        max_batch_urls=settings.max_batch_urls,
+        route_policy_version=settings.route_policy_version,
+        x_graph_v2_enabled=True,
+    )
+    discover_batch = graph_service.create_batch(
+        name="older discover",
+        raw_inputs=["https://x.com/example/status/991011"],
+    )
+    download_batch = service.create_batch(
+        name="later download",
+        raw_inputs=["https://x.com/example/status/991012"],
+    )
+
+    lease = worker_repository.claim_next(
+        worker_id="x-download-only",
+        adapter="yt_dlp",
+        adapter_version="test",
+        now=NOW,
+        supported_routes=frozenset(
+            {
+                AdapterRoute(
+                    Platform.X,
+                    SourceType.X_POST,
+                    AdapterJobKind.DOWNLOAD,
+                )
+            }
+        ),
+    )
+
+    assert lease is not None
+    assert lease.job_id == download_batch["jobs"][0]["id"]
+    assert worker_repository.get_job(discover_batch["jobs"][0]["id"])[
+        "status"
+    ] == "queued"
 
 
 def test_local_flat_policy_atomically_skips_unsupported_graph_jobs(

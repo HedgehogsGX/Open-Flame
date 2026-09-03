@@ -2,11 +2,13 @@
 
 这是一个面向单机、单管理员、私有环境的媒体下载控制面。架构方向是“模块化单体控制面 + 独立 Worker + 可替换适配器 + 不可变媒体资产”。
 
-> 当前为 **Iteration 0.9.1 / version 0.9.1**，数据库仍为 **Schema 8**。本版本将项目自有材料正式迁移到 Apache-2.0，同时保留 0.9.0 已接入的 Windows 本机直连 Worker、前端最近批次、成品列表/下载 API 与 local-worker 结构化日志。用户指定的 YouTube/X 双样本已通过“API 队列 → Worker → yt-dlp/FFmpeg/ffprobe → AssetStore/manifest → 前端/API 下载”的全链路实测；公开记录已省略精确输入与媒体指纹。该结果只证明这两个样本；Linux 隔离 Worker、Docker、Cookie 与完整 Stage 0 仍未执行，不能据此把整个平台标记为 `verified`。
+> 当前为 **Iteration 0.10.0 / version 0.10.0**，数据库仍为 **Schema 8**。本版本加入显式下载能力注册表和按 `platform × source_type × job_kind` 的 Worker 领取边界，并把直接 URL 输入扩展到 TikTok 单视频与 Instagram Reel。Bilibili、Douyin、TikTok、Instagram 的离线队列到不可变资产工程链已覆盖；随后一条 NASA 官方公开 Instagram Reel 在全新 data root、Windows 本机直连 Worker、无 Cookie、显式 Node 和固定工具链下以 `1/1 ready` 完成全链路。Bilibili 公开电影样本的真实尝试遇到 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，未提供 Cookie 时正确归类为 `authentication_required`；TikTok 尚未实跑。单个 Instagram 正向样本不构成 Stage 0，六个平台仍全部为 `candidate`。0.9.1 的 Apache-2.0 迁移和 0.9.0 的 YouTube/X 双样本 Windows 全链路证据继续有效，但不能外推为六个平台整体 `verified`。
 
 ## License status
 
 项目自有源码、文档和脚本依据 [Apache License 2.0](LICENSE) 开源，版权声明为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu`，归属信息见 [NOTICE](NOTICE)。第三方组件继续受各自许可证约束，项目的 Apache-2.0 授权不会重新许可 `licenses/python/` 中的第三方材料或外部工具；精确清单与边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。仓库源码和重新验证的 project-only Python sdist/wheel 可以按上述条款分发，但 dependency wheelhouse、冻结可执行文件、离线安装器、OCI/container image 以及 yt-dlp/FFmpeg `runtime-tools` 工具包仍须完成目标架构 SBOM、对应源码、notices、relinking 义务与人工复核后才能再分发。
+
+Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、平台账号权限或绕过访问控制的权利。使用者必须只处理自有、已获明确授权或当地法律允许的内容，并自行遵守相关平台条款和适用法律。
 
 ## 当前状态
 
@@ -20,7 +22,7 @@
 | 凭证 | 业务库不保存 Cookie 路径/内容，只以非秘密 opaque `secret_ref` 引用部署秘密；可选 Worker-only read-only Cookie override、metadata/ACL/overlap preflight 与 attempt-private copier 已离线/静态验证 |
 | 备份/恢复 | 当前 create/restore 要求精确 Schema 8；Iteration 0.6 已用离线 graph 状态完成独立新根恢复与跨表语义篡改拒绝，仍不替代目标 Linux/NAS 恢复验收；Iteration 0.5 / Schema 7 记录保留为历史证据 |
 | 运行日志 | 控制面、本机 Worker、离线 Worker 与 candidate Worker 写入有界、轮转、字段白名单的 JSONL；前端可统一查看最近事件；启动后写入仍为 best-effort |
-| 平台能力 | X、YouTube、Bilibili、抖音仍为 `candidate`；YouTube/X 各一个授权单视频样本已通过本机 Worker 全链路，样本量不足以升级平台状态；X 多附件 graph-v2 仍受 ADR-0001 的 exact-selector / Stage 0 gate 阻断 |
+| 平台能力 | X、YouTube、Bilibili、Douyin、TikTok、Instagram 的窄范围路由均为 `candidate`；能力 API/UI 会逐项显示声明状态；YouTube/X 各一个授权样本和 Instagram 一个 NASA 官方公开样本曾通过本机真实 Worker，全体样本量均不足以升级为 `verified`；Bilibili 当前真实尝试遇 HTTP 412，Douyin 无 Cookie 尝试为 `authentication_required`，TikTok 未实跑；X 多附件 graph-v2 仍受 ADR-0001 阻断 |
 | 短链 | `t.co`、`b23.tv`、`v.douyin.com` 已接默认关闭的 POSIX UDS/HMAC egress transport；离线恶意输入通过，真实 UDS/TLS/DNS/平台均未验收 |
 | 部署 | 有默认不可运行的 Dockerfile/Compose、可选 Cookie override 和只读优先 Linux acceptance runner；未 build、pull、cold start 或执行 mutation mode |
 | 本机外部工具证据 | gitignored 本机 `runtime-tools/windows-x64` 已安装并复验；工具仍不在系统 `PATH`；Docker/可用 WSL Linux runtime 仍不存在 |
@@ -28,7 +30,7 @@
 当前实现包括：
 
 - Web 提交页面、最近批次恢复入口、ready 成品链接和显式响应 DTO；JSON、TXT、CSV 一批最多 50 条输入。
-- X 单帖、YouTube 单视频/Shorts、Bilibili 普通 BV/av、抖音单作品的 URL 提取、白名单校验、规范化和去重。
+- X 单帖、YouTube 单视频/Shorts、Bilibili 普通 BV/av 默认分 P、Douyin 单作品、TikTok `/@handle/video/{id}` 与 Instagram `/reel/{shortcode}` 的 URL 提取、白名单校验、规范化和去重；Bilibili `p > 1`、TikTok 短链和 Instagram 帖子/轮播/Story/Live 会明确拒绝，不会静默下载错误对象。
 - `t.co`、`b23.tv`、`v.douyin.com` 有逐跳 HTTPS/DNS/peer/redirect 上限的 resolver，并通过 authenticated/replay-safe UDS transport 接到显式 feature gate；默认关闭时仍以 `short_link_resolution_required` 终止。`youtu.be/{id}` 不需要展开，可直接规范化。
 - SQLite Schema 8 中的 Batch、InputRecord、SourceItem、SourceDiscovery、SourceRelation、DownloadJob、JobAttempt、MediaAsset、Artifact 等模型，以及租约、心跳、取消、过期恢复和有限重试。
 - 默认关闭的 X graph-v2 编排：父 `discover` Job 只探测并原子 fan-out；有序成员写入不可变 discovery snapshot；每个附件使用独立 child `download` Job；Input/Batch 只按 active snapshot 聚合，混合 `ready` 与终止失败/取消得到 `partial_success`。input-level cancel 与 terminal-only rediscover API 已实现，rediscover 递增 `run_generation` 并重置该 generation 的 retry budget，同时保留 Job 的累计 `attempt_count` 和历史快照。
@@ -39,10 +41,11 @@
 - 离线多资产的临时目录、staging、校验、SHA-256、`source.json`、`manifest.json`、提交意图和三阶段崩溃恢复；原件、缩略图和平台既有字幕以同一资产目录一次发布并在同一 SQL 事务登记。
 - 带 SHA-256 manifest 的备份/恢复组件：使用 SQLite 一致快照，排除顶层 `logs`、`temporary` 与 `assets/.staging`，恢复到不存在的独立新根后复核 Schema、数据库和资产 manifest。
 - JSON 指标、健康检查、字段白名单 JSONL 运行日志、只读成品列表/下载 API、Stage 0 脱敏证据评估工具，以及受控出站 proxy / Unix-domain-socket relay 的安全基础组件。`jobs` / queue depth 包含 parent `discover`，但 `platform_outcomes` 只统计 `job_kind=download`，不会把编排成功算成平台下载成功。
-- deployment-owned Cookie source override、四平台 0–4 映射、完整祖先/ACL/路径重叠检查、Worker core-dump 禁用，以及默认只读且需要二次明确授权才执行变更的 Linux/Docker acceptance runner。
+- download capability registry、公开只读能力 API/UI，以及 Worker 对 `platform × source_type × job_kind` 的原子领取过滤；不支持的旧任务会留在队列中等待匹配 Worker。真实 Worker 会把 Job 的 `max_height` 传入 Adapter，yt-dlp 格式选择不再使用不受高度约束的 `/b` 回退；平台要求 fresh cookies 时统一归类为 `authentication_required`。
+- deployment-owned Cookie source override、六平台 0–6 映射、完整祖先/ACL/路径重叠检查、Worker core-dump 禁用，以及默认只读且需要二次明确授权才执行变更的 Linux/Docker acceptance runner。
 - [ADR-0001](docs/adr/0001-x-attachment-discovery.md) 的 Schema 8 graph-v2 编排已实现；真实 stable key 与 exact-selector 仍未经过 Stage 0，故真实 X graph 路由保持 gate 关闭。
 
-准确的运维步骤与边界见 [Runbook](docs/RUNBOOK.md)；Apache-2.0 迁移与发布验收见 [0.9.1 许可证迁移证据](validation/apache-2.0-license-migration-evidence.md)，工具链基线见 [Iteration 0.8.0 本机工具链接入验收证据](validation/iteration-0.8.0-local-toolchain-evidence.md)，直接工具样本见 [Iteration 0.8.1 真实平台验收证据](validation/iteration-0.8.1-live-platform-evidence.md)，最终 Worker/UI 全链路见 [Iteration 0.9.0 本机 Worker 验收证据](validation/iteration-0.9.0-local-worker-e2e-evidence.md)，累计状态与未完成项见 [HANDOFF.md](HANDOFF.md)。
+准确的运维步骤与边界见 [Runbook](docs/RUNBOOK.md)；本轮开源下载器比较与采用结论见 [Open-source downloader review](docs/OPEN_SOURCE_DOWNLOADER_REVIEW.md)，实现与测试边界见 [Iteration 0.10.0 六平台路由工程证据](validation/iteration-0.10.0-multiplatform-routing-evidence.md)，同轮脱敏真实结果见 [Iteration 0.10.0 Instagram 单样本本机证据](validation/iteration-0.10.0-instagram-live-evidence.md)；Apache-2.0 迁移与发布验收见 [0.9.1 许可证迁移证据](validation/apache-2.0-license-migration-evidence.md)，工具链基线见 [Iteration 0.8.0 本机工具链接入验收证据](validation/iteration-0.8.0-local-toolchain-evidence.md)，直接工具样本见 [Iteration 0.8.1 真实平台验收证据](validation/iteration-0.8.1-live-platform-evidence.md)，历史 YouTube/X Worker/UI 全链路见 [Iteration 0.9.0 本机 Worker 验收证据](validation/iteration-0.9.0-local-worker-e2e-evidence.md)，累计状态与未完成项见 [HANDOFF.md](HANDOFF.md)。
 
 ## 本地启动
 
@@ -148,9 +151,10 @@ uv run video-download-local-worker `
 | `GET` | `/api/v1/operations/queue` | 查询持久化队列暂停状态 |
 | `GET` | `/api/v1/operations/logs?limit=100` | 查询日志管线状态与最近脱敏事件，`limit` 范围 1–500 |
 | `GET` | `/api/v1/operations/tools` | 校验本机工具链并显示固定版本、离线 smoke、隔离 Worker/平台验收和本机第三方工具包再分发状态 |
+| `GET` | `/api/v1/download-capabilities` | 列出适配器静态声明的窄范围下载路由、候选/禁用状态、Cookie 模式、短链状态及尚未绑定的证据身份；静态注册表不能自行升级为 `verified` |
 | `POST` | `/api/v1/operations/queue/resume` | 磁盘恢复到配置水位后恢复队列 |
 | `GET` | `/api/v1/platform-circuits` | 查询平台熔断状态 |
-| `POST` | `/api/v1/platform-circuits/{platform}/reset` | 人工复位 `x`、`youtube`、`bilibili` 或 `douyin` |
+| `POST` | `/api/v1/platform-circuits/{platform}/reset` | 人工复位 `x`、`youtube`、`bilibili`、`douyin`、`tiktok` 或 `instagram` |
 
 提交示例：
 
@@ -264,11 +268,11 @@ uv run video-download-backup restore `
   --restore-database C:\vdc-restore-drill\control.sqlite3
 ```
 
-当前 v0.9.1 备份/恢复 CLI 要求精确 Schema 8；graph snapshot、relation、generation 和 active-snapshot 指针作为 SQLite 一致快照的一部分保存，已发布不可变资产按 manifest 复制，顶层 `logs`、`temporary` 与 `assets/.staging` 排除。Iteration 0.6 已在 Windows 临时独立根实际恢复包含 generation 2、跨 Input ready-asset reuse 和 exact target 的离线 graph 数据，并验证即使重算外层 manifest/hash，active pointer、target、child identity 或 reuse 语义篡改仍会以不回显内部 key 的固定错误拒绝；命令与边界见 [Iteration 0.6 offline graph evidence](validation/iteration-0.6-graph-v2-offline-evidence.md)。[Iteration 0.5 recovery evidence](validation/backup-restore-drill-iteration-0.5.md) 仍是 Schema 7 历史记录。两者都不替代目标 Linux/Docker 主机、独立物理介质和实际故障流程上的运维验收。运行日志与部署所有的 Cookie source 都不在业务备份内，必须按各自的保留和秘密存储策略处理。
+当前 v0.10.0 备份/恢复 CLI 要求精确 Schema 8；graph snapshot、relation、generation 和 active-snapshot 指针作为 SQLite 一致快照的一部分保存，已发布不可变资产按 manifest 复制，顶层 `logs`、`temporary` 与 `assets/.staging` 排除。Iteration 0.6 已在 Windows 临时独立根实际恢复包含 generation 2、跨 Input ready-asset reuse 和 exact target 的离线 graph 数据，并验证即使重算外层 manifest/hash，active pointer、target、child identity 或 reuse 语义篡改仍会以不回显内部 key 的固定错误拒绝；命令与边界见 [Iteration 0.6 offline graph evidence](validation/iteration-0.6-graph-v2-offline-evidence.md)。[Iteration 0.5 recovery evidence](validation/backup-restore-drill-iteration-0.5.md) 仍是 Schema 7 历史记录。两者都不替代目标 Linux/Docker 主机、独立物理介质和实际故障流程上的运维验收。运行日志与部署所有的 Cookie source 都不在业务备份内，必须按各自的保留和秘密存储策略处理。
 
 ## 安全边界
 
-- 入口仅接受 HTTP/HTTPS、已列出的平台域名、默认 scheme 端口，拒绝 URL 凭证和未支持链接类型；TikTok 不会被当作抖音。
+- 入口仅接受 HTTP/HTTPS、已列出的平台域名、默认 scheme 端口，拒绝 URL 凭证和未支持链接类型；TikTok 与 Douyin 独立建模，TikTok 当前只接收单视频直链，Instagram 当前只接收 Reel 直链。
 - 控制面无认证且强制 loopback；尚无可直接部署的 HTTPS、用户认证、限流或配额层。
 - 受控出站 proxy 要求显式非空 host allowlist，做 DNS A/AAAA 解析、非公网/映射/过渡地址阻断、数值 IP 连接与 peer 校验，并对请求、响应、连接数、字节数和时限设上限。
 - 短链 control↔egress 协议使用 canonical JSON、domain-separated HMAC-SHA256、fresh nonce、短有效期、clock-skew 检查与 crash-durable replay marker；逐跳只允许目标平台的 HTTPS hostname，响应只披露 `Location`。这不等同于已在真实 Linux 网络路径验证。
@@ -277,7 +281,7 @@ uv run video-download-backup restore `
 - 业务数据库只保存 profile ID 与 opaque ref；claim 后 JobLease 仅向 `ProbeRequest` / `DownloadRequest` 传递 opaque ref，不持久化 Cookie 路径或内容。Cookie 源到 Attempt 私有 `0600` 副本的组件已测试路径、权限、identity、swap 与 fsync。当前 override 只是 service-level isolation：单个 Worker 仍能读整棵多平台 source root，真实凭据上线前需要 credential sidecar、per-platform Worker 或 per-attempt mount namespace。
 - 代码中的凭证流已接通；credential-free base Compose 不含 Cookie，显式 override 才把 root-owned source/mapping 只读挂到 Worker。Host preflight 拒绝路径重叠、不安全祖先、named/default ACL、links、错误 owner/mode 与 race；full acceptance 还要求 host `/proc/sys/kernel/core_pattern` 可读且不是 pipe collector，因为 Worker `RLIMIT_CORE=0` 单独不能排除主机侧 crash capture。这些仍只有静态/Windows 离线证据。
 - Linux runner 的 execute mode 还要求 effective root，并固定使用通过 Python 3.12+ 检查的 `/usr/bin/python3`。Docker endpoint 判定遵循 `DOCKER_CONTEXT` 高于 `DOCKER_HOST` 的官方 precedence；execute 拒绝 inherited Docker/Compose/BuildKit endpoint、config 与 project/profile 控制变量，default context 仍须解析为 local Unix Linux daemon。Fresh build tag 只作初始名称；runner 随即捕获并验证不可变 local `sha256:...` image ID，把该 ID 写进 effective Compose，再递归拒绝 `$` 并在 private env 同目录冻结为 `root:root 0600` 文件。二次渲染必须与原 JSON 深等值并再次通过完整校验；之后 Compose mutation 只用 frozen file，direct `docker run` 和 runtime `Image` inspect 均绑定同一 ID，checkpoint 也会重验它，避免 tag rebind 改变验收对象。正常退出只按 identity/snapshot 删除冻结文件，crash 残留必须在受保护目录人工定点审计。
-- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后 `pip check`。Runner 的 network-none runtime contract 还精确核对 13 个 runtime-lock distributions + `video-download-control==0.9.1`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；刷新/审计命令见 [Deployment candidate](deployment/README.md#image-build-contract)。这些 target Linux 检查尚未执行，候选源码采用 Apache-2.0 也不代表构建出的第三方依赖或工具镜像已获再分发批准。
+- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后 `pip check`。Runner 的 network-none runtime contract 还精确核对 13 个 runtime-lock distributions + `video-download-control==0.10.0`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；刷新/审计命令见 [Deployment candidate](deployment/README.md#image-build-contract)。这些 target Linux 检查尚未执行，候选源码采用 Apache-2.0 也不代表构建出的第三方依赖或工具镜像已获再分发批准。
 - `VDC_ENABLE_X_GRAPH_V2` 只改变新 X Input 的任务形状，不会让 adapter 获得 exact selector。当前真实 `YtDlpAdapter.supports_exact_selector=False`；即使误入队，Worker claim 也会 fail closed，因此不要把该保护当作启用方案。
 - 下载输出、元数据和媒体文件始终视为不可信输入；不绕过 DRM、付费墙、验证码、地区或其他访问控制。
 
@@ -285,7 +289,7 @@ uv run video-download-backup restore `
 
 ## Stage 0 验证
 
-[`validation/`](validation/README.md) 包含样本/结果模板、明确标为 offline 的工程证据，以及两个用户指定样本的本机实测摘要。后者只证明精确样本，不构成 Stage 0 或整个平台支持证据。生成脱敏 Stage 0 报告：
+[`validation/`](validation/README.md) 包含样本/结果模板、明确标为 offline 的工程证据，以及 YouTube、X、Instagram 共三个精确输入的本机实测摘要。这些结果只证明记录中的精确样本，不构成 Stage 0 或整个平台支持证据。生成脱敏 Stage 0 报告：
 
 ```powershell
 uv run video-download-validation C:\private\samples.csv `
@@ -297,7 +301,7 @@ uv run video-download-validation C:\private\samples.csv `
 
 ## 已知未完成项
 
-- Stage 0、四平台真实链接回归和任何 `verified` 能力均未完成。
+- Stage 0、六平台完整真实链接回归和任何 `verified` 能力均未完成；Instagram 只有一个全链路正向样本，Bilibili 真实尝试遇 HTTP 412，Douyin 无 Cookie 尝试正确终止为 `authentication_required`，TikTok 未实跑。这些结果都不能外推为平台级兼容性。
 - candidate Worker、Compose、Cookie override 与 Linux acceptance runner 只有离线/静态证据；镜像未构建，Linux namespace/UDS/ACL/core limit、non-pipe `core_pattern`、runtime read-only bind、immutable image-ID chain 与 frozen-config lifecycle 均未实跑，真实 Cookie source 未创建或挂载。Cookie source 所在 host filesystem 的 `nodev,nosuid,noexec` 是 operator prerequisite，当前 runner/YAML 不证明；单 Worker 对整棵 Cookie source root 的可读性仍是显式残余风险。发布还须验证目标 registry 的 base/tool manifests 与 platform artifacts 可用，审阅镜像/包/批准 hashes 的 provenance 与 target wheel availability，并在目标 daemon 自带 Dockerfile frontend/BuildKit 上证明 Dockerfile 1.3+ `RUN --network=none` 被支持和落实。移除外部 syntax tag 不等于这些 target-specific build inputs 已获验证。
 - 备份/恢复 CLI 已更新为精确 Schema 8，并有 Iteration 0.6 离线 graph 独立根恢复与语义篡改拒绝证据；尚未在目标 Linux/NAS、真实容量、独立介质或灾难主机上执行运维验收。已有本地结构化排障日志，但仍无集中式生产日志管线、反向代理、认证或磁盘告警。
 - 短链 resolver、可信 transport 与 gated 控制面接线已实现，但 gate 默认关闭；短链 egress 尚未集成到 Compose/supervisor，Linux AF_UNIX/owner/mode、真实 TLS/DNS/redirect 和整批最坏延迟未验收。Replay blocking I/O 只是有界卸载而非可强制取消；injected resolver 仍须遵守 timeout contract。
