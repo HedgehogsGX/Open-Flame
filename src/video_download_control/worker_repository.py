@@ -10,6 +10,13 @@ from uuid import uuid4
 from . import __version__
 from .capabilities import AdapterRoute
 from .credentials import CredentialProfileError, validate_opaque_reference
+from .credential_defaults import (
+    CredentialDefaults,
+    CredentialMode,
+    resolve_default_profile_locked,
+    revalidate_credential_defaults,
+    validate_credential_mode,
+)
 from .database import Database
 from .diagnostics import sanitize_diagnostic
 from .domain import ErrorCode, InputStatus, JobStatus, Platform, SourceType
@@ -104,9 +111,136 @@ class RediscoverConflict(RuntimeError):
     pass
 
 
+class RetryConflict(RuntimeError):
+    pass
+
+
+class CircuitResetConflict(RuntimeError):
+    pass
+
+
 class WorkerRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    @staticmethod
+    def _validate_claim_gate_identity(*, run_id: str, worker_id: str | None = None) -> None:
+        if (
+            not isinstance(run_id, str)
+            or len(run_id) != 32
+            or any(character not in "0123456789abcdef" for character in run_id)
+        ):
+            raise ValueError("claim gate run_id must be 32 lowercase hex characters")
+        if worker_id is not None and (
+            not isinstance(worker_id, str)
+            or worker_id != worker_id.strip()
+            or not 1 <= len(worker_id) <= 128
+        ):
+            raise ValueError("claim gate worker_id is invalid")
+
+    def activate_claim_gate(
+        self,
+        *,
+        run_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> dict[str, object]:
+        """Open an exactly prepared supervisor run without reviving a stale run."""
+
+        self._validate_claim_gate_identity(run_id=run_id, worker_id=worker_id)
+        now_text = utc_text(now)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                UPDATE worker_claim_gate
+                SET run_id = ?, worker_id = ?, accepting_claims = 1,
+                    activated_at = ?, updated_at = ?
+                WHERE id = 1 AND accepting_claims = 0
+                  AND activated_at IS NULL AND stop_requested_at IS NULL
+                  AND run_id = ? AND worker_id = ?
+                RETURNING run_id, worker_id, accepting_claims,
+                          activated_at, stop_requested_at, updated_at
+                """,
+                (run_id, worker_id, now_text, now_text, run_id, worker_id),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("worker claim gate run is not prepared")
+        payload = dict(row)
+        payload["accepting_claims"] = bool(payload["accepting_claims"])
+        return payload
+
+    def prepare_claim_gate(
+        self,
+        *,
+        run_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> dict[str, object]:
+        """Fence any older run while keeping the new run closed for preflight."""
+
+        self._validate_claim_gate_identity(run_id=run_id, worker_id=worker_id)
+        now_text = utc_text(now)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                UPDATE worker_claim_gate
+                SET run_id = ?, worker_id = ?, accepting_claims = 0,
+                    activated_at = NULL, stop_requested_at = NULL,
+                    updated_at = ?
+                WHERE id = 1
+                RETURNING run_id, worker_id, accepting_claims,
+                          activated_at, stop_requested_at, updated_at
+                """,
+                (run_id, worker_id, now_text),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("worker claim gate singleton is missing")
+        payload = dict(row)
+        payload["accepting_claims"] = bool(payload["accepting_claims"])
+        return payload
+
+    def stop_claim_gate(self, *, run_id: str, now: datetime) -> bool:
+        """Close one run idempotently without allowing a stale run to close a newer one."""
+
+        self._validate_claim_gate_identity(run_id=run_id)
+        now_text = utc_text(now)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT run_id FROM worker_claim_gate WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("worker claim gate singleton is missing")
+            if row["run_id"] != run_id:
+                return False
+            connection.execute(
+                """
+                UPDATE worker_claim_gate
+                SET accepting_claims = 0,
+                    stop_requested_at = COALESCE(stop_requested_at, ?),
+                    updated_at = ?
+                WHERE id = 1 AND run_id = ?
+                """,
+                (now_text, now_text, run_id),
+            )
+            stopped = connection.execute(
+                """
+                SELECT run_id, accepting_claims, stop_requested_at
+                FROM worker_claim_gate WHERE id = 1
+                """
+            ).fetchone()
+            if stopped is None:
+                raise RuntimeError("worker claim gate singleton is missing")
+            if (
+                stopped["run_id"] != run_id
+                or stopped["accepting_claims"] != 0
+                or not isinstance(stopped["stop_requested_at"], str)
+                or not stopped["stop_requested_at"]
+            ):
+                raise RuntimeError("worker claim gate stop was not persisted")
+        return True
 
     def get_queue_control(self) -> dict[str, object]:
         with self.database.connect() as connection:
@@ -181,29 +315,40 @@ class WorkerRepository:
 
     def reset_platform_circuit(
         self, *, platform: Platform, now: datetime
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | None:
         now_text = utc_text(now)
         with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                """
+                SELECT requires_manual_reset
+                FROM platform_circuits WHERE platform = ?
+                """,
+                (platform.value,),
+            ).fetchone()
+            if current is None:
+                return None
+            if not current["requires_manual_reset"]:
+                raise CircuitResetConflict(
+                    "platform circuit does not require manual reset"
+                )
             row = connection.execute(
                 """
-                INSERT INTO platform_circuits(
-                    platform, state, consecutive_failures, last_error_code,
-                    opened_at, cooldown_until, requires_manual_reset,
-                    probe_job_id, probe_lease_token, updated_at
-                ) VALUES (?, 'closed', 0, NULL, NULL, NULL, 0, NULL, NULL, ?)
-                ON CONFLICT(platform) DO UPDATE SET
-                    state = 'closed', consecutive_failures = 0,
+                UPDATE platform_circuits
+                SET state = 'closed', consecutive_failures = 0,
                     last_error_code = NULL, opened_at = NULL,
                     cooldown_until = NULL, requires_manual_reset = 0,
                     probe_job_id = NULL, probe_lease_token = NULL,
-                    updated_at = excluded.updated_at
+                    updated_at = ?
+                WHERE platform = ? AND requires_manual_reset = 1
                 RETURNING platform, state, consecutive_failures, last_error_code,
                           opened_at, cooldown_until, requires_manual_reset,
                           updated_at
                 """,
-                (platform.value, now_text),
+                (now_text, platform.value),
             ).fetchone()
-        assert row is not None
+        if row is None:
+            raise CircuitResetConflict("platform circuit reset lost a concurrent update")
         payload = dict(row)
         payload["requires_manual_reset"] = bool(payload["requires_manual_reset"])
         return payload
@@ -255,6 +400,9 @@ class WorkerRepository:
         supports_exact_selector: bool = False,
         skip_unsupported_graph_jobs: bool = False,
         supported_routes: frozenset[AdapterRoute] | None = None,
+        claim_gate_run_id: str | None = None,
+        perform_recovery: bool = True,
+        excluded_job_ids: frozenset[str] = frozenset(),
     ) -> JobLease | None:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
@@ -264,6 +412,32 @@ class WorkerRepository:
             raise ValueError("recovery_limit must be positive")
         if not isinstance(skip_unsupported_graph_jobs, bool):
             raise ValueError("graph skip policy must be boolean")
+        if not isinstance(perform_recovery, bool):
+            raise ValueError("recovery policy must be boolean")
+        if (
+            not isinstance(excluded_job_ids, frozenset)
+            or len(excluded_job_ids) > 64
+            or not all(
+                isinstance(job_id, str)
+                and job_id == job_id.strip()
+                and 1 <= len(job_id) <= 128
+                for job_id in excluded_job_ids
+            )
+        ):
+            raise ValueError("excluded job identities must be a bounded frozenset")
+        excluded_parameters = sorted(excluded_job_ids)
+        excluded_clause = (
+            "AND j.id NOT IN ("
+            + ", ".join("?" for _ in excluded_parameters)
+            + ")"
+            if excluded_parameters
+            else ""
+        )
+        if claim_gate_run_id is not None:
+            self._validate_claim_gate_identity(
+                run_id=claim_gate_run_id,
+                worker_id=worker_id,
+            )
         route_clause = ""
         route_parameters: list[str] = []
         if supported_routes is not None:
@@ -304,7 +478,7 @@ class WorkerRepository:
         # inside the claim transaction because it may change during cleanup.
         if self.get_queue_control()["paused"]:
             return None
-        if remove_pending_asset is None:
+        if perform_recovery and remove_pending_asset is None:
             _, _, recovery_blocked = self._prepare_asset_intent_recovery(
                 now_text=now_text,
                 recovery_expires_text=now_text,
@@ -313,7 +487,7 @@ class WorkerRepository:
             )
             if recovery_blocked:
                 return None
-        else:
+        elif perform_recovery:
             self.recover_asset_commit_intents(
                 now=now,
                 remove_pending_asset=remove_pending_asset,
@@ -322,6 +496,27 @@ class WorkerRepository:
 
         with self.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if claim_gate_run_id is not None:
+                claim_gate = connection.execute(
+                    """
+                    SELECT run_id, worker_id, accepting_claims,
+                           activated_at, stop_requested_at
+                    FROM worker_claim_gate WHERE id = 1
+                    """
+                ).fetchone()
+                if claim_gate is None:
+                    raise RuntimeError("worker claim gate singleton is missing")
+                if (
+                    claim_gate["run_id"] != claim_gate_run_id
+                    or claim_gate["worker_id"] != worker_id
+                    or claim_gate["accepting_claims"] != 1
+                    or not isinstance(claim_gate["activated_at"], str)
+                    or not claim_gate["activated_at"]
+                    or claim_gate["activated_at"]
+                    != claim_gate["activated_at"].strip()
+                    or claim_gate["stop_requested_at"] is not None
+                ):
+                    return None
             queue_control = connection.execute(
                 "SELECT paused FROM queue_control WHERE id = 1"
             ).fetchone()
@@ -329,7 +524,8 @@ class WorkerRepository:
                 raise RuntimeError("queue control singleton is missing")
             if queue_control["paused"]:
                 return None
-            self._recover_expired(connection, now_text)
+            if perform_recovery:
+                self._recover_expired(connection, now_text)
             while True:
                 row = connection.execute(
                     f"""
@@ -361,6 +557,7 @@ class WorkerRepository:
                     LEFT JOIN platform_circuits AS circuit
                       ON circuit.platform = s.platform
                     WHERE j.status = 'queued'
+                      {excluded_clause}
                       AND (
                           ? = 0
                           OR (
@@ -406,6 +603,7 @@ class WorkerRepository:
                     LIMIT 1
                     """,
                     (
+                        *excluded_parameters,
                         int(skip_unsupported_graph_jobs),
                         X_ATTACHMENT_SOURCE_TYPE,
                         *route_parameters,
@@ -856,6 +1054,137 @@ class WorkerRepository:
                     (now_text, now_text, job_id),
                 )
             return current
+
+    def request_retry(
+        self,
+        job_id: str,
+        *,
+        now: datetime,
+        credential_mode: CredentialMode | None = None,
+        credential_defaults: CredentialDefaults | None = None,
+    ) -> dict[str, object] | None:
+        """Queue a new generation for one terminal failed flat download Job."""
+
+        validate_credential_mode(credential_mode, allow_preserve=True)
+        now_text = utc_text(now)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if credential_mode == "use_default":
+                revalidate_credential_defaults(credential_defaults)
+            job = connection.execute(
+                """
+                SELECT
+                    j.id, j.status, j.job_kind, j.input_record_id,
+                    j.source_item_id, j.run_generation, j.final_error_code,
+                    j.credential_profile_id,
+                    i.active_run_generation, i.active_discovery_id,
+                    s.platform,
+                    EXISTS (
+                        SELECT 1 FROM download_job_targets AS target
+                        WHERE target.job_id = j.id
+                    ) AS has_target,
+                    EXISTS (
+                        SELECT 1 FROM download_jobs AS parent
+                        WHERE parent.input_record_id = j.input_record_id
+                          AND parent.job_kind = 'discover'
+                    ) AS has_discover_parent
+                FROM download_jobs AS j
+                JOIN input_records AS i ON i.id = j.input_record_id
+                JOIN source_items AS s ON s.id = j.source_item_id
+                WHERE j.id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            if job is None:
+                return None
+            if (
+                job["job_kind"] != "download"
+                or job["active_discovery_id"] is not None
+                or job["has_target"]
+                or job["has_discover_parent"]
+            ):
+                raise InvalidTransition("job is not a flat download")
+            if job["status"] != JobStatus.FAILED.value:
+                raise RetryConflict("job is not terminal failed")
+            if job["run_generation"] != job["active_run_generation"]:
+                raise RuntimeError("input and flat job generation are inconsistent")
+            conflicting = connection.execute(
+                """
+                SELECT id FROM download_jobs
+                WHERE source_item_id = ? AND id <> ?
+                  AND status IN (
+                      'queued', 'probing', 'downloading',
+                      'postprocessing', 'verifying', 'ready'
+                  )
+                LIMIT 1
+                """,
+                (job["source_item_id"], job_id),
+            ).fetchone()
+            if conflicting is not None:
+                raise RetryConflict("source already has live or ready work")
+            profile_id = job["credential_profile_id"]
+            if credential_mode == "anonymous":
+                profile_id = None
+            elif credential_mode == "use_default":
+                profile_id = resolve_default_profile_locked(
+                    connection,
+                    defaults=credential_defaults,
+                    platform=Platform(job["platform"]),
+                    now=now,
+                )
+            next_generation = int(job["run_generation"]) + 1
+            updated = connection.execute(
+                """
+                UPDATE download_jobs
+                SET status = 'queued', progress = 0, final_error_code = NULL,
+                    lease_owner = NULL, lease_token = NULL,
+                    heartbeat_at = NULL, lease_expires_at = NULL,
+                    cancel_requested_at = NULL, available_at = ?,
+                    run_generation = ?, generation_attempt_count = 0,
+                    updated_at = ?, credential_profile_id = ?
+                WHERE id = ? AND status = 'failed' AND run_generation = ?
+                """,
+                (
+                    now_text,
+                    next_generation,
+                    now_text,
+                    profile_id,
+                    job_id,
+                    job["run_generation"],
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RetryConflict("job retry lost a concurrent update")
+            input_updated = connection.execute(
+                """
+                UPDATE input_records
+                SET active_run_generation = ?, cancel_requested_at = NULL,
+                    status = 'queued', error_code = NULL, error_message = NULL
+                WHERE id = ? AND active_run_generation = ?
+                  AND active_discovery_id IS NULL
+                """,
+                (
+                    next_generation,
+                    job["input_record_id"],
+                    job["active_run_generation"],
+                ),
+            )
+            if input_updated.rowcount != 1:
+                raise RuntimeError("input generation update was lost")
+            self._refresh_batch_locked(
+                connection,
+                input_record_id=job["input_record_id"],
+                now_text=now_text,
+            )
+            if credential_mode == "use_default":
+                revalidate_credential_defaults(credential_defaults)
+            return {
+                "job_id": job_id,
+                "status": JobStatus.QUEUED.value,
+                "run_generation": next_generation,
+                "platform": job["platform"],
+                "previous_error_code": job["final_error_code"],
+            }
 
     def request_cancel_input(
         self, input_record_id: str, *, now: datetime

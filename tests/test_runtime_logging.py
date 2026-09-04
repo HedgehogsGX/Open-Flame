@@ -88,6 +88,189 @@ def test_runtime_log_writes_one_bounded_versioned_json_object_per_line(
     assert TOKEN_RE.fullmatch(record["event_id"])
 
 
+def test_local_app_runtime_events_are_readable_and_strictly_allowlisted(
+    tmp_path: Path,
+) -> None:
+    logger = RuntimeLogger(
+        component="local-app",
+        config=_config(tmp_path),
+        clock=lambda: NOW,
+        run_id="local-app-contract",
+    )
+
+    assert logger.emit(
+        "local_app.initializing",
+        app_version="0.15.0",
+        app_schema_version=10,
+        port=8000,
+        direct_network_enabled=True,
+        browser_enabled=True,
+        check_only=False,
+    )
+    assert logger.emit(
+        "local_app.child_ready",
+        child_role="worker",
+        app_phase="worker_preflight_ready",
+    )
+    assert logger.emit("local_app.ready", port=8000, browser_enabled=True)
+    assert logger.emit(
+        "local_app.shutdown_requested",
+        reason="keyboard_interrupt",
+    )
+    assert logger.emit("local_app.stopped", reason="normal")
+
+    events = read_recent_runtime_events((tmp_path / "logs").resolve())
+    assert [event["event"] for event in events] == [
+        "local_app.initializing",
+        "local_app.child_ready",
+        "local_app.ready",
+        "local_app.shutdown_requested",
+        "local_app.stopped",
+    ]
+    assert logger.status()["rejected_events"] == 0
+    assert "local-app" in logger.path.name
+
+
+def test_local_app_claim_gate_events_have_a_bounded_path_free_contract(
+    tmp_path: Path,
+) -> None:
+    sentinel = str((tmp_path / "SENTINEL-PRIVATE-DATABASE").resolve())
+    logger = RuntimeLogger(
+        component="local-app",
+        config=_config(tmp_path),
+        clock=lambda: NOW,
+        run_id="local-app-claim-gate-contract",
+    )
+
+    assert logger.emit(
+        "local_app.claim_gate_prepared",
+        worker_id="local-app-worker",
+        gate_state="prepared",
+    )
+    assert logger.emit(
+        "local_app.claim_gate_activated",
+        worker_id="local-app-worker",
+        gate_state="active",
+    )
+    assert logger.emit(
+        "local_app.claim_gate_stopped",
+        worker_id="local-app-worker",
+        gate_state="stopped",
+    )
+    assert logger.emit(
+        "local_app.claim_gate_prepared",
+        level="ERROR",
+        worker_id="local-app-worker",
+        gate_state="prepare_failed",
+    )
+    assert logger.emit(
+        "local_app.claim_gate_activated",
+        level="ERROR",
+        worker_id="local-app-worker",
+        gate_state="activate_failed",
+    )
+    assert not logger.emit(
+        "local_app.claim_gate_stopped",
+        worker_id="local-app-worker",
+        gate_state="fenced",
+        database_path=sentinel,
+    )
+    assert not logger.emit(
+        "local_app.claim_gate_stopped",
+        worker_id="local-app-worker",
+        gate_state=sentinel,
+    )
+
+    records = _jsonl_records(logger.path)
+    gate_records = [
+        record
+        for record in records
+        if str(record["event"]).startswith("local_app.claim_gate_")
+    ]
+    assert [record["gate_state"] for record in gate_records] == [
+        "prepared",
+        "active",
+        "stopped",
+        "prepare_failed",
+        "activate_failed",
+    ]
+    assert all(
+        set(record)
+        - {
+            "schema_version",
+            "timestamp",
+            "level",
+            "event",
+            "component",
+            "run_id",
+            "event_id",
+            "pid",
+            "sequence",
+            "thread_id",
+        }
+        == {"worker_id", "gate_state"}
+        for record in gate_records
+    )
+    assert sentinel not in logger.path.read_text(encoding="utf-8")
+
+
+def test_local_app_forced_shutdown_uses_fixed_diagnostic_tokens(
+    tmp_path: Path,
+) -> None:
+    sentinel = "SENTINEL-PRIVATE-EXCEPTION-TEXT"
+    logger = RuntimeLogger(
+        component="local-app",
+        config=_config(tmp_path),
+        clock=lambda: NOW,
+        run_id="local-app-forced-shutdown-contract",
+    )
+
+    assert logger.emit(
+        "local_app.forced_shutdown",
+        level="WARNING",
+        cause="gate_stop_failed",
+        failure_site="claim_gate_stop",
+    )
+    assert logger.emit(
+        "local_app.forced_shutdown",
+        level="WARNING",
+        cause="child_timeout",
+        failure_site="child_shutdown",
+    )
+    assert not logger.emit(
+        "local_app.forced_shutdown",
+        level="WARNING",
+        cause=sentinel,
+        failure_site="claim_gate_stop",
+    )
+    assert not logger.emit(
+        "local_app.forced_shutdown",
+        level="WARNING",
+        cause="gate_stop_failed",
+        failure_site=sentinel,
+    )
+    assert not logger.emit(
+        "local_app.forced_shutdown",
+        level="WARNING",
+        cause="gate_stop_failed",
+        failure_site="child_shutdown",
+    )
+
+    forced = [
+        record
+        for record in _jsonl_records(logger.path)
+        if record["event"] == "local_app.forced_shutdown"
+    ]
+    assert [
+        (record["cause"], record["failure_site"])
+        for record in forced
+    ] == [
+        ("gate_stop_failed", "claim_gate_stop"),
+        ("child_timeout", "child_shutdown"),
+    ]
+    assert sentinel not in logger.path.read_text(encoding="utf-8")
+
+
 def test_runtime_log_toolchain_event_has_a_narrow_path_free_contract(
     tmp_path: Path,
 ) -> None:
@@ -361,10 +544,22 @@ def test_runtime_log_reader_rejects_tampered_or_semantically_invalid_records(
     malformed_timestamp = {**valid, "timestamp": f"{sentinel}Z"}
     unknown_field = {**valid, "secret_payload": sentinel}
     invalid_semantic = {**valid, "event": "circuit.reset", "platform": sentinel}
+    mismatched_forced_shutdown = {
+        **valid,
+        "event": "local_app.forced_shutdown",
+        "cause": "gate_stop_failed",
+        "failure_site": "child_shutdown",
+    }
     logger.path.write_text(
         "\n".join(
             json.dumps(record, separators=(",", ":"))
-            for record in (valid, malformed_timestamp, unknown_field, invalid_semantic)
+            for record in (
+                valid,
+                malformed_timestamp,
+                unknown_field,
+                invalid_semantic,
+                mismatched_forced_shutdown,
+            )
         )
         + "\n",
         encoding="utf-8",

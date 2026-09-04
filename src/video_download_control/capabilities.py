@@ -216,7 +216,7 @@ DEFAULT_DOWNLOAD_CAPABILITIES = PlatformCapabilityRegistry(
         _yt_dlp_capability(
             Platform.TIKTOK,
             SourceType.TIKTOK_VIDEO,
-            short_link_status=ShortLinkStatus.DEFERRED,
+            short_link_status=ShortLinkStatus.GATED,
         ),
         _yt_dlp_capability(Platform.INSTAGRAM, SourceType.INSTAGRAM_REEL),
     )

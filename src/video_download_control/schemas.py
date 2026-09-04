@@ -18,6 +18,7 @@ from .domain import (
     Platform,
     SourceType,
 )
+from .credential_defaults import CredentialMode
 
 
 class BatchCreateRequest(BaseModel):
@@ -25,6 +26,7 @@ class BatchCreateRequest(BaseModel):
 
     name: str | None = Field(default=None, max_length=200)
     inputs: list[str] = Field(min_length=1)
+    credential_mode: CredentialMode = "use_default"
 
     @field_validator("inputs")
     @classmethod
@@ -114,6 +116,17 @@ class OriginalAssetMetadataResponse(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class AuxiliaryArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    kind: Literal["thumbnail", "caption"]
+    mime_type: str
+    language: str | None
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    download_url: str
+
+
 class BatchAssetResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,6 +135,7 @@ class BatchAssetResponse(BaseModel):
     ordinal: int = Field(ge=0)
     original: OriginalAssetMetadataResponse
     download_url: str
+    artifacts: list[AuxiliaryArtifactResponse] = Field(default_factory=list)
 
 
 class BatchSummaryResponse(BaseModel):
@@ -153,6 +167,27 @@ class JobCancelResponse(BaseModel):
     job_id: str
     status: JobStatus
     cancel_requested: bool
+
+
+class CredentialDefaultsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platforms: list[Platform]
+    available: bool
+
+
+class JobRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential_mode: CredentialMode
+
+
+class JobRetryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: Literal["queued"]
+    run_generation: int = Field(ge=2)
 
 
 class InputCancelResponse(BaseModel):
@@ -229,6 +264,77 @@ class DownloadCapabilityResponse(BaseModel):
     adapter_version: str | None
     environment: str | None
     short_link_status: ShortLinkStatus
+
+
+class CapabilityImplementationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    implementation_id: str
+    platform: Platform
+    source_type: SourceType
+    job_kind: AdapterJobKind
+    adapter: str
+    implementation_status: CapabilityStatus
+    authentication: AuthenticationMode
+    short_link_status: ShortLinkStatus
+
+
+class CapabilityEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str
+    identity_key: str
+    implementation_id: str
+    platform: Platform
+    source_type: SourceType
+    job_kind: AdapterJobKind
+    adapter: str
+    downloader_version: str
+    environment: str
+    product_version: str
+    evidence_kind: Literal["stage0_csv_v3"]
+    policy_version: str
+    assessment: Literal["qualified", "insufficient"]
+    positive_samples: int = Field(ge=0)
+    negative_samples: int = Field(ge=0)
+    complete_runs: int = Field(ge=0)
+    recent_positive_rates: list[float]
+    recent_negative_rates: list[float]
+    evaluated_at: str
+    imported_at: str
+
+
+class CapabilityDecisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: str
+    identity_key: str
+    evidence_id: str
+    platform: Platform
+    source_type: SourceType
+    job_kind: AdapterJobKind
+    adapter: str
+    downloader_version: str
+    environment: str
+    product_version: str
+    action: Literal["approve", "revoke"]
+    state: Literal["approved", "revoked"]
+    revision: int = Field(ge=1)
+    reason_code: str
+    decided_at: str
+
+
+class CapabilitySnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_product_identity: str
+    implementations: list[CapabilityImplementationResponse]
+    evidence: list[CapabilityEvidenceResponse]
+    decisions: list[CapabilityDecisionResponse]
+    evidence_total: int = Field(ge=0)
+    decision_total: int = Field(ge=0)
+    evidence_truncated: bool
+    decision_truncated: bool
 
 
 class JobCountMetric(BaseModel):

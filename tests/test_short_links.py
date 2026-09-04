@@ -88,6 +88,18 @@ def make_resolver(
             Platform.DOUYIN,
             SourceType.DOUYIN_VIDEO,
         ),
+        (
+            "https://vm.tiktok.com/ZShort123",
+            "https://www.tiktok.com/@Example.User/video/7461234567890123456?token=drop",
+            Platform.TIKTOK,
+            SourceType.TIKTOK_VIDEO,
+        ),
+        (
+            "https://vt.tiktok.com/ZShort456",
+            "https://m.tiktok.com/@Example.User/video/7461234567890123457?token=drop",
+            Platform.TIKTOK,
+            SourceType.TIKTOK_VIDEO,
+        ),
     ],
 )
 def test_resolves_supported_short_link_without_fetching_final_page(
@@ -124,6 +136,98 @@ def test_relative_redirect_is_validated_one_hop_at_a_time() -> None:
     assert result.normalized.canonical_url == "https://x.com/i/status/99"
     assert result.redirect_count == 2
     assert [call[0].url for call in transport.calls] == [first, second]
+
+
+def test_tiktok_redirects_between_reviewed_hosts_one_hop_at_a_time() -> None:
+    first = "https://vm.tiktok.com/ZStart"
+    second = "https://vt.tiktok.com/ZNext"
+    transport = FakeTransport(
+        response(first, second),
+        response(
+            second,
+            "https://www.tiktok.com/@Example.User/video/7461234567890123456",
+        ),
+    )
+    dns_calls: list[tuple[str, int]] = []
+
+    def resolver(host: str, port: int) -> tuple[str, ...]:
+        dns_calls.append((host, port))
+        return (PUBLIC_IP,)
+
+    result = ControlledShortLinkResolver(
+        transport=transport,
+        resolver=resolver,
+    ).resolve(first)
+
+    assert result.normalized.canonical_url == (
+        "https://www.tiktok.com/@example.user/video/7461234567890123456"
+    )
+    assert result.policy_hosts == (
+        "vm.tiktok.com",
+        "vt.tiktok.com",
+        "www.tiktok.com",
+    )
+    assert dns_calls == [
+        ("vm.tiktok.com", 443),
+        ("vt.tiktok.com", 443),
+        ("www.tiktok.com", 443),
+    ]
+    assert [call[0].url for call in transport.calls] == [first, second]
+
+
+@pytest.mark.parametrize(
+    "location",
+    (
+        "https://video.tiktok.com/@example/video/7461234567890123456",
+        "https://evil.vm.tiktok.com/ZNext",
+        "https://tiktok.com.evil.example/@example/video/7461234567890123456",
+    ),
+)
+def test_tiktok_rejects_hosts_outside_exact_reviewed_list(location: str) -> None:
+    start = "https://vm.tiktok.com/ZStart"
+    transport = FakeTransport(response(start, location))
+
+    with pytest.raises(ShortLinkResolutionError) as caught:
+        make_resolver(transport).resolve(start)
+
+    assert caught.value.reason == "egress_host_not_allowed"
+    assert location not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert len(transport.calls) == 1
+
+
+def test_tiktok_short_link_keeps_https_dns_and_peer_guards() -> None:
+    start = "https://vt.tiktok.com/ZGuarded"
+
+    with pytest.raises(ShortLinkResolutionError) as downgrade:
+        make_resolver(
+            FakeTransport(
+                response(
+                    start,
+                    "http://www.tiktok.com/@example/video/7461234567890123456",
+                )
+            )
+        ).resolve(start)
+    with pytest.raises(ShortLinkResolutionError) as private_dns:
+        make_resolver(
+            FakeTransport(),
+            dns_answers=("127.0.0.1",),
+        ).resolve(start)
+    with pytest.raises(ShortLinkResolutionError) as peer_mismatch:
+        make_resolver(
+            FakeTransport(
+                response(
+                    start,
+                    "https://www.tiktok.com/@example/video/7461234567890123456",
+                    peer_ip="1.1.1.1",
+                )
+            )
+        ).resolve(start)
+
+    assert downgrade.value.reason == "https_required"
+    assert private_dns.value.reason == "egress_non_public_address"
+    assert peer_mismatch.value.reason == "egress_peer_address_mismatch"
 
 
 def test_each_redirect_target_is_resolved_exactly_once() -> None:

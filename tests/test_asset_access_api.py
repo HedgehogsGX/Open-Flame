@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from video_download_control.adapters import ScriptedFakeAdapter
+from video_download_control.adapters.base import DownloadResult, ProducedFile
 from video_download_control.api import create_app
 from video_download_control.assets import AssetStore, NonEmptyTestVerifier
 from video_download_control.config import Settings
@@ -12,17 +15,373 @@ from video_download_control.worker import Worker
 from video_download_control.worker_repository import WorkerRepository
 
 
-def _finish_fake_download(app, settings: Settings, *, payload: bytes) -> None:
+class _AuxiliaryFakeAdapter(ScriptedFakeAdapter):
+    def download(self, request, context, progress, cancellation):
+        original = super().download(request, context, progress, cancellation)
+        if not original.files:
+            return original
+        media_key = original.files[0].media_key
+        thumbnail = request.output_dir / "source.thumbnail.webp"
+        caption = request.output_dir / "source.caption.en-US.vtt"
+        thumbnail.write_bytes(b"safe thumbnail bytes\n")
+        caption.write_bytes(b"WEBVTT\n\n00:00.000 --> 00:01.000\nSafe caption\n")
+        return DownloadResult(
+            files=original.files,
+            thumbnails=(
+                ProducedFile(
+                    path=thumbnail,
+                    media_key=media_key,
+                    media_kind="image",
+                    role="thumbnail",
+                    ordinal=0,
+                ),
+            ),
+            captions=(
+                ProducedFile(
+                    path=caption,
+                    media_key=media_key,
+                    media_kind="text",
+                    role="caption",
+                    ordinal=0,
+                ),
+            ),
+        )
+
+
+def _finish_fake_download(
+    app,
+    settings: Settings,
+    *,
+    payload: bytes,
+    adapter: ScriptedFakeAdapter | None = None,
+) -> None:
     worker = Worker(
         worker_id="asset-api-test-worker",
         repository=WorkerRepository(app.state.database),
-        adapter=ScriptedFakeAdapter(payload=payload),
+        adapter=adapter or ScriptedFakeAdapter(payload=payload),
         asset_store=AssetStore(settings.data_root, min_free_bytes=0),
         verifier=NonEmptyTestVerifier(),
     )
     result = worker.run_once()
     assert result is not None
     assert result.status == "ready"
+
+
+def _create_ready_auxiliary_asset(
+    client: TestClient,
+    app,
+    settings: Settings,
+    *,
+    suffix: str,
+) -> dict:
+    created = client.post(
+        "/api/v1/batches",
+        json={"inputs": [f"https://youtu.be/{suffix}"]},
+    ).json()
+    _finish_fake_download(
+        app,
+        settings,
+        payload=b"original bytes\n",
+        adapter=_AuxiliaryFakeAdapter(payload=b"original bytes\n"),
+    )
+    response = client.get(f"/api/v1/batches/{created['id']}/assets")
+    assert response.status_code == 200
+    return response.json()[0]
+
+
+def test_ready_asset_lists_and_downloads_registered_auxiliary_artifacts(
+    settings: Settings,
+) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={
+                "name": "private-title-must-not-leak",
+                "inputs": ["https://youtu.be/asset-api-auxiliary"],
+            },
+        ).json()
+        _finish_fake_download(
+            app,
+            settings,
+            payload=b"original bytes\n",
+            adapter=_AuxiliaryFakeAdapter(payload=b"original bytes\n"),
+        )
+
+        listed = client.get(f"/api/v1/batches/{created['id']}/assets")
+        asset = listed.json()[0]
+        downloads = [
+            client.get(artifact["download_url"])
+            for artifact in asset["artifacts"]
+        ]
+        log_status = client.get("/api/v1/operations/logs?limit=100").json()
+
+    assert listed.status_code == 200
+    assert [artifact["kind"] for artifact in asset["artifacts"]] == [
+        "thumbnail",
+        "caption",
+    ]
+    assert [artifact["mime_type"] for artifact in asset["artifacts"]] == [
+        "image/webp",
+        "text/vtt",
+    ]
+    assert [artifact["language"] for artifact in asset["artifacts"]] == [
+        None,
+        "en-US",
+    ]
+    assert all(len(artifact["sha256"]) == 64 for artifact in asset["artifacts"])
+    assert all(
+        artifact["download_url"]
+        == f"/api/v1/artifacts/{artifact['artifact_id']}/download"
+        for artifact in asset["artifacts"]
+    )
+    assert "path" not in listed.text
+    assert "private-title-must-not-leak" not in listed.text
+
+    assert [response.content for response in downloads] == [
+        b"safe thumbnail bytes\n",
+        b"WEBVTT\n\n00:00.000 --> 00:01.000\nSafe caption\n",
+    ]
+    assert [response.headers["content-type"] for response in downloads] == [
+        "image/webp",
+        "text/vtt; charset=utf-8",
+    ]
+    for artifact, response in zip(asset["artifacts"], downloads, strict=True):
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        disposition = response.headers["content-disposition"]
+        assert disposition.startswith(
+            f'attachment; filename="artifact-{artifact["artifact_id"]}'
+        )
+        assert "private-title-must-not-leak" not in disposition
+
+    assert log_status["rejected_events"] == 0
+    artifact_download_events = [
+        event
+        for event in log_status["events"]
+        if event["event"] == "http.request_completed"
+        and event.get("route") == "/api/v1/artifacts/{artifact_id}/download"
+    ]
+    assert len(artifact_download_events) == 2
+    assert all(event["status_code"] == 200 for event in artifact_download_events)
+
+
+def test_auxiliary_download_requires_canonical_registered_ready_sidecar(
+    settings: Settings,
+) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-aux-authz"]},
+        ).json()
+        _finish_fake_download(
+            app,
+            settings,
+            payload=b"original bytes\n",
+            adapter=_AuxiliaryFakeAdapter(payload=b"original bytes\n"),
+        )
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+        thumbnail = asset["artifacts"][0]
+        with app.state.database.connect() as connection:
+            manifest_id = connection.execute(
+                "SELECT id FROM artifacts WHERE asset_id = ? AND kind = 'manifest'",
+                (asset["asset_id"],),
+            ).fetchone()[0]
+
+        invalid = client.get("/api/v1/artifacts/not-a-uuid/download")
+        unregistered = client.get(
+            "/api/v1/artifacts/00000000-0000-0000-0000-000000000000/download"
+        )
+        noncanonical = client.get(
+            f"/api/v1/artifacts/{thumbnail['artifact_id'].upper()}/download"
+        )
+        manifest = client.get(f"/api/v1/artifacts/{manifest_id}/download")
+
+        with app.state.database.connect() as connection:
+            connection.execute(
+                "UPDATE download_jobs SET status = 'failed' WHERE id = ?",
+                (asset["job_id"],),
+            )
+        nonready_job = client.get(thumbnail["download_url"])
+        with app.state.database.connect() as connection:
+            connection.execute(
+                "UPDATE download_jobs SET status = 'ready' WHERE id = ?",
+                (asset["job_id"],),
+            )
+            connection.execute(
+                "UPDATE media_assets SET status = 'failed' WHERE id = ?",
+                (asset["asset_id"],),
+            )
+        nonready_asset = client.get(thumbnail["download_url"])
+
+    for response in (
+        invalid,
+        unregistered,
+        noncanonical,
+        manifest,
+        nonready_job,
+        nonready_asset,
+    ):
+        assert response.status_code == 404
+        assert response.json() == {"detail": "辅助产物不存在"}
+
+
+@pytest.mark.parametrize("integrity_break", ["duplicate_original", "hash_mismatch"])
+def test_auxiliary_download_requires_one_matching_parent_original(
+    settings: Settings,
+    integrity_break: str,
+) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        asset = _create_ready_auxiliary_asset(
+            client,
+            app,
+            settings,
+            suffix=f"asset-api-parent-{integrity_break}",
+        )
+        thumbnail = asset["artifacts"][0]
+        with app.state.database.connect() as connection:
+            original = connection.execute(
+                """
+                SELECT path, sha256, created_at
+                FROM artifacts
+                WHERE asset_id = ? AND kind = 'original'
+                """,
+                (asset["asset_id"],),
+            ).fetchone()
+            if integrity_break == "duplicate_original":
+                connection.execute(
+                    """
+                    INSERT INTO artifacts(
+                        id, asset_id, kind, path, mime_type, sha256,
+                        parent_artifact_id, tool_name, tool_version, created_at
+                    ) VALUES (?, ?, 'original', ?, NULL, ?, NULL, NULL, NULL, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        asset["asset_id"],
+                        original["path"],
+                        original["sha256"],
+                        original["created_at"],
+                    ),
+                )
+            else:
+                connection.execute(
+                    "UPDATE artifacts SET sha256 = ? WHERE asset_id = ? AND kind = 'original'",
+                    ("0" * 64, asset["asset_id"]),
+                )
+
+        rejected = client.get(thumbnail["download_url"])
+
+    assert rejected.status_code == 404
+    assert rejected.json() == {"detail": "辅助产物不存在"}
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "outside_path",
+        "wrong_directory",
+        "wrong_mime",
+        "wrong_hash",
+        "modified_content",
+        "empty_content",
+    ],
+)
+def test_auxiliary_download_rejects_invalid_registered_file(
+    settings: Settings,
+    corruption: str,
+) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        asset = _create_ready_auxiliary_asset(
+            client,
+            app,
+            settings,
+            suffix=f"asset-api-corrupt-{corruption}",
+        )
+        thumbnail = asset["artifacts"][0]
+        with app.state.database.connect() as connection:
+            row = connection.execute(
+                "SELECT path FROM artifacts WHERE id = ?",
+                (thumbnail["artifact_id"],),
+            ).fetchone()
+            artifact_path = settings.data_root / row["path"]
+            if corruption == "outside_path":
+                outside = settings.data_root.parent / "outside-thumbnail.webp"
+                outside.write_bytes(artifact_path.read_bytes())
+                connection.execute(
+                    "UPDATE artifacts SET path = '../outside-thumbnail.webp' WHERE id = ?",
+                    (thumbnail["artifact_id"],),
+                )
+            elif corruption == "wrong_directory":
+                wrong = (
+                    settings.data_root
+                    / "assets"
+                    / asset["asset_id"]
+                    / "captions"
+                    / "thumbnail-0000.webp"
+                )
+                wrong.write_bytes(artifact_path.read_bytes())
+                connection.execute(
+                    "UPDATE artifacts SET path = ? WHERE id = ?",
+                    (
+                        wrong.relative_to(settings.data_root).as_posix(),
+                        thumbnail["artifact_id"],
+                    ),
+                )
+            elif corruption == "wrong_mime":
+                connection.execute(
+                    "UPDATE artifacts SET mime_type = 'image/png' WHERE id = ?",
+                    (thumbnail["artifact_id"],),
+                )
+            elif corruption == "wrong_hash":
+                connection.execute(
+                    "UPDATE artifacts SET sha256 = ? WHERE id = ?",
+                    ("0" * 64, thumbnail["artifact_id"]),
+                )
+            elif corruption == "modified_content":
+                artifact_path.write_bytes(b"modified after registration\n")
+            else:
+                artifact_path.write_bytes(b"")
+
+        rejected = client.get(thumbnail["download_url"])
+
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "辅助产物文件不可用"}
+    assert "outside-thumbnail" not in rejected.text
+
+
+def test_auxiliary_download_rejects_hard_linked_file(settings: Settings) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        asset = _create_ready_auxiliary_asset(
+            client,
+            app,
+            settings,
+            suffix="asset-api-aux-hardlink",
+        )
+        thumbnail = asset["artifacts"][0]
+        with app.state.database.connect() as connection:
+            row = connection.execute(
+                "SELECT path FROM artifacts WHERE id = ?",
+                (thumbnail["artifact_id"],),
+            ).fetchone()
+        artifact_path = settings.data_root / row["path"]
+        alias = artifact_path.with_name("thumbnail-hard-link.webp")
+        try:
+            os.link(artifact_path, alias)
+        except OSError as exc:
+            pytest.skip(f"hard links are unavailable on this filesystem: {exc}")
+
+        rejected = client.get(thumbnail["download_url"])
+
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "辅助产物文件不可用"}
 
 
 def test_ready_batch_lists_original_metadata_and_downloads_registered_file(
@@ -60,7 +419,9 @@ def test_ready_batch_lists_original_metadata_and_downloads_registered_file(
         "ordinal",
         "original",
         "download_url",
+        "artifacts",
     }
+    assert asset["artifacts"] == []
     assert asset["job_id"] == job_id
     assert asset["ordinal"] == 0
     assert asset["download_url"] == (
@@ -168,6 +529,9 @@ def test_frontend_fetches_ready_assets_and_builds_links_without_inner_html(
     assert page.status_code == 200
     assert 'id="asset-links"' in page.text
     assert 'id="asset-list"' in page.text
+    assert 'id="job-progress"' in page.text
+    assert 'id="job-progress-list"' in page.text
+    assert "任务进度（阶段估算）" in page.text
     assert 'id="recent-batches"' in page.text
     assert "async function openBatch(batchId)" in page.text
     assert "async function loadRecentBatches()" in page.text
@@ -177,4 +541,11 @@ def test_frontend_fetches_ready_assets_and_builds_links_without_inner_html(
     assert "const link = document.createElement('a');" in page.text
     assert "link.href = asset.download_url;" in page.text
     assert "link.textContent = `下载成品" in page.text
+    assert "for (const [artifactIndex, artifact] of artifacts.entries())" in page.text
+    assert "artifactLink.href = artifact.download_url;" in page.text
+    assert "artifact.kind === 'thumbnail' ? '缩略图' : '字幕'" in page.text
+    assert "function renderJobProgress(payload)" in page.text
+    assert "postprocessing: '正在合并/后处理'" in page.text
+    assert "progressElement.value = percent;" in page.text
+    assert "renderJobProgress(payload);" in page.text
     assert "innerHTML" not in page.text

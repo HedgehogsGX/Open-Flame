@@ -1,4 +1,4 @@
-# Iteration 0.7 target Linux/Docker acceptance
+# Iteration 0.23.0 target Linux/Docker acceptance
 
 Status: procedure and runner only. This acceptance has **not** been executed on
 the current Windows development host, where Docker is unavailable. Nothing in
@@ -10,8 +10,39 @@ The executable companion is
 [`deployment/run-linux-acceptance.sh`](../deployment/run-linux-acceptance.sh).
 It is intentionally narrower than a production rollout: it operates against a
 new, empty acceptance data root, a deny-only egress policy, synthetic Cookie
-fixtures, and an independently supplied Schema 8 backup. It never submits a
+fixtures, and an independently supplied Schema 11 backup. It never submits a
 real media URL.
+
+The Iteration 0.13.0 application contract separately retained ready-asset
+thumbnail/caption listing and strict auxiliary downloads, gated TikTok
+`vm`/`vt` short links with an exact hostname allowlist, and offline fake E2E
+coverage for YouTube video/Shorts, Bilibili BV/av, gated Douyin short links,
+and TXT/CSV import. This runner does not exercise those API/media paths or the
+short-link egress service; their engineering evidence is not target Linux or
+real-platform evidence.
+
+Iteration 0.14.0 additionally connects the shared Cookie resolver to the
+Windows-only local Worker and adds its no-claim preflight. That direct host
+path is outside this Linux topology; the shared resolver's new empty/oversize
+and cross-platform physical-source rejection remains covered by offline tests,
+not by a completed target-Linux run.
+
+Iteration 0.16.0 introduced Schema 11 and the Windows local-app claim gate; that
+is retained historical engineering evidence. Iteration 0.23.0 advances this
+runner's current application identity to `video-download-control==0.23.0` while
+keeping Schema 11. The current adapter can emit redacted, bounded progress
+control lines and persist conservative stage estimates, but this runner still
+does not submit real media, exercise those events in a target container, or
+turn the implementation into Linux or platform evidence. The empty-database and
+independent-restore checks continue to require Schema 11 readiness; Schema 10
+appears below only as a historical forward-migration waypoint.
+
+The v0.19 Windows local-app short-link direct transport and explicitly configured
+Cookie defaults are outside this Linux topology. They retain direct/non-isolated
+host networking, do not auto-enable the generic control entry, and do not change
+this runner's credential assignment or short-link egress coverage. Their
+[offline/simulated-network engineering record](iteration-0.19.0-short-links-cookie-defaults-evidence.md)
+is not real-platform, real-Cookie or target-Linux acceptance.
 
 ## Evidence and safety boundary
 
@@ -24,7 +55,7 @@ The runner has two modes:
   or restore a backup.
 - `--execute` is mutation-capable and refuses to proceed without the exact
   authorization token `I_ACCEPT_TARGET_LINUX_MUTATIONS`, effective UID 0, an
-  explicit private env file, a digest-pinned tool image, a Schema 8 backup root,
+  explicit private env file, a digest-pinned tool image, a Schema 11 backup root,
   and a new empty restore parent. It builds a freshly tagged local acceptance
   image, immediately captures its immutable `sha256:...` image ID, creates a
   scoped Compose project, confines application fixture writes to
@@ -145,12 +176,17 @@ development machine. Before running:
    deployment, a `nodev,nosuid,noexec` Cookie-source filesystem where supported
    is an operator prerequisite; this runner does not inspect/prove those host
    mount flags.
-7. Supply a previously audited, non-sensitive Schema 8 acceptance backup
+7. Supply a previously audited, non-sensitive Schema 11 acceptance backup
    outside the repository through a canonical read-only directory. It must
    contain no real Cookie, token, signed URL, or private media. Prepare a
    separate empty restore parent owned by `10001:10001` and mode `0750`. The
    restore parent must not overlap the backup, repository, data, or socket
-   roots.
+   roots. A Schema 8, 9, or 10 backup must first be restored with its matching
+   historical application and is not a direct input to this runner. For a
+   Schema 8 or 9 artifact, migrate a working copy with v0.15 to the historical
+   Schema 10 waypoint. Then open a writable working copy with v0.17, migrate it
+   to Schema 11, validate readiness, and ensure it is re-backed up as Schema 11
+   before acceptance.
 8. Reserve a protected destination for the sanitized JSONL report. Record the
    change ticket, Docker versions, reviewed digests, host identity, and
    operator separately in protected evidence; the runner omits them to avoid
@@ -232,7 +268,7 @@ deployment/run-linux-acceptance.sh \
   --env-file /absolute/private/candidate.env \
   --compose-override /absolute/private/acceptance.override.yaml \
   --tool-image registry.example/vdc-tools@sha256:REPLACE_WITH_REVIEWED_DIGEST \
-  --backup-root /absolute/read-only/schema8-backup \
+  --backup-root /absolute/read-only/schema11-backup \
   --restore-parent /absolute/empty/acceptance-restore-parent \
   > /absolute/protected/linux-acceptance.jsonl
 ```
@@ -314,7 +350,7 @@ cookie_mount_permissions
 worker_sigterm
 sigterm_lease_recovery
 worker_restart
-schema8_restore
+schema11_restore
 stack_shutdown
 stale_socket
 audit_redaction
@@ -325,14 +361,14 @@ summary
 |---|---|---|---|
 | Host input integrity | `private_env`, optional `compose_override`, `deny_only_policy` | Private files satisfy exact `root:root`/`0600`/single-link/base-ACL/safe-ancestor requirements; policy satisfies exact `root:10001`/`0440`/1–16384-byte/single-link/base-ACL/safe-ancestor requirements. Protected paths do not overlap, and recorded identity/metadata snapshots are revalidated at mutation checkpoints. | Canonical string checks do not discover physical aliases or pre-existing bind mounts; trusted exclusive host control remains required. |
 | Compose config | `compose_config`, `root_execution`, `cold_config` | Execute confirms effective root. Four services, no published ports, none/shared-none namespace shape, non-root/read-only/cap/resource declarations, candidate gate, immutable image references, and optional Cookie injection structure survive effective rendering. The validated local image ID is embedded in `$`-free effective JSON, frozen beside the env, re-rendered, deeply compared, fully revalidated, snapshotted, and used for all Compose mutations. | The file contains deployment configuration. Normal exit removes only the unchanged recorded identity; a crash can leave a protected remnant requiring manual exact-identity cleanup. |
-| Image build | `scoped_project`, `image_build`, `image_identity`, `image_contract`, `image_runtime_contract` | The generated project/tag were unused; two Python stages use the same hard-coded digest (still subject to release review), the tool bundle is digest-pinned, the Python closures are exact/hash locked, post-download package operations are networkless/no-index, and the resulting tag is resolved to an immutable local image ID. Image contract inspection, every direct helper run, frozen Compose, checkpoint re-inspection, and each runtime container are bound to that ID. A network-none direct run checks exact versions for the 13 runtime-lock distributions plus `video-download-control==0.10.0`, rejects the five build-only distributions, confirms Schema 8, and keeps the real adapter's exact-selector capability false. | This does not validate a platform request, registry availability, package/image provenance, target wheel availability, or the target daemon's bundled frontend/BuildKit behavior by itself. Full Linux execution must show Dockerfile 1.3+ `RUN --network=none` is supported and enforced; no such run occurred on Windows. |
+| Image build | `scoped_project`, `image_build`, `image_identity`, `image_contract`, `image_runtime_contract` | The generated project/tag were unused; two Python stages use the same hard-coded digest (still subject to release review), the tool bundle is digest-pinned, the Python closures are exact/hash locked, post-download package operations are networkless/no-index, and the resulting tag is resolved to an immutable local image ID. Image contract inspection, every direct helper run, frozen Compose, checkpoint re-inspection, and each runtime container are bound to that ID. A network-none direct run checks exact versions for the 13 runtime-lock distributions plus `video-download-control==0.23.0`, rejects the five build-only distributions, confirms Schema 11, and keeps the real adapter's exact-selector capability false. | This does not validate a platform request, registry availability, package/image provenance, target wheel availability, or the target daemon's bundled frontend/BuildKit behavior by itself. Full Linux execution must show Dockerfile 1.3+ `RUN --network=none` is supported and enforced; no such run occurred on Windows. |
 | Cold start and health | `cold_start`, `base_health`, `worker_start`, `service_health` | A new scoped project starts sandbox, proxy, relay, then Worker; all declared health checks become healthy. | Health is necessary, not proof of media correctness. |
 | Runtime hardening | `host_coredump_policy`, `runtime_hardening`, `worker_core_dump` | Preflight reads host `/proc/sys/kernel/core_pattern` and accepts only a non-pipe value; mutation checkpoints repeat that test. Docker inspect reports non-root, read-only root, `cap_drop=ALL`, no-new-privileges, PID/memory/CPU limits, and no published port for every service; Worker inspect and in-container `RLIMIT_CORE` both report soft/hard zero. | `RLIMIT_CORE=0` alone does not exclude a host pipe collector. Any unreadable or `|`-prefixed host policy blocks acceptance; kernel/cgroup enforcement outside the inspected values remains host-operations evidence. |
 | Namespace and UDS | `runtime_namespace`, `namespace_uds` | Docker reports sandbox `none`, Worker/relay sharing that exact namespace, and only proxy on a bridge; the Worker's Linux guard observes loopback-only state and reaches the relay through the expected Unix-socket path. | It does not make the unauthenticated control plane safe for network exposure. |
 | SSRF and peer checks | `ssrf_policy`, `peer_attestation` | Live proxy CONNECT attempts to loopback, RFC1918, and metadata addresses are rejected; private DNS resolution and a mismatched connected peer are rejected by the shipped security helpers in-container. | The peer-mismatch case is deterministic and does not claim a real DNS-rebinding or Internet endpoint test. |
 | Cookie ceiling and permissions | `cookie_compose`, `cookie_host_metadata`, `cookie_mount_permissions` | Full acceptance requires the exact reviewed wrapper config, rejects every Compose secret and non-worker config, and verifies worker-only/read-only injection. The host validator rejects runtime/repository overlap, unsafe ancestors, and extended/default ACLs; in the full six-source synthetic case, all refs are unique, files are regular/single-link/non-writable, read access works, and write-open fails. | Synthetic content proves no authentication, freshness, platform acceptance, or rotation success. Rotation separately requires a clean trusted root launcher, verified absolute GNU `/usr/bin/mv -fT`, and post-rename platform-directory `fsync`. Normal deployments may configure zero to six sources; direct per-file mounts are outside this acceptance until equivalent host validation exists. |
 | SIGTERM and lease recovery | `worker_sigterm`, `sigterm_lease_recovery`, `worker_restart` | The real idle Worker exits on the stop sequence without OOM or forced-kill status; a separate synthetic holder is terminated by SIGTERM, its 10-second lease expires, Attempt 1 becomes abandoned, Attempt 2 reclaims the same Job, and the Worker becomes healthy again. | Exit `0` or signal-derived `143` is accepted; this does not claim an in-flight real downloader subprocess was terminated safely or that the Python Worker installs its own SIGTERM handler. |
-| Schema 8 restore | `schema8_restore` | The backup CLI restores into a previously nonexistent independent child root and a separate read-only run confirms Schema version 8 readiness. The result is retained. | The supplied backup's prior audit, storage capacity, offsite copy, RTO, and RPO remain separate evidence. |
+| Schema 11 restore | `schema11_restore` | The backup CLI restores into a previously nonexistent independent child root and a separate read-only run confirms Schema version 11 readiness. The result is retained. | The supplied backup's prior audit, storage capacity, offsite copy, RTO, and RPO remain separate evidence. A Schema 8, 9, or 10 backup must first be restored with its matching historical application; older copies pass through the v0.15/Schema 10 waypoint where needed, then a writable copy is migrated by v0.17 and re-backed up as Schema 11. It is not a direct input to this check. |
 | Stale socket | `stale_socket`, `stack_shutdown` | Graceful proxy stop removes its socket; a deliberately stale socket then prevents proxy health without being replaced, and the runner retains its inode for manual cleanup. | An authorized trusted supervisor must remove it later after confirming no process owns it. |
 | Report boundary | `audit_redaction`, `summary` | The successful path emitted fixed-field sanitized JSONL and suppressed command output. | Operators must still protect the report and separately redact any troubleshooting material. |
 
@@ -369,7 +405,7 @@ host's trusted service supervisor or a narrowly targeted manual operation. The
 runner contains no recursive delete, `eval`, Docker prune, volume removal, or
 cleanup based on unresolved variables.
 
-The retained Schema 8 restore must be inspected before deletion. Confirm the
+The retained Schema 11 restore must be inspected before deletion. Confirm the
 restored database remains ready when mounted read-only and that no Cookie file
 or deployment-private mapping entered the backup payload. Delete the local
 acceptance image, data fixture, restore tree, report, and stale socket only
@@ -387,6 +423,6 @@ Do not infer or write any of these conclusions from this acceptance:
 - Docker or this checklist passed on the current Windows host;
 - real yt-dlp, FFmpeg, ffprobe, Cookie authentication, or platform media passed;
 - X stable attachment keys or exact-one-selector behavior passed;
-- Schema 8 graph-v2 is safe to route to the real candidate Worker;
+- Schema 11 graph-v2 is safe to route to the real candidate Worker;
 - any platform, Stage 0, disaster recovery program, or production deployment is
   `verified`.

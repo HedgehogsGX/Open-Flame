@@ -18,8 +18,9 @@ import sys
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 
 from .adapters import (
     DirectEgress,
@@ -29,7 +30,18 @@ from .adapters import (
     YtDlpJsRuntimeName,
 )
 from .assets import AssetStore, AssetValidationError
+from .candidate_cookies import (
+    DEFAULT_MAX_COOKIE_BYTES,
+    AttemptCookieResolver,
+    CookiePreparationError,
+    CookieSource,
+)
+from .cookie_source_config import (
+    CookieSourceConfigError,
+    load_cookie_source_config,
+)
 from .database import Database
+from .domain import Platform
 from .runtime_logging import (
     DEFAULT_RUNTIME_LOG_BACKUP_COUNT,
     DEFAULT_RUNTIME_LOG_MAX_BYTES,
@@ -41,6 +53,7 @@ from .subprocess_runner import SecureSubprocessRunner
 from .toolchain import ToolchainError, load_toolchain_lock, verify_toolchain
 from .verifiers import FfprobeVerifier
 from .worker import Worker
+from .worker_pool import run_concurrent_worker
 from .worker_repository import WorkerRepository
 
 FEATURE_GATE = "VDC_ENABLE_LOCAL_REAL_WORKER"
@@ -96,6 +109,26 @@ def _js_runtime(raw: str) -> YtDlpJsRuntime:
         ) from exc
 
 
+def _cookie_source(raw: str) -> CookieSource:
+    """Parse one redaction-safe PLATFORM:OPAQUE_REF=ABSOLUTE_PATH mapping."""
+
+    try:
+        identity, raw_path = raw.split("=", 1)
+        raw_platform, credential_ref = identity.split(":", 1)
+        path = Path(raw_path)
+        if not path.is_absolute() or Path(os.path.abspath(path)) != path:
+            raise ValueError
+        return CookieSource(
+            platform=Platform(raw_platform),
+            credential_ref=credential_ref,
+            path=path,
+        )
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            "cookie source must use PLATFORM:OPAQUE_REF=ABSOLUTE_PATH"
+        ) from None
+
+
 def _poll_interval(raw: str) -> float:
     try:
         value = float(raw)
@@ -142,7 +175,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ffprobe-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--attempt-timeout-seconds", type=float, default=60.0 * 60.0)
     parser.add_argument("--max-items-per-source", type=int, default=20)
+    parser.add_argument(
+        "--max-cookie-bytes",
+        type=int,
+        default=DEFAULT_MAX_COOKIE_BYTES,
+        help="maximum bytes accepted from each configured read-only Cookie source",
+    )
+    cookie_input = parser.add_mutually_exclusive_group()
+    cookie_input.add_argument(
+        "--cookie-source",
+        action="append",
+        default=[],
+        type=_cookie_source,
+        metavar="PLATFORM:OPAQUE_REF=ABSOLUTE_PATH",
+        help=(
+            "map one platform credential reference to a read-only Netscape "
+            "Cookie file; repeat for different platforms"
+        ),
+    )
+    cookie_input.add_argument(
+        "--cookie-config",
+        type=_absolute_path,
+        metavar="ABSOLUTE_JSON_PATH",
+        help=(
+            "load platform credential references and Cookie source paths from "
+            "one strict read-only JSON file"
+        ),
+    )
     run_mode = parser.add_mutually_exclusive_group()
+    run_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="validate database, tools and Cookie sources without claiming a job",
+    )
     run_mode.add_argument(
         "--drain",
         action="store_true",
@@ -164,6 +229,12 @@ class LocalWorkerConfig:
     worker_id: str
     allow_direct_network: bool
     js_runtime: YtDlpJsRuntime | None = None
+    cookie_sources: tuple[CookieSource, ...] = ()
+    cookie_config_path: Path | None = field(default=None, repr=False)
+    max_cookie_bytes: int = DEFAULT_MAX_COOKIE_BYTES
+    runtime_log_level: str = "INFO"
+    runtime_log_max_bytes: int = DEFAULT_RUNTIME_LOG_MAX_BYTES
+    runtime_log_backup_count: int = DEFAULT_RUNTIME_LOG_BACKUP_COUNT
     max_height: int = 1080
     max_file_bytes: int = 8 * 1024 * 1024 * 1024
     storage_min_free_bytes: int = 1024 * 1024 * 1024
@@ -175,7 +246,22 @@ class LocalWorkerConfig:
     max_items_per_source: int = 20
 
     def __post_init__(self) -> None:
-        paths = (self.data_root, self.database_path, self.tool_root)
+        if not isinstance(self.cookie_sources, tuple):
+            raise ValueError("local Worker cookie sources must be an immutable tuple")
+        try:
+            AttemptCookieResolver(
+                self.cookie_sources,
+                max_cookie_bytes=self.max_cookie_bytes,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("local Worker cookie source configuration is invalid") from exc
+        paths = (
+            self.data_root,
+            self.database_path,
+            self.tool_root,
+            *((self.cookie_config_path,) if self.cookie_config_path is not None else ()),
+            *(source.path for source in self.cookie_sources),
+        )
         if any(
             not isinstance(path, Path)
             or not path.is_absolute()
@@ -193,6 +279,21 @@ class LocalWorkerConfig:
             raise ValueError("local Worker database path must name a file")
         if _path_trees_overlap(self.data_root, self.tool_root):
             raise ValueError("local Worker data and tool roots must be separate")
+        if any(
+            _path_trees_overlap(source.path, root)
+            for source in self.cookie_sources
+            for root in (self.data_root, self.tool_root)
+        ):
+            raise ValueError(
+                "local Worker Cookie sources must stay outside data and tool roots"
+            )
+        if self.cookie_config_path is not None and any(
+            _path_trees_overlap(self.cookie_config_path, root)
+            for root in (self.data_root, self.tool_root)
+        ):
+            raise ValueError(
+                "local Worker Cookie configuration must stay outside data and tool roots"
+            )
         if not isinstance(self.worker_id, str) or not _WORKER_ID.fullmatch(
             self.worker_id
         ):
@@ -203,6 +304,13 @@ class LocalWorkerConfig:
             self.js_runtime, YtDlpJsRuntime
         ):
             raise ValueError("local Worker JavaScript runtime is invalid")
+        log_config = RuntimeLogConfig(
+            directory=self.data_root / "logs",
+            level=self.runtime_log_level,
+            max_bytes=self.runtime_log_max_bytes,
+            backup_count=self.runtime_log_backup_count,
+        )
+        object.__setattr__(self, "runtime_log_level", log_config.level)
         _bounded_integer(self.max_height, "max height", 144, 2160)
         _bounded_integer(self.max_file_bytes, "max file bytes", 1, _MAX_FILE_BYTES)
         _bounded_integer(
@@ -213,6 +321,12 @@ class LocalWorkerConfig:
         )
         _bounded_integer(self.socket_timeout_seconds, "socket timeout", 1, 120)
         _bounded_integer(self.max_items_per_source, "source item limit", 1, 50)
+        _bounded_integer(
+            self.max_cookie_bytes,
+            "cookie byte limit",
+            1,
+            64 * 1024 * 1024,
+        )
         for value, label, maximum in (
             (self.probe_timeout_seconds, "probe timeout", 30 * 60),
             (self.download_timeout_seconds, "download timeout", 24 * 60 * 60),
@@ -230,6 +344,17 @@ class LocalWorkerConfig:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> LocalWorkerConfig:
         data_root = args.data_root
+        cookie_config_path = args.cookie_config
+        cookie_sources = tuple(args.cookie_source)
+        if cookie_config_path is not None:
+            try:
+                cookie_sources = load_cookie_source_config(
+                    cookie_config_path
+                ).sources
+            except CookieSourceConfigError:
+                raise ValueError(
+                    "local Worker cookie source configuration is invalid"
+                ) from None
         return cls(
             data_root=data_root,
             database_path=args.database_path or data_root / "control.sqlite3",
@@ -237,6 +362,22 @@ class LocalWorkerConfig:
             worker_id=args.worker_id,
             allow_direct_network=args.allow_direct_network,
             js_runtime=args.js_runtime,
+            cookie_sources=cookie_sources,
+            cookie_config_path=cookie_config_path,
+            max_cookie_bytes=args.max_cookie_bytes,
+            runtime_log_level=os.getenv("VDC_RUNTIME_LOG_LEVEL", "INFO"),
+            runtime_log_max_bytes=int(
+                os.getenv(
+                    "VDC_RUNTIME_LOG_MAX_BYTES",
+                    str(DEFAULT_RUNTIME_LOG_MAX_BYTES),
+                )
+            ),
+            runtime_log_backup_count=int(
+                os.getenv(
+                    "VDC_RUNTIME_LOG_BACKUP_COUNT",
+                    str(DEFAULT_RUNTIME_LOG_BACKUP_COUNT),
+                )
+            ),
             max_height=args.max_height,
             max_file_bytes=args.max_file_bytes,
             storage_min_free_bytes=args.storage_min_free_bytes,
@@ -439,19 +580,9 @@ def _runtime_logger(config: LocalWorkerConfig) -> RuntimeLogger:
         component="local-worker",
         config=RuntimeLogConfig(
             directory=config.data_root / "logs",
-            level=os.getenv("VDC_RUNTIME_LOG_LEVEL", "INFO"),
-            max_bytes=int(
-                os.getenv(
-                    "VDC_RUNTIME_LOG_MAX_BYTES",
-                    str(DEFAULT_RUNTIME_LOG_MAX_BYTES),
-                )
-            ),
-            backup_count=int(
-                os.getenv(
-                    "VDC_RUNTIME_LOG_BACKUP_COUNT",
-                    str(DEFAULT_RUNTIME_LOG_BACKUP_COUNT),
-                )
-            ),
+            level=config.runtime_log_level,
+            max_bytes=config.runtime_log_max_bytes,
+            backup_count=config.runtime_log_backup_count,
         ),
         instance_id=config.worker_id,
     )
@@ -462,6 +593,7 @@ def build_local_worker(
     *,
     runner: SecureSubprocessRunner | None = None,
     runtime_logger: RuntimeLogger | None = None,
+    claim_gate_run_id: str | None = None,
 ) -> Worker:
     """Assemble a direct Worker only after every local opt-in is revalidated.
 
@@ -481,6 +613,11 @@ def build_local_worker(
             config.js_runtime.executable,
             "local Worker JavaScript runtime",
         )
+    cookie_resolver = AttemptCookieResolver(
+        config.cookie_sources,
+        max_cookie_bytes=config.max_cookie_bytes,
+    )
+    cookie_resolver.validate_sources()
     lock = load_toolchain_lock()
     python_executable = Path(sys.executable).resolve(strict=True)
     try:
@@ -536,6 +673,7 @@ def build_local_worker(
     adapter = YtDlpAdapter(
         factory=factory,
         runner=command_runner,
+        cookie_resolver=cookie_resolver,
         probe_timeout_seconds=config.probe_timeout_seconds,
         download_timeout_seconds=config.download_timeout_seconds,
     )
@@ -558,6 +696,9 @@ def build_local_worker(
             acknowledged=config.allow_direct_network,
         ),
         runtime_logger=runtime_logger,
+        claim_gate_run_id=claim_gate_run_id,
+        stop_event=(command_runner.stop_event
+                    if isinstance(command_runner, SecureSubprocessRunner) else Event()),
     )
 
 
@@ -604,7 +745,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "no job was claimed"
                 ) from None
             if not runtime_logger.emit(
-                "worker.initializing",
+                "worker.preflight_started" if args.check else "worker.initializing",
                 worker_id=config.worker_id,
                 adapter="yt_dlp",
                 direct_network_enabled=True,
@@ -613,51 +754,94 @@ def main(argv: Sequence[str] | None = None) -> None:
                 raise SystemExit(
                     "local real Worker runtime log is unavailable; no job was claimed"
                 )
+            worker: Worker | None = None
+            startup_message: str | None = None
             try:
                 worker = build_local_worker(
                     config,
                     runtime_logger=runtime_logger,
                 )
-                if not runtime_logger.emit(
-                    "worker.started",
-                    worker_id=config.worker_id,
-                    adapter="yt_dlp",
-                    direct_network_enabled=True,
-                    js_runtime_enabled=config.js_runtime is not None,
-                ):
-                    raise LocalWorkerStartupError(
-                        "local Worker runtime log is unavailable"
-                    )
-            except Exception as exc:  # noqa: BLE001 - public boundary redacts causes
-                if runtime_logger is not None:
-                    runtime_logger.emit(
-                        "worker.startup_failed",
-                        level="ERROR",
+                if not args.check:
+                    if not runtime_logger.emit(
+                        "worker.started",
                         worker_id=config.worker_id,
-                        exception_type=safe_exception_type(exc),
+                        adapter="yt_dlp",
+                        direct_network_enabled=True,
+                        js_runtime_enabled=config.js_runtime is not None,
+                    ):
+                        raise LocalWorkerStartupError(
+                            "local Worker runtime log is unavailable"
+                )
+            except Exception as exc:  # noqa: BLE001 - public boundary redacts causes
+                failure_event = (
+                    "worker.preflight_failed"
+                    if args.check
+                    else "worker.startup_failed"
+                )
+                runtime_logger.emit(
+                    failure_event,
+                    level="ERROR",
+                    worker_id=config.worker_id,
+                    exception_type=safe_exception_type(exc),
+                )
+                if isinstance(exc, CookiePreparationError):
+                    startup_message = (
+                        "local real Worker credential preparation failed; "
+                        "inspect the runtime log"
                     )
-                raise SystemExit(
-                    "local real Worker startup failed; inspect the runtime log"
-                ) from None
+                elif args.check:
+                    startup_message = (
+                        "local real Worker preflight failed; inspect the runtime log"
+                    )
+                else:
+                    startup_message = (
+                        "local real Worker startup failed; inspect the runtime log"
+                    )
+            if startup_message is not None:
+                # Raise outside the handler so SystemExit retains no private
+                # exception context from Cookie or toolchain validation.
+                raise SystemExit(startup_message)
+            assert worker is not None
+
+            if args.check:
+                if not runtime_logger.emit(
+                    "worker.preflight_succeeded",
+                    worker_id=config.worker_id,
+                ):
+                    raise SystemExit(
+                        "local real Worker runtime log is unavailable; "
+                        "no job was claimed"
+                    )
+                print(
+                    json.dumps(
+                        {
+                            "cookie_platforms": [
+                                source.platform.value
+                                for source in config.cookie_sources
+                            ],
+                            "status": "ready",
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+                return
 
             stop_reason = "runtime_error"
             cycle_started = time.perf_counter()
             try:
-                while True:
+                if args.drain or args.poll_interval_seconds is not None:
+                    run_concurrent_worker(
+                        worker,
+                        poll_interval_seconds=args.poll_interval_seconds,
+                        on_result=_print_result,
+                    )
+                    stop_reason = "drain_complete"
+                else:
                     result = worker.run_once()
                     _print_result(result)
-                    if args.poll_interval_seconds is not None:
-                        if result is None:
-                            time.sleep(args.poll_interval_seconds)
-                        cycle_started = time.perf_counter()
-                        continue
-                    if result is None or not args.drain:
-                        if result is None:
-                            stop_reason = "drain_complete" if args.drain else "idle"
-                        else:
-                            stop_reason = "single_run_complete"
-                        return
-                    cycle_started = time.perf_counter()
+                    stop_reason = "idle" if result is None else "single_run_complete"
+                return
             except KeyboardInterrupt:
                 stop_reason = "keyboard_interrupt"
                 return

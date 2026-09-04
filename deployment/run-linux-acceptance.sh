@@ -43,7 +43,7 @@ RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)-$$"
 PROJECT_NAME="vdc-acceptance-$RUN_ID"
 BUILD_TAG="vdc-linux-acceptance:$RUN_ID"
 BUILT_IMAGE_ID=
-RESTORE_NAME="vdc-schema8-acceptance-$RUN_ID"
+RESTORE_NAME="vdc-schema11-acceptance-$RUN_ID"
 FAILURES=0
 BLOCKED=0
 STACK_STARTED=0
@@ -71,7 +71,7 @@ Usage:
       --env-file ABSOLUTE_FILE \
       [--compose-override ABSOLUTE_FILE] \
       --tool-image NAME@sha256:64_LOWERCASE_HEX \
-      --backup-root ABSOLUTE_SCHEMA8_BACKUP_DIR \
+      --backup-root ABSOLUTE_SCHEMA11_BACKUP_DIR \
       --restore-parent ABSOLUTE_EMPTY_PARENT_DIR
 
 Default preflight performs no build, container start, restore, socket creation,
@@ -1228,33 +1228,33 @@ fi
 pass_check tool_image immutable_tool_image_selected
 
 if ! canonical_directory "$BACKUP_ROOT"; then
-    fatal_check schema8_restore canonical_backup_root_required
+    fatal_check schema11_restore canonical_backup_root_required
 fi
 BACKUP_ROOT=$CANONICAL_PATH
 if ! canonical_directory "$RESTORE_PARENT"; then
-    fatal_check schema8_restore canonical_restore_parent_required
+    fatal_check schema11_restore canonical_restore_parent_required
 fi
 RESTORE_PARENT=$CANONICAL_PATH
 if paths_overlap "$BACKUP_ROOT" "$REPO_ROOT" \
     || paths_overlap "$RESTORE_PARENT" "$REPO_ROOT"; then
-    fatal_check schema8_restore repository_local_recovery_path_rejected
+    fatal_check schema11_restore repository_local_recovery_path_rejected
 fi
 if ! directory_is_empty "$RESTORE_PARENT"; then
-    fatal_check schema8_restore restore_parent_must_be_empty
+    fatal_check schema11_restore restore_parent_must_be_empty
 fi
-restore_metadata=$(stat -Lc '%u:%g:%a' -- "$RESTORE_PARENT" 2>/dev/null) || fatal_check schema8_restore restore_parent_metadata_unavailable
+restore_metadata=$(stat -Lc '%u:%g:%a' -- "$RESTORE_PARENT" 2>/dev/null) || fatal_check schema11_restore restore_parent_metadata_unavailable
 if [ "$restore_metadata" != 10001:10001:750 ]; then
-    fatal_check schema8_restore restore_parent_ownership_or_mode_mismatch
+    fatal_check schema11_restore restore_parent_ownership_or_mode_mismatch
 fi
 case "$RESTORE_PARENT/" in
-    "$BACKUP_ROOT/"*|"$BACKUP_ROOT"/) fatal_check schema8_restore overlapping_restore_paths ;;
+    "$BACKUP_ROOT/"*|"$BACKUP_ROOT"/) fatal_check schema11_restore overlapping_restore_paths ;;
 esac
 case "$BACKUP_ROOT/" in
-    "$RESTORE_PARENT/"*) fatal_check schema8_restore overlapping_restore_paths ;;
+    "$RESTORE_PARENT/"*) fatal_check schema11_restore overlapping_restore_paths ;;
 esac
 RESTORE_TARGET="$RESTORE_PARENT/$RESTORE_NAME"
 if [ -e "$RESTORE_TARGET" ] || [ -L "$RESTORE_TARGET" ]; then
-    fatal_check schema8_restore restore_target_must_not_exist
+    fatal_check schema11_restore restore_target_must_not_exist
 fi
 
 if ! private_inputs_unchanged; then
@@ -1317,13 +1317,13 @@ for runtime_root in "$DATA_SOURCE" "$SOCKET_SOURCE"; do
 done
 
 case "$RESTORE_PARENT/" in
-    "$DATA_SOURCE/"*|"$DATA_SOURCE"/|"$SOCKET_SOURCE/"*|"$SOCKET_SOURCE"/) fatal_check schema8_restore restore_parent_overlaps_runtime_root ;;
+    "$DATA_SOURCE/"*|"$DATA_SOURCE"/|"$SOCKET_SOURCE/"*|"$SOCKET_SOURCE"/) fatal_check schema11_restore restore_parent_overlaps_runtime_root ;;
 esac
 case "$DATA_SOURCE/" in
-    "$RESTORE_PARENT/"*) fatal_check schema8_restore data_root_overlaps_restore_parent ;;
+    "$RESTORE_PARENT/"*) fatal_check schema11_restore data_root_overlaps_restore_parent ;;
 esac
 case "$SOCKET_SOURCE/" in
-    "$RESTORE_PARENT/"*) fatal_check schema8_restore socket_root_overlaps_restore_parent ;;
+    "$RESTORE_PARENT/"*) fatal_check schema11_restore socket_root_overlaps_restore_parent ;;
 esac
 
 if COOKIE_ROOT_SOURCE=$(extract_bind_source worker /run/vdc-cookie-sources 2>/dev/null); then
@@ -1487,7 +1487,7 @@ expected = {
     "typing-extensions": "4.16.0",
     "typing-inspection": "0.4.4",
     "uvicorn": "0.52.4",
-    "video-download-control": "0.10.0",
+    "video-download-control": "0.23.0",
 }
 assert all(version(name) == expected_version for name, expected_version in expected.items())
 for build_only in ("hatchling", "packaging", "pathspec", "pluggy", "trove-classifiers"):
@@ -1496,9 +1496,9 @@ for build_only in ("hatchling", "packaging", "pathspec", "pluggy", "trove-classi
     except PackageNotFoundError:
         continue
     raise AssertionError("build-only dependency leaked into runtime")
-raise SystemExit(0 if SCHEMA_VERSION == 8 and YtDlpAdapter.supports_exact_selector is False else 1)
+raise SystemExit(0 if SCHEMA_VERSION == 11 and YtDlpAdapter.supports_exact_selector is False else 1)
 ' >/dev/null 2>&1; then
-    pass_check image_runtime_contract schema8_exact_runtime_lock_and_no_real_exact_selector
+    pass_check image_runtime_contract schema11_exact_runtime_lock_and_no_real_exact_selector
 else
     fatal_check image_runtime_contract built_runtime_contract_failed
 fi
@@ -1548,9 +1548,9 @@ database.initialize()
 with database.connect() as connection:
     count = connection.execute("SELECT COUNT(*) FROM download_jobs").fetchone()[0]
 ready, _ = database.readiness()
-raise SystemExit(0 if SCHEMA_VERSION == 8 and ready and int(count) == 0 else 1)
+raise SystemExit(0 if SCHEMA_VERSION == 11 and ready and int(count) == 0 else 1)
 ' >/dev/null 2>&1; then
-    pass_check empty_database schema8_empty_database_ready
+    pass_check empty_database schema11_empty_database_ready
 else
     fatal_check empty_database dedicated_database_not_empty
 fi
@@ -1972,11 +1972,11 @@ from video_download_control.database import SCHEMA_VERSION, Database
 
 database = Database(Path("/acceptance-restore/control.sqlite3"))
 ready, _ = database.readiness()
-raise SystemExit(0 if SCHEMA_VERSION == 8 and ready else 1)
+raise SystemExit(0 if SCHEMA_VERSION == 11 and ready else 1)
 ' >/dev/null 2>&1; then
-    pass_check schema8_restore independent_restore_ready_and_retained
+    pass_check schema11_restore independent_restore_ready_and_retained
 else
-    fatal_check schema8_restore restore_or_readiness_failed
+    fatal_check schema11_restore restore_or_readiness_failed
 fi
 
 if ! compose_local stop -t 30 worker relay egress-proxy >/dev/null 2>&1; then

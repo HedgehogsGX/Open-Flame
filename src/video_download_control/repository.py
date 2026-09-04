@@ -5,6 +5,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from .credential_defaults import (
+    CredentialDefaults,
+    CredentialMode,
+    resolve_default_profile_locked,
+    revalidate_credential_defaults,
+    validate_credential_mode,
+)
 from .database import Database
 from .domain import BatchStatus, InputStatus, JobStatus, Platform, SourceType
 from .normalization import NormalizedURL
@@ -46,9 +53,13 @@ class BatchRepository:
         inputs: list[dict[str, Any]],
         route_policy_version: str,
         enable_x_graph_v2: bool = False,
+        credential_mode: CredentialMode = "anonymous",
+        credential_defaults: CredentialDefaults | None = None,
     ) -> dict[str, Any]:
+        validate_credential_mode(credential_mode)
         batch_id = new_id()
-        now = utc_now(self.clock())
+        moment = self.clock()
+        now = utc_now(moment)
         queued_count = sum(item["status"] == InputStatus.QUEUED for item in inputs)
         failed_count = sum(item["status"] == InputStatus.FAILED for item in inputs)
         duplicate_count = sum(item["status"] == InputStatus.DUPLICATE for item in inputs)
@@ -57,6 +68,9 @@ class BatchRepository:
         final_duplicate_count = duplicate_count
 
         with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if credential_mode == "use_default":
+                revalidate_credential_defaults(credential_defaults)
             connection.execute(
                 """
                 INSERT INTO batches(
@@ -201,13 +215,23 @@ class BatchRepository:
                     final_duplicate_count += 1
                     continue
 
+                profile_id = (
+                    resolve_default_profile_locked(
+                        connection,
+                        defaults=credential_defaults,
+                        platform=normalized.platform,
+                        now=moment,
+                    )
+                    if credential_mode == "use_default"
+                    else None
+                )
                 connection.execute(
                     """
                     INSERT INTO download_jobs(
                         id, batch_id, input_record_id, source_item_id,
                         job_kind, status, progress, route_policy_version,
-                        available_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                        credential_profile_id, available_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_id(),
@@ -217,6 +241,7 @@ class BatchRepository:
                         job_kind,
                         JobStatus.QUEUED,
                         route_policy_version,
+                        profile_id,
                         now,
                         now,
                         now,
@@ -243,6 +268,8 @@ class BatchRepository:
                     batch_id,
                 ),
             )
+            if credential_mode == "use_default":
+                revalidate_credential_defaults(credential_defaults)
 
         result = self.get_batch(batch_id)
         if result is None:
@@ -307,11 +334,12 @@ class BatchRepository:
     def list_ready_assets_for_batch(
         self, batch_id: str
     ) -> list[dict[str, Any]] | None:
-        """Return only ready original assets linked to one existing batch.
+        """Return ready originals owned by this batch or its duplicate inputs.
 
         Artifact paths deliberately stay inside the repository boundary.  The
         public API exposes a stable download route instead of a filesystem
-        location.
+        location. Duplicate references reuse the original input's Job, never a
+        later Job that happens to have the same source identity.
         """
 
         with self.database.connect() as connection:
@@ -322,6 +350,20 @@ class BatchRepository:
                 return None
             rows = connection.execute(
                 """
+                WITH RECURSIVE asset_inputs(id) AS (
+                    SELECT id FROM input_records WHERE batch_id = ?
+                    UNION
+                    SELECT original.id
+                    FROM asset_inputs AS reachable
+                    JOIN input_records AS duplicate
+                      ON duplicate.id = reachable.id
+                    JOIN input_records AS original
+                      ON original.id = duplicate.duplicate_of_input_record_id
+                     AND original.platform = duplicate.platform
+                     AND original.source_type = duplicate.source_type
+                     AND original.source_id = duplicate.source_id
+                    WHERE duplicate.status = 'duplicate'
+                )
                 SELECT
                     asset.id AS asset_id,
                     job.id AS job_id,
@@ -339,7 +381,7 @@ class BatchRepository:
                   ON link.job_id = job.id AND link.role = 'original'
                 JOIN media_assets AS asset
                   ON asset.id = link.asset_id AND asset.status = 'ready'
-                WHERE job.batch_id = ?
+                WHERE job.input_record_id IN (SELECT id FROM asset_inputs)
                   AND job.status = 'ready'
                   AND asset.size_bytes IS NOT NULL
                   AND asset.sha256 IS NOT NULL
@@ -360,7 +402,51 @@ class BatchRepository:
                 """,
                 (batch_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+            records = [{**dict(row), "artifacts": []} for row in rows]
+            if records:
+                placeholders = ", ".join("?" for _ in records)
+                auxiliary_rows = connection.execute(
+                    f"""
+                    SELECT
+                        auxiliary.id AS artifact_id,
+                        auxiliary.asset_id,
+                        auxiliary.kind,
+                        auxiliary.mime_type,
+                        auxiliary.sha256,
+                        caption.language
+                    FROM artifacts AS auxiliary
+                    LEFT JOIN captions AS caption
+                      ON caption.artifact_id = auxiliary.id
+                    WHERE auxiliary.asset_id IN ({placeholders})
+                      AND auxiliary.kind IN ('thumbnail', 'caption')
+                      AND EXISTS (
+                          SELECT 1
+                          FROM artifacts AS original
+                          WHERE original.id = auxiliary.parent_artifact_id
+                            AND original.asset_id = auxiliary.asset_id
+                            AND original.kind = 'original'
+                      )
+                      AND (
+                          auxiliary.kind = 'thumbnail'
+                          OR caption.status = 'ready'
+                      )
+                    ORDER BY
+                        auxiliary.asset_id,
+                        CASE auxiliary.kind
+                            WHEN 'thumbnail' THEN 0
+                            ELSE 1
+                        END,
+                        auxiliary.path,
+                        auxiliary.id
+                    """,
+                    tuple(record["asset_id"] for record in records),
+                ).fetchall()
+                by_asset = {
+                    record["asset_id"]: record["artifacts"] for record in records
+                }
+                for row in auxiliary_rows:
+                    by_asset[row["asset_id"]].append(dict(row))
+        return records
 
     def get_ready_original_asset(self, asset_id: str) -> dict[str, Any] | None:
         """Resolve one DB-registered original for the read-only download API."""
@@ -400,6 +486,70 @@ class BatchRepository:
                   )
                 """,
                 (asset_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def get_ready_auxiliary_artifact(
+        self, artifact_id: str
+    ) -> dict[str, Any] | None:
+        """Resolve one registered sidecar owned by a ready asset and job."""
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    auxiliary.id AS artifact_id,
+                    auxiliary.asset_id,
+                    auxiliary.kind,
+                    auxiliary.path AS artifact_path,
+                    auxiliary.mime_type,
+                    auxiliary.sha256,
+                    caption.language
+                FROM artifacts AS auxiliary
+                JOIN media_assets AS asset
+                  ON asset.id = auxiliary.asset_id
+                LEFT JOIN captions AS caption
+                  ON caption.artifact_id = auxiliary.id
+                WHERE auxiliary.id = ?
+                  AND auxiliary.kind IN ('thumbnail', 'caption')
+                  AND asset.status = 'ready'
+                  AND asset.sha256 IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM artifacts AS original
+                      WHERE original.id = auxiliary.parent_artifact_id
+                        AND original.asset_id = auxiliary.asset_id
+                        AND original.kind = 'original'
+                        AND original.sha256 = asset.sha256
+                  )
+                  AND (
+                      SELECT COUNT(*)
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                  ) = 1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                        AND original.sha256 = asset.sha256
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM job_assets AS ready_link
+                      JOIN download_jobs AS ready_job
+                        ON ready_job.id = ready_link.job_id
+                      WHERE ready_link.asset_id = asset.id
+                        AND ready_link.role = 'original'
+                        AND ready_job.status = 'ready'
+                  )
+                  AND (
+                      auxiliary.kind = 'thumbnail'
+                      OR caption.status = 'ready'
+                  )
+                """,
+                (artifact_id,),
             ).fetchone()
         return dict(row) if row is not None else None
 

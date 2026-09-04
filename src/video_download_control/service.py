@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .domain import ErrorCode, InputStatus, SourceType
+from .credential_defaults import CredentialDefaults, CredentialMode, validate_credential_mode
 from .normalization import (
     NormalizedURL,
     URLNormalizationError,
@@ -39,6 +40,7 @@ class BatchService:
     short_link_resolver: ShortLinkResolver | None = None
     short_link_batch_timeout_seconds: float = 15.0
     monotonic: Callable[[], float] = field(default=time.monotonic, repr=False)
+    credential_defaults: CredentialDefaults | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         timeout = self.short_link_batch_timeout_seconds
@@ -57,7 +59,9 @@ class BatchService:
         *,
         name: str | None,
         raw_inputs: list[str],
+        credential_mode: CredentialMode = "use_default",
     ) -> dict[str, Any]:
+        validate_credential_mode(credential_mode)
         if not raw_inputs:
             raise BatchValidationError("至少需要一条输入")
 
@@ -228,6 +232,8 @@ class BatchService:
             inputs=prepared,
             route_policy_version=self.route_policy_version,
             enable_x_graph_v2=self.x_graph_v2_enabled,
+            credential_mode=credential_mode,
+            credential_defaults=self.credential_defaults,
         )
 
     def get_batch(self, batch_id: str) -> dict[str, Any] | None:
@@ -243,3 +249,8 @@ class BatchService:
 
     def get_ready_original_asset(self, asset_id: str) -> dict[str, Any] | None:
         return self.repository.get_ready_original_asset(asset_id)
+
+    def get_ready_auxiliary_artifact(
+        self, artifact_id: str
+    ) -> dict[str, Any] | None:
+        return self.repository.get_ready_auxiliary_artifact(artifact_id)

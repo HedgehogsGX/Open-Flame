@@ -1,19 +1,36 @@
-# Open-Flame / Video Download Control v0.10.0 Runbook
+# Open-Flame / Video Download Control v0.23.0 Runbook
 
-> 状态：Iteration 0.10.0 / v0.10.0，数据库 Schema 为 8。项目自有源码、文档和脚本采用 Apache-2.0；第三方二进制与容器发布门禁保持不变。本轮加入六平台显式能力矩阵和 Worker route filtering。历史 YouTube/X 双样本与新增 Instagram 单样本已完成真实 Windows 端到端实测；Bilibili 真实尝试遇 HTTP 412，Douyin 无 Cookie 尝试正确归类为 `authentication_required`，TikTok 未实跑。单个 Instagram 样本不是 Stage 0，所有平台仍不足以标记为 `verified`；`VDC_ENABLE_X_GRAPH_V2` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 状态：Iteration 0.23.0 / v0.23.0，数据库 Schema 11。新增源码首次安装/修复与安装故障诊断，固定 FFmpeg 工具改用可获取的官方月末构建。既有下载、成品、短链、凭证、并发、进度与日志保留。Windows 仍为 direct/non-isolated；源码安装验证不等于免 Python EXE、平台完整验收或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+
+本轮记录：[源码安装验收](../validation/iteration-0.23.0-source-setup-evidence.md)。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。历史平台实测见 [0.21.0](../validation/iteration-0.21.0-platform-startup-evidence.md)。重复批次不创建新下载，也不改变原任务的凭证。
+
+### 启动失败时
+
+CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/diagnostics/runtime-launch-diagnostics.jsonl`（256 KiB、3 份备份）。`invalid_arguments`、端口/工具/配置错误和依赖错误均提供固定码与处理建议。`diagnostic_status=saved/unavailable` 表示本次诊断是否写入；`log_status=not_started` 只表示业务运行日志尚未启动，两者不要混淆。未知故障仍为 `unknown`，可能发生在启动后，应同时查看业务运行 JSONL。
+
+缺少 Python、缺少项目启动模块、诊断目录不可用或持续锁占用时不能保证保存，入口会明确提示未保存。失败窗口会保留；成功后按 Ctrl+C 正常停止。源码入口不依赖 Codex，但仍需已安装 `.venv` 和工具包，不是独立 EXE。
 
 本文只覆盖当前仓库真实存在的能力。项目概览见 [README](../README.md)，迭代与剩余缺口见 [HANDOFF](../HANDOFF.md)，Stage 0 证据规则见 [validation/README](../validation/README.md)。
 
 ## 1. 当前运行边界
 
 - 控制面无认证，启动安全检查只允许 `127.0.0.1`、`::1` 或 `localhost`。不得直接监听 LAN / WAN 地址。
-- 普通 `video-download-worker` 仍只有 `--offline-fake` QA 模式。Windows x64 另有 `video-download-local-worker` 本机直连入口；它要求 `VDC_ENABLE_LOCAL_REAL_WORKER` 精确为 `1`、CLI 同时传入 `--allow-direct-network`、现有控制数据库、固定工具链、可写结构化日志与同一数据根单实例锁。`video-download-candidate-worker` 仍是另一条 Linux 隔离候选路径，若缺 feature gate、loopback-only namespace、UDS relay、绝对工具路径或精确版本会在 claim 前失败。
+- 普通 `video-download-worker` 仍只有 `--offline-fake` QA 模式。Windows 普通使用首选 `video-download-local-app`；它在内部受控设置本机 Worker gate，并要求 CLI 明示 `--allow-direct-network`。高级手动入口 `video-download-local-worker` 仍要求 `VDC_ENABLE_LOCAL_REAL_WORKER=1`、同一数据库和独立终端。`video-download-candidate-worker` 是另一条 Linux 隔离候选路径，若缺 feature gate、loopback-only namespace、UDS relay、绝对工具路径或精确版本会在 claim 前失败。
 - [`deployment/`](../deployment/README.md) 含 Dockerfile/Compose、可选 Cookie override 与 acceptance runner，但默认镜像、feature gate、工具版本和出站策略都是不可运行占位值。
 - 2026-09-03 在当前 Windows 开发机的项目私有 `runtime-tools/windows-x64` 接入 yt-dlp `2026.08.19` 与 FFmpeg/ffprobe `n9.0.1-6-g9d4ca21220-20260820`；它们不进入系统 `PATH`。逐文件大小/SHA-256、版本、FFmpeg configuration 和 synthetic 音视频 probe 已通过。Docker/可用 WSL Linux runtime 与容器部署证据仍不存在。
 - Iteration 0.8.1 的直接工具样本证据继续保留在 [Iteration 0.8.1 live-platform evidence](../validation/iteration-0.8.1-live-platform-evidence.md)。v0.9.0 又让同两个精确授权样本经过共享控制数据库的真实 Worker、AssetStore、`source.json`/`manifest.json` 与成品访问 API 完成端到端闭环；脱敏汇总见 [Iteration 0.9.0 local Worker evidence](../validation/iteration-0.9.0-local-worker-e2e-evidence.md)，其原始文件/日志仍在 gitignored `validation/local/`。v0.10.0 在全新 data root 对一条 NASA 官方公开 Instagram Reel 完成同级 Windows direct/no-cookie/Node `1/1 ready` 闭环，公开汇总见 [Iteration 0.10.0 Instagram live evidence](../validation/iteration-0.10.0-instagram-live-evidence.md)；本轮临时 data root 已在取证后删除。Compose 与 Linux runner 仍只有 YAML、静态契约、shell syntax 和 Windows 只读 preflight 证据。
+- Iteration 0.11.0 的 Stage 0 CSV v2、Schema 8→9 边界和 Bilibili 脱敏诊断见 [Schema 9 / Bilibili 412 engineering evidence](../validation/iteration-0.11.0-schema9-bilibili-evidence.md)。raw probe `2/2` 成功，产品同款 fresh attempt `4/6` 成功、`2/6` 在 probe 阶段收到 HTTP 412；这是间歇现象的记录，不是平台认证。
+- Iteration 0.12.0 的辅助产物下载、TikTok 短链安全门禁与 MVP 路由离线 E2E 见 [artifact / TikTok engineering evidence](../validation/iteration-0.12.0-artifact-tiktok-evidence.md)。该记录没有真实媒体请求、Cookie、运行 UUID、绝对路径或媒体指纹。
+- Iteration 0.13.0 的 Schema 10 capability governance 见 [capability governance evidence](../validation/iteration-0.13.0-capability-governance-evidence.md)。静态实现、聚合 evidence 与人工 decision 被明确分离；仓库不附带真实样本或批准记录。
+- Iteration 0.14.0 的 Windows 本机 Worker Cookie 接入、非领取式预检与 synthetic 端到端结果见 [local Cookie evidence](../validation/iteration-0.14.0-local-cookie-evidence.md)。该记录不证明真实登录态或平台兼容性。
+- Iteration 0.15.0 的 Windows 一体化入口、握手、单实例、Ctrl+C、异常子进程回收、端口释放和日志关联见 [local application evidence](../validation/iteration-0.15.0-local-app-evidence.md)。该记录验证本机软件生命周期，不新增任何平台级下载结论。
+- Iteration 0.17.0 的实时阶段估算、异常来源边界、API/DOM/隔离浏览器与发布门禁记录见 [real progress engineering evidence](../validation/iteration-0.17.0-real-progress-evidence.md)。该记录不是平台级、目标 Linux/Docker 或第三方工具包再分发证据。
+- Iteration 0.18.0 的当时入口并发、连续补位、清理排除与中断回归见 [concurrent Worker engineering evidence](../validation/iteration-0.18.0-concurrent-worker-evidence.md)。默认两个执行槽；SQLite 继续限制总活动任务 2、单平台 1。槽位在最终清理返回后才释放，运行期间的补位不执行回收。独立 Worker 的 Ctrl+C 中断会关闭所拥有的子进程；`worker_lost` 按现有策略为终止失败，可在 Web 显式重试，不声称自动重试。local-app 的停止仍由 supervisor 先关闭 DB gate，再等待并按原有期限终止其拥有的进程树。
+- Iteration 0.19.0 的 Windows 受控直连短链、run-scoped 默认凭证及其 API/导入/重试回归见 [short-link / Cookie defaults engineering evidence](../validation/iteration-0.19.0-short-links-cookie-defaults-evidence.md)。本轮没有真实平台请求或登录态验收；本地 `available` 不是平台授权证明。
+- Iteration 0.16.0 的 Schema 11 claim fencing、停止/claim 事务顺序、lease recovery 与显式 flat retry/cooldown/manual reset 记录见 [claim/retry engineering evidence](../validation/iteration-0.16.0-claim-retry-evidence.md)，现为 point-in-time 历史证据。
 - Schema 8 graph-v2 已实现 parent `discover`、不可变 discovery snapshot、逐附件 child `download`、active-snapshot 聚合、`partial_success`、input cancel、terminal-only rediscover 与 generation-local retry。旧 flat-v1 Job/Asset/manifest 不原地改写，仍可读。
 - graph-v2 的 exact-selector 证据只来自测试内的离线 `ScriptedGraphFakeAdapter`。Windows 本机 Worker 在领取任务的同一 SQL 事务中跳过 `discover` 与 `x_attachment`，让这些任务保持 queued 并继续寻找可处理的 flat-v1 `download`；这不是 graph 支持。candidate real Worker 同样不能据此运行真实 X graph。
-- ready 批次可通过 `GET /api/v1/batches/{batch_id}/assets` 获得原件元数据与相对下载 URL；`GET /api/v1/assets/{asset_id}/download` 只提供数据库登记、仍位于 data root 内且是单链接普通文件的 original。前端会在批次 ready 后渲染这些链接，不使用批次名或平台标题拼接下载文件名。
+- 任意现存批次可通过 `GET /api/v1/batches/{batch_id}/assets` 获得已完成原件的元数据与相对下载 URL，包括沿实际重复输入引用找到的原 owner 成品；空列表不表示其他任务已经结束。`GET /api/v1/assets/{asset_id}/download` 仍只提供数据库登记且重验通过的 original。前端不再等待整个批次 ready，并提供“刷新成品”；不会按同链接的后来任务替换原 owner，也不使用批次名或平台标题拼接下载文件名。
 - 控制面与 Worker 具有本地、有界、轮转、字段白名单的 JSONL 排障日志；`/health` 在队列未暂停时报告 `worker=external_status_unknown`，明确表示控制面不知道外部 Worker 进程状态，而不是心跳、在线或已启动证明。
 
 代码已把 Linux Worker network namespace、只读 digest 镜像、受控 proxy 私有 Unix socket、loopback relay、精确版本、资源限制、Cookie boundary 和短链可信 transport 组装成 fail-closed candidate；v0.9.0 可显式提供唯一受校验的 Node/Deno/Bun/QuickJS 路径且保持 remote components 禁用，但目标镜像尚未随附或验收 JS runtime。Windows 本机直连闭环不满足这条隔离 contract；没有 Docker/Linux 实跑、Stage 0 host allowlist、外部认证和生产规模恢复证据时，不得把 Linux candidate 改称可部署版本。
@@ -52,8 +69,8 @@ uv run video-download-control
 
 1. 创建 `VDC_DATA_ROOT` 与数据库父目录；
 2. 将 SQLite journal mode 设为 WAL；
-3. 依次应用 forward-only migration；从 Schema 7 到 Schema 8 时，在独立的 fail-closed `BEGIN IMMEDIATE` 事务内重建关联表、迁移 legacy relation，并完成 foreign-key 检查后才写入 migration marker；
-4. 验证 Schema 8 必要表、列、索引、不可变 discovery trigger、foreign key 与 `queue_control` singleton。
+3. 依次应用 forward-only migration；Schema 7→8 重建 graph 关联结构，Schema 8→9 为旧能力表加入 `job_kind`，Schema 9→10 将该表只读封存并建立 capability ledger，Schema 10→11 新增唯一的 `worker_claim_gate` 行；每步都在独立、fail-closed 的 `BEGIN IMMEDIATE` 写事务内完成；
+4. 验证精确 1–11 migration history、Schema 11 表/view 类型、列/索引/trigger/FK、graph 语义、Schema 9 archive、evidence identity/digest/policy/static-route、decision revision chain/current view，以及 `queue_control` / `worker_claim_gate` singleton。
 
 若数据库 schema 高于当前程序支持版本，启动会拒绝继续，不能强行降级。
 
@@ -82,13 +99,74 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/operations/tools
 
 只有 `state=ready`、`detail_code=ok`、`offline_smoke_passed=true` 才表示本机工具闭环完成。`isolated_worker_ready`、`platform_download_verified`、`network_download_enabled` 必须继续为 `false`；Windows 上的 `local_direct_worker_available=true` 只说明显式本机入口存在，不说明 gate 已开启、Worker 正在运行或任一平台整体已验证。不要把本机直连 Worker 或 loopback proxy 当成 Linux network guard 的替代证据。
 
-### 2.2 JavaScript runtime 与历史直接工具样本
+### 2.2 Windows 一体化本机应用（推荐）
+
+开发树已存在并通过校验的工具包可显式传入；普通安装也可把工具放在默认 app root 下的 `runtime-tools\windows-x64`：
+
+```powershell
+$ToolRoot = (Resolve-Path -LiteralPath ".\runtime-tools\windows-x64").Path
+uv run video-download-local-app `
+  --tool-root $ToolRoot `
+  --allow-direct-network
+```
+
+默认 app root 为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，固定数据布局为 `data\control.sqlite3`、`data\assets`、`data\temporary` 与 `data\logs`；不会读取 `VDC_DATA_ROOT`、`VDC_DATABASE_PATH`、`VDC_TOOL_ROOT` 或 `VDC_ENABLE_LOCAL_REAL_WORKER` 来拼出第二套隐式配置。成功时 stdout 只输出 `{"status":"ready","url":"http://127.0.0.1:8000/"}`，随后 Windows 才会打开浏览器。使用 `--no-open-browser` 可只保持服务；使用 `Ctrl+C` 会先停 Worker、再停控制面并释放端口。
+
+部署或修改配置后先做非领取式检查：
+
+```powershell
+uv run video-download-local-app `
+  --tool-root $ToolRoot `
+  --allow-direct-network `
+  --check
+```
+
+成功 stdout 为 `{"status":"checked"}`，然后两个子进程和端口全部释放。它会验证 Windows host、绝对普通路径、工具链、日志、Schema 11 数据库、build identity 和可选 Cookie config/source，并 prepare 一个保持关闭的本次运行 claim gate，但不会 activate、打开浏览器、领取 Job、创建 Attempt/Asset、自动登记默认凭证 profile 或发布文件。此检查不证明真实平台登录或下载成功。端口已占用时在创建 app 布局或子进程前失败；同一 app root 的 `.local-app.lock` 阻止第二个 supervisor。不要把 HTTP 200 单独当作本次子进程身份：supervisor 还会核对严格私有握手、Schema、product identity 与 capability snapshot。
+
+三类日志位于 app root 的 `data\logs`：`runtime-local-app.jsonl`、`runtime-control.jsonl`、`runtime-local-worker-*.jsonl`。同一次启动共享一个随机 `run_id`；排障先按该值关联 `local_app.*`、`control.*`、`worker.preflight_*`、`worker.*` 和有界 subprocess 事件。CLI 顶层错误固定为无路径/参数/异常原文的 JSON。浏览器打开失败只写 warning，不会关闭已就绪服务。
+
+`--allow-direct-network` 同时允许媒体下载与本机受控短链展开；第 7.6 节说明与 POSIX UDS 路径的区别和时限。页面可选择使用配置默认或匿名，该选择用于新建、导入和显式重试；短链展开本身不附带 Cookie。
+
+如需前端新任务使用 Cookie 默认，建立仓库外、只读、单链接普通 v2 JSON，并只把配置文件路径交给 CLI：
+
+```json
+{
+  "schema_version": 2,
+  "cookie_sources": [
+    {
+      "platform": "youtube",
+      "credential_ref": "youtube-primary-v1",
+      "path": "C:\\private\\vdc\\youtube.cookies.txt"
+    }
+  ],
+  "default_cookie_platforms": ["youtube"]
+}
+```
+
+```powershell
+$CookieConfig = (Resolve-Path -LiteralPath "C:\private\vdc\cookie-sources.json").Path
+uv run video-download-local-app `
+  --tool-root $ToolRoot `
+  --cookie-config $CookieConfig `
+  --allow-direct-network `
+  --check
+```
+
+v2 顶层精确字段为 `schema_version`、`cookie_sources`、`default_cookie_platforms`；source 每项只允许 `platform`、`credential_ref`、`path`，每个平台最多一项。默认平台列表只能引用已有 source 映射，不得重复，空列表表示不启用默认。旧 v1 顶层仍只有 `schema_version` 与 `cookie_sources`，保持 source-only，不会因为已配置 source 而自动绑定新任务。
+
+上述 `--check` 不登记 profile。检查后去掉 `--check` 正常启动，控制面才在同一数据库事务中登记缺失 profile，或复用同平台、同 ref 且未禁用/过期的唯一 profile；禁用、过期或有歧义的既有记录会拒绝启动，不能靠默认配置复活或绕过。映射是本次 `run_id` 的不可变配置，不增加持久化全局默认；更改配置/source 后应正常停机并重新启动。v1 及高级手工 Worker 仍可使用第 7.2 节的管理员登记/分配流程。
+
+`POST /api/v1/batches` JSON 的 `credential_mode`、`POST /api/v1/batches/import` query 的同名参数省略均为 `use_default`；`anonymous` 明确不为新任务绑定凭证。未配置的平台仍匿名。需要新绑定时，失效配置/profile 以固定 409 拒绝整个批次，凭证和 Job 在同一写事务提交，常驻 Worker 不会抢先领取未完成绑定的 Job。`POST /api/v1/jobs/{job_id}/retry` 无请求体保留旧绑定；显式请求体 `{"credential_mode":"use_default"}` 或 `{"credential_mode":"anonymous"}` 与新 `run_generation` 原子提交，不绕过 cooldown/重试范围。网页重试发送当前表单选择。跨批次去重复用已有 live/ready 工作时不改写其凭证或状态，也不表示重新按当前模式下载。
+
+`GET /api/v1/credential-defaults` 只返回已配置的 `platforms` 列表与本地配置/profile `available`，无配置时为 `{"platforms":[],"available":true}`；它不会返回 profile UUID、ref、source 路径或 Cookie，不执行平台登录校验。config/source 在启动、绑定及领取路径重验，并须位于 app/tool root 之外。配置路径本身仍会出现在本机 argv；内容、ref 与 source 路径不会进入公开 API 或普通运行日志。Windows DACL 私有性尚未由该检查证明。
+
+### 2.3 JavaScript runtime 与历史直接工具样本
 
 `video-download-candidate-worker` 与 `video-download-local-worker` 都可选接受 `--js-runtime NAME:ABSOLUTE_EXECUTABLE`，其中 NAME 只能是 `node`、`deno`、`bun` 或 `quickjs`。未设置时 yt-dlp 显式清空所有 JS runtime；设置时先清空默认项再只加入这个绝对普通文件，并继续使用 `--no-remote-components`。probe/download 另固定 `--encoding utf-8`，避免 Windows 本机代码页影响错误分类或排障输出。
 
 本机 A/B 使用 Node.js `v24.16.0`：未配置 runtime 时 YouTube 样本虽成功但产生缺失 runtime 警告；显式 Node 后同一 probe exit `0`、stderr 为 0 bytes。真实下载结果与 X 无声音轨样本的验证详情见 [Iteration 0.8.1 live-platform evidence](../validation/iteration-0.8.1-live-platform-evidence.md)。Node 当前不是 `runtime-tools` 锁的一部分，不得把本机路径直接复制为目标 Linux 配置。
 
-### 2.3 Windows 本机直连 Worker
+### 2.4 Windows 本机直连 Worker（高级手动入口）
 
 先在终端 A 用目标数据根启动控制面，让它创建并迁移控制数据库：
 
@@ -124,6 +202,27 @@ uv run video-download-local-worker `
 
 两个条件缺一不可：环境变量必须精确为 `1`，且当前进程必须传 `--allow-direct-network`；启动时和每次 claim 前都会重新检查。该 Worker 只支持 Windows，直接使用宿主网络，不是隔离模式；它会验证共享数据库 readiness、固定工具链/ffprobe、日志首写与单实例锁后才领取任务。正常停止两个进程都使用 `Ctrl+C`。
 
+需要 Cookie 的平台先按 7.2 节登记/分配 profile，再准备仓库外、非空、只读的 Netscape Cookie 文件。ref 必须和该平台 profile 的 `secret_ref` 一致。先停止同一 data root 的常驻 Worker，再运行预检：
+
+```powershell
+$CookieFile = (Resolve-Path -LiteralPath "C:\private\vdc\douyin.cookies.txt").Path
+attrib +R "$CookieFile"
+$CookieSource = "douyin:douyin-primary-v1=$CookieFile"
+
+uv run video-download-local-worker `
+  --data-root $DataRoot `
+  --database-path $Database `
+  --tool-root $ToolRoot `
+  --js-runtime "node:$Node" `
+  --cookie-source $CookieSource `
+  --allow-direct-network `
+  --check
+```
+
+只有 stdout 返回 `{"cookie_platforms":["douyin"],"status":"ready"}` 且 `logs/` 中出现 `worker.preflight_started`、`toolchain.inspected`、`worker.preflight_succeeded`，才表示数据库、工具链和已配置 source 的本地预检通过。`--check` 不领取 Job，不创建 Attempt/Asset/commit intent，也不复制 Cookie。它不会检查 queued Job 是否都已分配匹配 ref，也不能证明真实 Cookie 尚未过期。正式常驻命令必须加入同一个 `--cookie-source $CookieSource`。
+
+本机 Worker 每个平台最多接受一个 source；不同平台不得指向同一物理文件。source 必须位于 data/tool root 之外、不是 link/reparse/hard-link alias、不可写，且大小为 1 到 `--max-cookie-bytes`（默认 8 MiB）。每次 probe/download 会从已打开且身份稳定的 source 复制到当前 Attempt 下的新文件，yt-dlp 不接触原 source 路径，操作结束后副本被清理。合法命令行仍会把 opaque ref 与绝对路径暴露给本机进程列表和 PowerShell history；Windows 路径尚未证明私有 NTFS DACL。只允许在受信任的单用户主机使用，生产凭据需先完成 ACL、secret sidecar 或 per-platform/per-Attempt process isolation。
+
 本机 Worker 固定 `skip_unsupported_graph_jobs=True`：claim SQL 在同一事务中排除 `job_kind=discover` 与 `source_type=x_attachment`，不领取、不失败、不改写这些任务，并可以继续领取队列中后面的 flat-v1 `download`。这只是防止本机 Worker 污染 graph 状态；日常本机运行仍应保持 `VDC_ENABLE_X_GRAPH_V2=0`。
 
 ## 3. 启动、停止与健康检查
@@ -131,10 +230,16 @@ uv run video-download-local-worker `
 启动：
 
 ```powershell
-uv run video-download-control
+uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 ```
 
-正常停止使用当前终端的 `Ctrl+C`。当前没有 Windows Service / systemd unit；若由外部服务管理器托管，应先发出正常终止信号，再设置有限的强制停止超时。
+正常停止使用当前终端的 `Ctrl+C`。单独调试控制面时才运行 `uv run video-download-control`；它不会同时启动 Worker。当前没有 Windows Service / systemd unit；若由外部服务管理器托管，应先发出正常终止信号，再设置有限的强制停止超时。
+
+`video-download-local-app` 的停止顺序是数据库 gate → Worker → control：supervisor 先以 `BEGIN IMMEDIATE` 为本次 `run_id` 提交 `accepting_claims=0` 和 `stop_requested_at`，然后才关闭 Worker command Pipe、等待 Worker，最后关闭控制面 Pipe。Worker 的 `claim_next()` 在自己的 `BEGIN IMMEDIATE` 内、创建 lease/Attempt 之前核对同一 `run_id`、`worker_id` 和 open gate，因此 stop 与 claim 只有一个 SQLite 写事务顺序：先提交的 claim 可作为在途工作完成，先提交的 stop 则保证该 Worker 不会新增 claim。Pipe/EOF 只是停止通知，不是线性化边界。
+
+如果 gate stop 无法提交，supervisor 会把停止标为 forced，并在关闭 advisory Pipe 前终止仅包含本应用子进程的 Windows Job；若 Job API 本身失败，再定点终止仍存活的本应用子进程。此时不要把退出描述为 graceful，也不要立即手工改写 Job/Attempt：先确认子进程已消失，再按下述 lease 恢复规则观察数据库。
+
+已在 stop 之前提交的活动 lease 不会被 gate 撤销。正常 Worker 会继续 heartbeat 并完成该 Attempt；若 Worker 被强制终止，默认 lease 到期后，后续 Worker 的 claim 事务会把旧 running Attempt 标成 `abandoned/worker_lost`，清空旧 lease，并在本 generation 尚未达到 4 次时重新排队，达到上限时终态失败。带 `asset_commit_intent` 的中断发布会先走既有 commit-intent recovery，不能通过删除 Attempt、改 `lease_expires_at` 或清空 intent 来“加速恢复”。
 
 检查：
 
@@ -144,14 +249,18 @@ Invoke-RestMethod http://127.0.0.1:8000/health/live
 Invoke-RestMethod http://127.0.0.1:8000/health/ready
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/operations/tools
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/download-capabilities
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/capability-implementations
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/capability-evidence
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/capability-decisions
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/capability-snapshot
 ```
 
-预期正常状态包括 `status=ok`、`database=ok`、`schema_version=8`。注意：
+预期正常状态包括 `status=ok`、`database=ok`、`schema_version=11`。注意：
 
 - `/health/live` 只证明 HTTP 进程存活。
-- `/health/ready` 在数据库结构异常或持久化队列暂停时返回 503。
+- `/health/ready` 在数据库结构异常或持久化队列暂停时返回 503。HTTP probe 的完整 readiness 最多缓存 5 秒，SQLite schema cookie 在 DDL 后立即失效缓存；完整审计期间 schema 发生变化或最终 cookie 不可读时固定 fail closed。管理员 CLI、备份与恢复继续执行不缓存的完整检查，不能用 probe 缓存代替发布门禁。
 - 队列未暂停时 `worker=external_status_unknown`；队列暂停时为 `worker=paused`。`external_status_unknown` 的含义是控制面没有外部 Worker 心跳/存活协议，绝不能解释为在线、离线、已启动或可下载。
-- `/api/v1/download-capabilities` 返回适配器静态声明的窄范围路由、`candidate`/`disabled`、Cookie/短链模式和可空的证据身份。静态注册表拒绝手工升级为 `verified`；它不是数据库中的 Stage 0 实测证据，也不证明平台当前在线可用。
+- `/api/v1/download-capabilities` 保留为兼容的静态 `candidate` 视图；`capability-implementations`、`capability-evidence`、`capability-decisions` 分别呈现代码实现、精确 product build/downloader/environment 聚合证据与 current 人工决定。`capability-snapshot` 只执行一次 readiness，并在一个 SQLite 读事务中返回 UI 所需三层、当前 build identity、总数/截断标记和决定引用的 evidence；页面仅在首次打开或点击“刷新能力”时读取，不纳入 10 秒运维轮询。history 需按 identity key 查询。Stage 0 报告不写数据库，导入只追加 evidence，approve/revoke 另需本地 CLI 与 revision CAS；任何一层都不证明平台当前在线可用。
 
 机器可读 OpenAPI 位于 `http://127.0.0.1:8000/openapi.json`。`/docs` 与 `/redoc` 默认不存在，防止本地控制面隐式加载第三方 CDN 资源；如需交互式浏览，应在受控开发环境用已审计并固定哈希的本地静态资源另行托管。
 
@@ -198,6 +307,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/platform-circuits
 当前策略：
 
 - `rate_limited` 第一次即打开至少 60 秒冷却；冷却结束只允许一个 half-open probe。连续第 3 次同类失败要求人工 reset。
+- Bilibili 的受限 HTTP/API 412 标记按 `rate_limited` 处理，使用既有 60/120 秒 retry backoff 和 platform cooldown；该窄化规则不会把其他平台的 412 自动改类。不要通过反复 reset、添加未审阅 Cookie/header 或代理来绕过。
 - `extractor_broken` 连续 2 次后打开并要求人工 reset。
 - `authentication_required` 与普通 `network_error` 不会全局熔断整个平台。
 - half-open probe 成功会关闭熔断；Worker 丢失后租约恢复不会让 probe 永久卡住。
@@ -213,7 +323,22 @@ Invoke-RestMethod `
 
 不要为了清空红色状态反复 reset；这会绕过抑制重试风暴的运维意图。
 
-### 4.3 结构化运行日志
+### 4.3 显式 flat retry、cooldown 与 manual reset
+
+只有终态 `failed`、没有 graph parent/target/active discovery 的 flat `download` Job 可显式重试。前端会对这种 Job 显示“重试 … 任务（新一代）”；API 等价操作：
+
+```powershell
+$JobId = "replace-with-terminal-failed-flat-job-id"
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:8000/api/v1/jobs/$JobId/retry"
+```
+
+成功返回 `status=queued` 和递增后的 `run_generation`。该操作在一个 `BEGIN IMMEDIATE` 事务内推进 Input/Job 的 active generation、清空本代终态字段并把 `generation_attempt_count` 归零；累计 `attempt_count` 和所有历史 Attempt 保留。缺失 Job 返回 404；非终态、graph Job、并发重试失败，或相同 source 已有 queued/active/ready 工作时返回 409。不要通过重复提交或直接改库绕过 CAS。
+
+显式 retry **不会**关闭或复位 `platform_circuits`。若平台仍在自动 cooldown，Job 会保持 queued，冷却到期后只允许一个 half-open probe；若 `requires_manual_reset=true`，Job 会继续等待，必须先检查版本、凭证、平台状态、错误码与日志，确认根因已处理后才调用 4.2 节的 reset。reset 只接受确实要求人工复位的 circuit；普通 cooldown 不需要也不允许提前 reset。
+
+### 4.4 结构化运行日志
 
 控制面、离线 Worker、Windows 本机 Worker 与 candidate Worker 默认把各自的 UTF-8 JSONL 写到 `${VDC_DATA_ROOT}/logs/`。active 文件按组件区分；达到 `VDC_RUNTIME_LOG_MAX_BYTES` 后轮转，最多保留 `VDC_RUNTIME_LOG_BACKUP_COUNT` 份历史文件。默认分别为 10 MiB 和 5 份；`VDC_RUNTIME_LOG_LEVEL` 接受 `DEBUG`、`INFO`、`WARNING` 或 `ERROR`。程序不会自动读取 `.env`，变量必须由 shell 或 supervisor 注入。
 
@@ -236,6 +361,12 @@ Invoke-RestMethod `
 4. `degraded` / `error` 时检查 `${VDC_DATA_ROOT}/logs` 容量、目录类型和当前管理员权限。日志恢复不代表队列或平台故障已修复；仍须按 4.1/4.2 的条件恢复或复位。
 
 运行日志是 best-effort、会轮转、可能缺失且可由本机管理员修改，只是排障线索。业务事实仍以 SQLite、`job_attempts`、资产 manifest、备份 manifest 和正式 Stage 0 证据为准。顶层 `logs/` 被业务备份精确排除；如需保留支持材料，应在复核脱敏和访问范围后另行受控复制。日志虽经过字段限制，文件仍应按本机运维数据限制访问。
+
+### 4.5 实时进度的含义与排障
+
+`downloading` 百分比是 Job 级“阶段估算”，不是 yt-dlp 所有 sidecar、视频、音频与 fragment 的精确总字节百分比。固定模板只输出主媒体字段存在位、状态、字节数及受限并行索引；不输出 URL、ID、format ID、文件名或原始工具行。字幕等 auxiliary transfer 被忽略；普通串行主媒体最多按两个槽位保守累计，并行 fragment 按每个索引的最新单调 fraction 求和。下载阶段最多为 adapter `0.98`，首个后处理控制行进入 `postprocessing/0.99`，只有映射、分类和文件 stat 成功后 adapter 才报告 `1.0`。Worker 将该范围映射为持久化的 `0.05–0.80`，随后验证为 `0.85`、最终 ready 为 `1.0`。
+
+未知总大小只产生 heartbeat，不伪造百分比；fragment 的有限浮点 estimate 可以参与 fraction，但不会作为“精确 total bytes”写入 DTO。单个合并流在后处理前可能保守停在下载阶段的一半；多个 stream 的每路 100% 不代表整个 Job 已完成。页面每 2 秒轮询，短暂后处理阶段可能未被每次肉眼捕获；可用 Batch API、SQLite 状态和同一 `job_id` 的阶段日志核对。若百分比不动，依次确认 Job 的 heartbeat/lease、磁盘、平台 circuit、是否为未知总大小，再查第一个稳定 `error_code`；不要通过记录 yt-dlp 原始 stdout/stderr 来排障。
 
 ## 5. 离线 fake Worker QA
 
@@ -266,6 +397,10 @@ Remove-Item Env:VDC_ENABLE_OFFLINE_FAKE_WORKER
 ```
 
 输出是一行一个 JSON 结果，直到 `{"status":"idle"}`。产物是 `.fake` 文件，只能证明 flat-v1 lease、retry、staging、hash、manifest 和数据库提交链路，不证明 URL 可下载，也不经过 FFmpeg/ffprobe。该命令使用的普通 fake adapter 不支持 exact selector；运行这个流程时必须保持 `VDC_ENABLE_X_GRAPH_V2=0`。graph-v2 的 `ScriptedGraphFakeAdapter` 目前只在自动化测试/测试 harness 内组装，没有可供运维调用的真实启用命令。
+
+### 5.1 MVP 路由离线 E2E
+
+Iteration 0.12.0 的自动化 E2E 以隔离临时数据库、`ScriptedFakeAdapter` 和 synthetic bytes 覆盖 YouTube video/Shorts、Bilibili BV/av 默认分 P、经显式 gate 和受信测试 resolver 展开的 Douyin 短链，以及有/无表头 CSV 和 TXT 导入。每条路径检查规范化、队列路由、fake Worker、ready 聚合、资产列表与原件下载。测试不启动 yt-dlp/FFmpeg、不访问外网、不证明链接在平台可下载；Douyin 的 injected resolver 只是测试信任边界。当前实际展开入口及其 Windows/POSIX 差异见第 7.6 节，这段历史证据不替代当前入口验证。
 
 ## 6. API 操作速查
 
@@ -303,7 +438,9 @@ if ($null -ne $FirstAsset) {
 }
 ```
 
-列表只返回该批次已经 `ready` 的 original 元数据、`asset_id`、`job_id`、顺序与 `download_url`，不会暴露本机路径。下载端点只接受规范 UUID，并重新核对数据库登记的 ready original、`assets/{asset_id}/original` 路径约束、data-root containment、普通文件、非 link/单 hard-link 与登记 size；不存在返回 404，登记存在但文件边界失效返回 409。响应文件名只使用 `asset-{uuid}` 和受限扩展名，不使用用户标题。
+列表只返回该批次已经 `ready` 的 original 元数据、`asset_id`、`job_id`、顺序、原件 `download_url`，以及登记的 thumbnail/caption DTO；不会暴露本机路径或用户标题。每个辅助 DTO 含 opaque `artifact_id`、`kind`、MIME、可选 caption language、SHA-256 与 `/api/v1/artifacts/{artifact_id}/download`。
+
+原件下载端点只接受规范 UUID，并重新核对数据库登记的 ready original、`assets/{asset_id}/original` 路径约束、data-root containment、普通文件、非 link/单 hard-link 与登记 size。辅助端点进一步要求 ready asset/job、唯一且 hash 匹配的 parent original、`thumbnails/` 或 `captions/` 精确目录、受限文件名/扩展/MIME、caption language、1 byte 到配置上限的单链接普通文件，并在打开后重验 identity、size 与 SHA-256。不存在或不满足 ready/关系条件返回 404，已登记但文件边界失效返回 409；成功响应使用固定 `asset-{uuid}` / `artifact-{uuid}` 文件名、`Cache-Control: private, no-store` 与 `X-Content-Type-Options: nosniff`，不使用用户标题。
 
 导入 UTF-8 TXT：
 
@@ -349,7 +486,7 @@ Invoke-RestMethod `
 
 `VDC_ENABLE_X_GRAPH_V2=1` 只让新提交的 X 单帖创建 parent `discover` Job，不会给 adapter 增加 exact-selector 能力。当前唯一满足该 contract 的实现是离线 `ScriptedGraphFakeAdapter`；真实 `YtDlpAdapter.supports_exact_selector=False`，普通 offline fake adapter 也不满足。candidate/offline Worker 的 capability check 会对误领的 graph Job fail closed；Windows 本机直连 Worker 采用更窄的 flat policy，在 claim 查询的同一事务内跳过 `discover` 与 `x_attachment`，使它们保持 queued 而不是被误标失败。这两种 containment 都不是运维启用 graph 的方案。
 
-因此当前所有普通开发、Windows 本机直连、candidate deployment 与真实试运行配置都必须保持该变量未设置或等于 `0`。只有隔离、一次性 Schema 8 测试数据库中显式组装 `ScriptedGraphFakeAdapter` 的自动化测试可以覆盖 graph-v2。不得把本机原子跳过、离线 parent/child 成功、fake 生成的资产或 API 状态称为 X 多附件、真实 selector 或 graph 下载能力证据。
+因此当前所有普通开发、Windows 本机直连、candidate deployment 与真实试运行配置都必须保持该变量未设置或等于 `0`。只有隔离、一次性 Schema 11 测试数据库中显式组装 `ScriptedGraphFakeAdapter` 的自动化测试可以覆盖 graph-v2。不得把本机原子跳过、离线 parent/child 成功、fake 生成的资产或 API 状态称为 X 多附件、真实 selector 或 graph 下载能力证据。
 
 ## 7. Proxy、UDS relay 与真实 adapter 边界
 
@@ -362,8 +499,8 @@ Invoke-RestMethod `
 - `YtDlpCommandFactory`：固定 executable / FFmpeg 路径与预期版本，禁用用户配置、插件、远程组件、下载器内部重试及危险自由参数，并强制 loopback proxy 与 attempt-private Cookie 副本。Worker 会把配置的 `max_height` 传入 Adapter；格式选择的所有分支均保持高度约束，不再使用不受限 `/b` 回退。
 - `YtDlpAdapter` 候选：每次操作先校验精确版本，使用有输出/时间/环境边界的 subprocess runner，解析有界 JSON 并只保留白名单元数据；平台明确要求 fresh cookies 时归类为 `authentication_required`；高度策略找不到格式时归类为 `content_unavailable`，不计为 extractor breakage 或触发平台熔断。`supports_exact_selector=False`，不能领取 graph-v2 parent 或附件 child 作为受支持的真实路径。
 - `video-download-candidate-worker`：feature gate 与 builder 双重门禁；数据库初始化前和每次 claim 前运行网络 guard；启动时精确验证 yt-dlp、FFmpeg 与 ffprobe。
-- `video-download-local-worker`：Windows-only `DirectEgress` 路径；`VDC_ENABLE_LOCAL_REAL_WORKER=1` 与 `--allow-direct-network` 双重明示，在日志、共享数据库、工具链与单实例检查完成前不 claim；每次 claim 前重验 gate/acknowledgement，并原子跳过不支持的 graph Job。它是本机功能路径，不是隔离安全组件。
-- `AttemptCookieResolver`：验证 deployment-owned 只读 Cookie source，并在每次 Adapter 操作前复制为 Attempt 私有 `0600` 文件；Job 的 `credential_profile_id` 已在 claim 时校验并解析为不透明 `secret_ref`，再以 `credential_ref` 传到 Adapter。数据库 ID、Cookie 源路径与 Cookie 内容不会穿过 Adapter request 边界。
+- `video-download-local-worker`：Windows-only `DirectEgress` 路径；`VDC_ENABLE_LOCAL_REAL_WORKER=1` 与 `--allow-direct-network` 双重明示，在日志、共享数据库、工具链与单实例检查完成前不 claim；可按平台接入 Cookie source，并用 `--check` 在不 claim 的情况下验证本地配置；每次 claim 前重验 gate/acknowledgement，并原子跳过不支持的 graph Job。它是本机功能路径，不是隔离安全组件。
+- `AttemptCookieResolver`：验证 deployment-owned 只读、非空、有界 Cookie source，拒绝跨平台复用同一打开文件身份，并在每次 Adapter 操作前复制为 Attempt 私有 `0600` 文件；Job 的 `credential_profile_id` 已在 claim 时校验并解析为不透明 `secret_ref`，再以 `credential_ref` 传到 Adapter。数据库 ID、Cookie 源路径与 Cookie 内容不会穿过 Adapter request 边界。POSIX mode 不能替代尚未实现的 Windows DACL 证明。
 - `ControlledShortLinkResolver` + `UnixAttestedShortLinkTransport`：控制面逐跳解析 DNS、阻断非公网地址并签名完整 numeric target；egress 端保留 hostname 做 TLS SNI/证书与 `Host`、连接 numeric IP、复核 peer，且绝不自动跟随 redirect。只有 bounded `Location` 返回，最终 signed URL 不进入业务持久化。
 
 ### 7.2 凭据管理流程（仅限本机管理员 CLI）
@@ -424,7 +561,7 @@ uv run video-download-credentials `
   --profile-id $ProfileId
 ```
 
-Candidate Worker 还必须由部署管理员为每个平台显式提供至多一个 `--cookie-source PLATFORM:OPAQUE_REF=ABSOLUTE_PATH`；当前允许的平台 literal 为 `x`、`youtube`、`bilibili`、`douyin`、`tiktok`、`instagram`。其中 `OPAQUE_REF` 必须与 claim 后解析出的 `secret_ref` 一致；文件必须是部署侧只读、受保护的 Cookie source。引用缺失、平台不符、文件不安全或过期/禁用 profile 都会 fail closed。Credential-free base Compose 不含任何 Cookie 路径；只有显式叠加 `compose.candidate.cookies.yaml` 才提供 Worker-only read-only root/mapping/runner。Host preflight 要求 canonical data/socket roots，拒绝 Cookie path 与 data/socket/repository 双向重叠、任意不安全 root-owned ancestor、named/default ACL、link、错误 owner/mode 和 metadata race。Worker 的启动与运行顶层错误固定脱敏，soft/hard core limit 均为零。**仓库没有任何真实 Cookie source**；完成上述数据库操作不会自动把 Cookie 注入容器。
+Candidate Worker 和 Windows 本机 Worker 都必须由部署管理员为每个平台显式提供至多一个 `--cookie-source PLATFORM:OPAQUE_REF=ABSOLUTE_PATH`；当前允许的平台 literal 为 `x`、`youtube`、`bilibili`、`douyin`、`tiktok`、`instagram`。其中 `OPAQUE_REF` 必须与 claim 后解析出的 `secret_ref` 一致；文件必须是部署侧只读、非空、有界的 Cookie source，且不同平台不能共用同一物理文件。引用缺失、平台不符、文件不安全或过期/禁用 profile 都会 fail closed。Credential-free base Compose 不含任何 Cookie 路径；只有显式叠加 `compose.candidate.cookies.yaml` 才提供 Worker-only read-only root/mapping/runner。Linux host preflight 要求 canonical data/socket roots，拒绝 Cookie path 与 data/socket/repository 双向重叠、任意不安全 root-owned ancestor、named/default ACL、link、错误 owner/mode 和 metadata race。Windows `--check` 验证共享 Schema 11 数据库、工具链与 source 文件身份/大小/只读状态，但不证明 NTFS DACL 私有性或队列 credential coverage。Worker 的启动与运行顶层错误固定脱敏；Linux candidate 的 soft/hard core limit 均为零。**仓库没有任何真实 Cookie source**；完成上述数据库操作不会自动把 Cookie 注入 Worker。
 
 当前 override 只做到 service-level mount isolation：同一个 Worker 能读取挂载 root 内所有已配置平台的 source。因此一旦 downloader/Worker 被攻陷，它可能读取本次任务以外、其他平台的 Cookie source。真实凭据上线前必须补做 credential sidecar、按平台拆 Worker，或按 Attempt 创建仅暴露单一 source 的 mount namespace；attempt-private `0600` 副本本身不能消除整个 source root 的可读性。
 
@@ -436,8 +573,8 @@ Candidate Worker 还必须由部署管理员为每个平台显式提供至多一
 - 经过 Stage 0 验证的完整平台站点/CDN host allowlist；
 - 已为目标 Linux 镜像构建并审计的 yt-dlp/FFmpeg tool bundle；JS runtime 与 `yt-dlp-ejs` 仍明确未加入该镜像；
 - 生产 secret provider、Compose 只读 secret mount、Cookie source 权限、到期验证、轮换和外部秘密吊销演练；当前只有合成/静态边界；
-- 短链真实 DNS、TLS、平台 redirect、supervisor topology、批次总耗时与 DNS resolver 可用性验收；
-- 三个精确本机成功样本之外的平台覆盖；Bilibili HTTP 412、Douyin `authentication_required` 的后续闭环；TikTok 首次真实运行；以及任何真实网络隔离验收。
+- 短链真实 DNS、TLS、平台 redirect、POSIX supervisor topology、批次总耗时与 DNS resolver 可用性验收；Windows 进程内受控直连已接通，但不是网络隔离证据；
+- 三个精确本机成功样本之外的平台覆盖；Bilibili 的间歇 HTTP 412 尚未形成稳定下载或 Stage 0 闭环，Douyin `authentication_required` 仍待用户授权 Cookie 后复验；TikTok 首次真实运行；以及任何真实网络隔离验收。
 
 Proxy 只约束实际经过它的流量；若 Worker 仍有直连 interface、route、宿主机/LAN 路径或其他 proxy，它不能构成隔离证明。因此 Linux candidate 不得手工 import adapter 绕过其 CLI 门禁；Windows 本机下载只使用受支持的 `video-download-local-worker` 明示入口，并必须把结果标为 direct/non-isolated。
 
@@ -491,13 +628,13 @@ uv run video-download-unix-relay \
 - Compose 没有控制面 service，也没有发布端口；FastAPI 继续只在宿主 loopback 运行，避免在无认证时放宽 bind guard。
 - `wheel_builder` 与 `runtime` 的两个 Python `FROM` 都直接写死同一个 `python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2`，没有可覆盖它们的 Python image ARG；tool bundle 仍必须以受审阅的 `name@sha256:...` 提供。Registry 可用性、目标 platform manifest、镜像 provenance 与批准记录仍是发布边界。
 - `pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`；`requirements.build.lock` 固定 build closure，`requirements.runtime.lock` 固定从 `uv.lock` 导出的 runtime closure。两份 lock 都是 exact-version + SHA-256，可能同时列出 upstream wheel 与 sdist hash；实际 `pip download/install --only-binary=:all:` 会拒绝 sdist，不能把 lock 中的 sdist hash 写成执行许可。
-- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.10.0-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
+- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.19.0-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
 
 目标 Linux 必须提供绝对 `/usr/bin/python3` 且该解释器实际为 Python 3.12+；runner 不通过 `PATH` 解析它，Cookie rotation 另须验证绝对 `/usr/bin/mv` 是支持 `-fT` 的 GNU coreutils。可执行清单和默认只读 runner 见 [Linux/Docker acceptance](../validation/linux-docker-acceptance.md)。默认 `--preflight` 不 build、不启动/停止容器、不写数据库；mutation mode 还必须以 effective UID 0 运行，并显式给出 `--execute --authorize I_ACCEPT_TARGET_LINUX_MUTATIONS`。完整执行比产品 contract 更窄：只接受 checked-in、reviewed `run-candidate-worker.sh` wrapper 与其精确的 Worker-only read-only root/mapping binds；直接逐文件 `--cookie-source`、通用 command override、任意非 Worker service 变化都被拒绝。完整合成验收还要求六个不同的 `acceptance-*` ref/source，这不是使用真实 Cookie 的授权。
 
 传给 runner 的 private env 和可选 private Compose override 必须各自为 canonical、single-link、`root:root`、mode `0600`、base-ACL-only regular file；直到 `/` 的 ancestor 必须 root-owned、无 symlink、无 group/world write 且只有 base ACL。Egress policy 必须为 canonical、single-link、`root:10001`、mode `0440`、1–16384-byte、base-ACL-only regular file，并具有同样安全的 root-owned ancestor。Policy 必须与 repository、data/socket/recovery roots、private env/override 双向不重叠。runner 对这些输入记录 device/inode、size、high-resolution mtime/ctime snapshot，并在相关 service 每次 start/restart 前重新验证；Cookie validator 也在执行边界重跑。Runner 同时在 preflight 和 mutation checkpoints 重新读取 `/proc/sys/kernel/core_pattern`；不可读或首字符为 `|` 时 fail closed。必须在启动前通过目标 host 的受控配置停用 pipe collector 或改用审阅过的 non-pipe pattern；`RLIMIT_CORE=(0, 0)` 不能单独证明 host collector 不会接收进程内存。
 
-Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用该冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验本地 ID。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 13 个 distributions 与 `video-download-control==0.10.0`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
+Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用该冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验它。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 13 个 distributions 与 `video-download-control==0.23.0`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
 
 最外层必须由 clean trusted root launcher 以 empty/scrubbed environment 和 absolute trusted path 启动 runner。`#!/bin/bash -p`、脚本内 `unset` 与固定 `PATH` 都只能在 process/interpreter 已启动后生效，不能把 inherited `BASH_FUNC_*`、`LD_PRELOAD` 等 pre-body loader/interpreter 行为变成可信输入，也不能保护从不可信外层环境启动的子 shell。Endpoint 的只读判定遵循官方 precedence：非空 `DOCKER_CONTEXT` 高于 `DOCKER_HOST`，否则读取当前/default context；无论来源都必须解析为 local Unix Linux daemon。Execute 为避免重定向 daemon/build/config，明确拒绝 inherited `DOCKER_CONTEXT`、`DOCKER_HOST`、`DOCKER_CONFIG`、`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY`、`BUILDKIT_HOST`、`BUILDX_BUILDER`、`COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`、`COMPOSE_PROFILES`，此时 default context 仍必须通过同一 local-Unix/Linux 检查。
 
@@ -520,9 +657,13 @@ uv run --frozen pytest -q \
 
 人工审阅 `pyproject.toml`、`requirements.build.in`、两份生成 lock 与 `uv.lock` 的一致性，以及每个版本、wheel/sdist hash 来源、target wheel availability、publisher/provenance 和 license；命令通过不等于这些批准已完成。
 
-### 7.6 短链 egress service 与控制面 gate
+### 7.6 Windows 短链直连与 POSIX egress gate
 
-短链只支持三类需要展开的入口：`t.co`、`b23.tv`、`v.douyin.com`；`youtu.be/{id}` 可直接规范化。默认 `VDC_ENABLE_SHORT_LINK_RESOLUTION=0`，即使配置了路径也不会启用。显式启用必须同时设置绝对、规范化的 `VDC_SHORT_LINK_TRANSPORT_SOCKET` 与 `VDC_SHORT_LINK_ATTESTATION_KEY_FILE`，且只允许 POSIX；Windows 会在 app construction 时固定错误 fail closed。
+短链支持四类需要展开的入口：`t.co`、`b23.tv`、`v.douyin.com`，以及 TikTok `vm.tiktok.com` / `vt.tiktok.com`；`youtu.be/{id}` 可直接规范化。TikTok 每一跳只允许精确 hostname `vm.tiktok.com`、`vt.tiktok.com`、`tiktok.com`、`www.tiktok.com`、`m.tiktok.com`，不会接受任意子域、相似后缀或其他 TikTok host。两条路径都逐跳检查 HTTPS、公开 IP、numeric peer、TLS SNI/证书和 redirect，不注入 Cookie。
+
+Windows 一体化 `video-download-local-app --allow-direct-network` 显式启用进程内受控直连。每个请求创建短生命周期 transport，使用临时 shared key、内存 replay store 与既有 numeric TLS connector；不监听 socket，也没有常驻 event-loop 线程。transport 默认最多 4 个在途请求，容量满时快速拒绝；关闭后拒绝新请求，已经接纳的请求继续受其时限约束。这不是独立 egress 进程、network namespace 或权限隔离；本轮只有离线/模拟网络回归，没有真实 DNS/TLS/平台证明。通用 `video-download-control` 不自动开启此本机路径，`--check` 也不发短链请求。
+
+以下配置与命令仅适用于独立 POSIX UDS 路径。通用控制面默认 `VDC_ENABLE_SHORT_LINK_RESOLUTION=0`，即使配置路径也不会启用；关闭时 Batch 以 `short_link_resolution_required` 终止。显式启用必须同时设置绝对、规范化的 `VDC_SHORT_LINK_TRANSPORT_SOCKET` 与 `VDC_SHORT_LINK_ATTESTATION_KEY_FILE`；这组 UDS 配置在 Windows 上仍 fail closed，不与一体化进程内直连混用。
 
 控制面与 egress 进程必须以同一 effective UID 运行。准备一个 owner 为该 UID、mode `0700` 的 socket parent；socket leaf 由服务创建为 `0600`。Shared key 必须是该 UID 所有、单 hard link、无 group/other permission、32–4096 bytes 的原始随机 bytes；不要添加换行或将 key 放在 argv/env。Replay directory 必须是同 UID `0700` plain directory，其 ancestors 只能由 root/该 UID 所有且不得有非 sticky group/world write。两个进程读同一个 key；不要复制到 data root、日志、backup 或容器 build context。
 
@@ -553,7 +694,9 @@ export VDC_SHORT_LINK_ATTESTATION_KEY_FILE=/etc/vdc-short-link.key
 video-download-control
 ```
 
-协议使用 canonical JSON、domain-separated HMAC-SHA256、fresh 256-bit nonce、短有效期、clock-skew window、request hash/expiry binding 与 crash-durable one-time replay marker。请求方法/header/address 数、request/response frame、header/body、连接数和时限均有 hard cap；普通 audit 和跨边界 error 只有方向化 allowlisted reason，未知值降级为 `transport_failure`。Resolver 默认每链最多 5 跳、16 个 DNS answer、每跳 5 秒、DNS 3 秒、单链总计 15 秒，并对每个 URL 只做一次每跳 DNS。Batch 对所有唯一短链共享 15 秒 aggregate budget；内建 `ControlledShortLinkResolver` 每次都会收到当前剩余 budget，并把自身总时限压到该值，budget 到期后也不再启动新展开。注入自定义 resolver 是 trusted-contract boundary：它必须实际遵守传入的 `timeout_seconds`；同步 Python 调用无法在它无视 contract 时强制抢占，因此不能把恶意/失效的 injected resolver 算入 hard-deadline 保证。
+POSIX 协议使用 canonical JSON、domain-separated HMAC-SHA256、fresh 256-bit nonce、短有效期、clock-skew window、request hash/expiry binding 与 crash-durable one-time replay marker。请求方法/header/address 数、request/response frame、header/body、连接数和时限均有 hard cap；普通 audit 和跨边界 error 只有方向化 allowlisted reason，未知值降级为 `transport_failure`。
+
+两条路径的 Resolver 默认每链最多 5 跳、16 个 DNS answer、每跳 5 秒、DNS 3 秒、单链总计 15 秒，并对每个 URL 只做一次每跳 DNS。Batch 对所有唯一短链共享 15 秒 aggregate budget；内建 `ControlledShortLinkResolver` 每次都会收到当前剩余 budget，并把自身总时限压到该值，budget 到期后也不再启动新展开。短链 transport 的 4 个在途槽与媒体 Worker 的总并发 2 / 单平台 1 是不同限制。注入自定义 resolver 是 trusted-contract boundary：它必须实际遵守传入的 `timeout_seconds`；同步 Python 调用无法在它无视 contract 时强制抢占，因此不能把恶意/失效的 injected resolver 算入 hard-deadline 保证。
 
 DNS 通过最多四个 daemon worker slot 包围 blocking resolver；底层 `getaddrinfo` 不能被 Python 取消，四个调用都卡住后该 resolver 实例会 fail-fast，直到线程返回或进程重启。Replay marker 的文件系统操作也从 event loop 卸载到有界线程/slot，并受响应时限约束，但已经进入 kernel/文件系统的 blocking I/O 不能被 Python 强制取消。Replay directory 必须位于本机可靠文件系统，不得放在可能无限卡住的网络/FUSE share；否则一个卡住的操作会持续占据对应 slot，直到 I/O 返回或进程重启。这些有界降级都不等于 resolver/replay process isolation 或高可用保证。
 
@@ -583,13 +726,13 @@ data/
 
 ## 9. 可执行备份
 
-`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.10.0 版本只接受通过 readiness 的精确 Schema 8 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
+`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.19.0 版本只接受通过 readiness 的精确 Schema 11 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
 
 ### 9.1 一致性边界与停机要求
 
 备份在源数据库上持有 SQLite `BEGIN IMMEDIATE` 写保留，同时执行 SQLite online backup 并复制已发布的受管文件。该边界会阻止并发数据库 writer；每个复制源还必须保持 regular-file identity、size 与 metadata 稳定。备份会 fail closed 于：
 
-- 源数据库 readiness 失败、不是精确 Schema 8，或存在尚未协调的 `asset_commit_intents`；
+- 源数据库 readiness 失败、不是精确 Schema 11、claim gate singleton 或 capability ledger 结构/identity/digest/route/decision chain 不一致，或存在尚未协调的 `asset_commit_intents`；
 - source / target 路径重叠，目标已存在，或任一路径经过 symlink / reparse point；
 - 受管数据含 link、hard link、special file、不稳定文件，或资产数据库、Artifact/Caption、asset manifest 与原件/辅助文件的 size / SHA-256 不一致；
 - 存储、fsync、校验或最终 rename 失败。
@@ -600,7 +743,7 @@ SQLite 主文件及 `-wal`、`-shm`、`-journal` 不会作为普通数据复制�
 - `temporary/`：进行中 Attempt 的下载、临时 Cookie 副本和工具输出；
 - `assets/.staging/`：尚未完成 durable commit-intent 协调的资产。
 
-Schema 8 的 discovery、relation、input/job generation、active snapshot 指针和旧 flat-v1 记录都随 SQLite 一致快照保存；已发布不可变资产另按 manifest 复制。实现的一致性边界允许 CLI 自行拒绝未协调的资产发布，但仍建议在运维维护窗口先停止所有 Worker，再停止控制面：这可避免长时间阻塞 writer，也避免把活动 lease / Job 状态与已排除的临时输出当作干净恢复点。未停机时，备份只承诺上述数据库快照 + 已发布不可变资产边界，不承诺保留进行中的 Attempt 输出。
+Schema 11 的 discovery/graph/generation、Schema 9 capability archive、Schema 10 capability ledger 与 `worker_claim_gate` 都随 SQLite 一致快照保存；已发布不可变资产另按 manifest 复制。备份前应优先正常停止 `video-download-local-app`，让 gate stop 先于 Worker/control 退出；独立 Worker 模式仍须先停 Worker、再停控制面，以避免长期阻塞 writer，并让活动 lease 与已排除临时输出的边界更清晰。恢复出的历史 gate 状态不是启动授权：新 local-app 必须先用自己的新 `run_id` prepare 为关闭状态，完成预检后才能 activate。
 
 ### 9.2 秘密排除边界
 
@@ -626,7 +769,7 @@ uv run video-download-backup create `
   --backup-target $BackupTarget
 ```
 
-成功时 stdout 是单行 JSON，包含 `status=ok`、`operation=create`、`schema_version=8`、`file_count`、`total_bytes`、`manifest_sha256` 与 `backup_root`；失败时退出码为 2，并向 stderr 输出不含源内容的有界错误。
+成功时 stdout 是单行 JSON，包含 `status=ok`、`operation=create`、`schema_version=11`、`file_count`、`total_bytes`、`manifest_sha256` 与 `backup_root`；失败时退出码为 2，并向 stderr 输出不含源内容的有界错误。
 
 备份目录包含：
 
@@ -666,7 +809,7 @@ uv run video-download-backup restore `
 1. 验证 manifest hash sidecar、manifest header、metadata、entry 数量与总字节；
 2. 拒绝 traversal、绝对路径、反斜线、重复/case-fold 冲突、未跟踪或缺失文件，以及 symlink / reparse / hard link / special file；
 3. 对每个输入及恢复副本验证 regular-file identity、size 与 SHA-256；
-4. 对恢复数据库执行 `PRAGMA quick_check`、`PRAGMA foreign_key_check`、精确 Schema 8 与应用 readiness 检查（包括 graph 表、索引、不可变 trigger 与 FK），并拒绝 pending commit intent；
+4. 对恢复数据库执行 `PRAGMA quick_check`、`PRAGMA foreign_key_check`、精确 Schema 11 与应用 readiness 检查（包括 claim gate singleton、graph、Schema 9 archive、evidence/decision 不可变 trigger、identity/digest/route、CAS chain、current view 与 FK），并拒绝 pending commit intent；
 5. 对 graph 数据执行跨表语义审计：canonical discovery hash、ordered relation、parent/child identity、active generation、target、Attempt 代际、ready target-to-asset 映射与 reuse donor 必须一致；失败只返回固定错误，不回显 selector/target；
 6. 核对 `media_assets` 与实际发布目录、Artifact/Caption 语义、每个 asset manifest、original 与 thumbnail/caption 的路径、size 和 SHA-256；
 7. 同步隐藏 staging tree 后一次 rename 发布。任何一步失败都会清理 staging，最终 restore root 保持不存在；backup 与 source 均不被修改。
@@ -685,27 +828,83 @@ uv run video-download-control
 
 ### 10.1 历史本机演练证据与限制
 
-2026-09-03 在当时的 Windows 开发机、Iteration 0.5 / Schema 7 代码上执行 `uv run pytest -q tests/test_backup_restore.py`，记录结果为 **14 passed**。其中主演练以 offline fake Worker 创建 ready asset，把数据库、原件和额外受管文件备份后恢复到不同的临时根目录，再验证 Schema 7 readiness、batch 状态以及恢复原件 SHA-256 与数据库记录一致；同一测试文件也实际调用当时的 `create` / `restore` CLI，并覆盖 payload/manifest 篡改、路径逃逸、link、目标碰撞、Schema 篡改、pending commit intent 与未跟踪文件的拒绝路径。命令、文件哈希和边界记录在 [Iteration 0.5 recovery evidence](../validation/backup-restore-drill-iteration-0.5.md)。不得把这条历史记录改写为当前 v0.10.0 / Schema 8 或 graph-v2 恢复演练。
+2026-09-03 在当时的 Windows 开发机、Iteration 0.5 / Schema 7 代码上执行 `uv run pytest -q tests/test_backup_restore.py`，记录结果为 **14 passed**。其中主演练以 offline fake Worker 创建 ready asset，把数据库、原件和额外受管文件备份后恢复到不同的临时根目录，再验证 Schema 7 readiness、batch 状态以及恢复原件 SHA-256 与数据库记录一致；同一测试文件也实际调用当时的 `create` / `restore` CLI，并覆盖 payload/manifest 篡改、路径逃逸、link、目标碰撞、Schema 篡改、pending commit intent 与未跟踪文件的拒绝路径。命令、文件哈希和边界记录在 [Iteration 0.5 recovery evidence](../validation/backup-restore-drill-iteration-0.5.md)。不得把这条历史记录改写为后续 v0.10.0 / Schema 8、v0.11.0–0.12.0 / Schema 9、v0.13.0–0.15.0 / Schema 10、当前 v0.19.0 / Schema 11 或 graph-v2 恢复演练。
 
 这只是本机小型临时数据的自动化独立根功能证据，不包含生产媒体量、NAS/网络文件系统、跨卷性能、容器 UID/GID、加密/offsite 介质、灾难主机、RTO/RPO 或人工值班流程。生产前仍须用真实容量和实际部署身份完成、记录并定期重复恢复演练；记录至少包括应用 revision、v0.5.0 / Schema 7、备份 ID、文件数/字节、manifest hash、存储介质、开始/完成时间、恢复检查结果、失败与处置。
 
 ### 10.2 Iteration 0.6 / Schema 8 离线 graph 演练
 
-2026-09-03 在同一 Windows 开发机执行当前 `tests/test_backup_restore.py` 与 `tests/test_observability.py`，结果为 **19 passed**；全套为 **615 passed**。主演练使用 `ScriptedGraphFakeAdapter` 创建包含 generation 2 与跨 Input ready-asset reuse 的 graph 数据，备份后恢复到不存在的临时独立根，并逐表核对 discovery、relation、target、active generation、Attempt 与 reuse 字段。篡改用例会同时更新 payload 数据库并重算外层 manifest/hash，验证 active pointer、selector target、expected-media/asset、child identity 与 reuse donor 的跨表不一致仍被固定、不泄露内部 key 的错误拒绝，最终恢复根保持不存在。命令、代码哈希和明确的非 Stage 0 边界见 [Iteration 0.6 offline graph evidence](../validation/iteration-0.6-graph-v2-offline-evidence.md)。
+2026-09-03 在同一 Windows 开发机执行当时的 `tests/test_backup_restore.py` 与 `tests/test_observability.py`，结果为 **19 passed**；当时全套为 **615 passed**。主演练使用 `ScriptedGraphFakeAdapter` 创建包含 generation 2 与跨 Input ready-asset reuse 的 graph 数据，备份后恢复到不存在的临时独立根，并逐表核对 discovery、relation、target、active generation、Attempt 与 reuse 字段。篡改用例会同时更新 payload 数据库并重算外层 manifest/hash，验证 active pointer、selector target、expected-media/asset、child identity 与 reuse donor 的跨表不一致仍被固定、不泄露内部 key 的错误拒绝，最终恢复根保持不存在。命令、代码哈希和明确的非 Stage 0 边界见 [Iteration 0.6 offline graph evidence](../validation/iteration-0.6-graph-v2-offline-evidence.md)。
 
-该记录证明当前代码能处理小型离线 Schema 8 graph 快照，不证明 Docker/Linux 文件权限、真实媒体容量、NAS/跨卷 durability、offsite 介质、RTO/RPO、真实 Cookie 或灾难主机切换。生产验收必须另行记录当前部署 revision、Schema 8 baseline、制品/tool digest、备份 ID、文件数/字节、manifest hash、存储介质、开始/完成时间、恢复检查与失败处置；不得沿用本机临时目录结果。
+该 0.6 记录只证明当时代码能处理小型离线 Schema 8 graph 快照，不证明 Docker/Linux 文件权限、真实媒体容量、NAS/跨卷 durability、offsite 介质、RTO/RPO、真实 Cookie 或灾难主机切换。生产验收必须另行记录对应部署 revision、Schema 8 baseline、制品/tool digest、备份 ID、文件数/字节、manifest hash、存储介质、开始/完成时间、恢复检查与失败处置；不得沿用本机临时目录结果。
 
-## 11. 升级与回滚（Schema 8 forward-only）
+## 11. 升级与回滚（Schema 11 forward-only）
+
+Schema 11 在保留 Schema 10 capability ledger 的基础上增加唯一 `worker_claim_gate`。Schema 10→11 迁移只创建该表和关闭的初始 singleton；它不会把恢复出的旧 supervisor 状态视为启动授权。Schema 10 本身是在 Iteration 0.13.0 将 Schema 9 的可写 `platform_capabilities` 封存为只读 `capability_legacy_schema9`，并建立 evidence/decision ledger 与只读 current-head view。生产升级必须分别演练迁移前与迁移后的恢复点：
+
+1. 记录待迁移应用 revision、Schema、依赖锁与 Worker/tool digest；停止 Worker 和控制面。
+2. 用与原 Schema 8、9 或 10 精确兼容的历史工具创建备份，并用同一版本恢复到独立新根。v0.19.0 的 restore 只接受 Schema 11，不能直接恢复旧备份。
+3. 只在恢复副本上用 v0.19.0 启动迁移；确认 marker 精确为 1–11、`quick_check` / `foreign_key_check` 和 readiness 通过，`worker_claim_gate` 只有 `id=1` 的关闭初始行，并抽查 Schema 9 archive、evidence/decision/current view 及资产状态未漂移。
+4. 检查 `/health`、Batch/Input/Job/asset API，以及三个 capability 分层端点。用 `video-download-local-app --check` 验证 gate 只 prepare、不 activate且无 claim；使用 synthetic 私有 CSV 演练 import、approve、revoke、stale revision 与 history，但不要把 synthetic 决定带入生产库。
+5. 使用 v0.19.0 创建 Schema 11 baseline，并恢复到另一个不存在的独立根；核对 claim gate singleton、archive、evidence、完整 decision chain、current view、资产与 manifest。恢复后再启动 local-app 时，确认新 `run_id` 先 prepare 为关闭状态。
+6. 最后才在维护窗口切换，同时保留迁移前后各自匹配的应用、锁文件和恢复工具。回滚只能整体恢复已经用历史版本实际演练过的旧数据库及匹配资产树。
+
+旧程序不得打开 Schema 11。不得原地删除 migration marker、`worker_claim_gate`、trigger、ledger 表或 view，也不得把旧数据库覆盖到新的资产树。没有经过实际恢复验证的迁移前备份时，只能修复并向前升级，不能声称可安全回滚。
+
+### 11.1 历史 Schema 7→8 记录
+
+以下保留 0.6–0.10 时期的 point-in-time Schema 8 操作边界，不是当前 Schema 11 的升级步骤：
 
 Schema 8 增加不可变 discovery、重建 relation/job 关联结构，并加入 active snapshot、run generation 与 `partial_success_count`。迁移是 forward-only，没有自动 downgrade；Schema 8 migration 只接受 Schema 7 起点。升级前后必须分别保留兼容恢复点：
 
-1. 迁移前记录 v0.5.x revision、Schema 7、依赖锁文件和 Worker image/tool digest；使用**与 Schema 7 兼容的旧版本工具**制作并恢复验证完整数据库 + 资产备份。当前 v0.10.0 `video-download-backup` 只接受 Schema 8，不能用来制作 Schema 7 的迁移前回滚点。
+1. 迁移前记录 v0.5.x revision、Schema 7、依赖锁文件和 Worker image/tool digest；使用**与 Schema 7 兼容的旧版本工具**制作并恢复验证完整数据库 + 资产备份。当时的 v0.10.0 `video-download-backup` 只接受 Schema 8，不能用来制作 Schema 7 的迁移前回滚点。
 2. 在数据副本上用 v0.10.0 启动迁移。确认 migration marker 为 8、`PRAGMA quick_check` / `foreign_key_check` 通过、readiness 正常；抽查 legacy relation 已进入 deterministic legacy discovery，旧 flat-v1 Batch/Job/Asset/manifest 仍可读取。不要设置 `VDC_ENABLE_X_GRAPH_V2=1` 来测试数据库升级。
 3. 对迁移副本读取 `/health`、Batch/Input/Job API、metrics，并验证 input cancel / terminal-only rediscover 的权限和 409 边界；graph 行为只使用测试内 `ScriptedGraphFakeAdapter`，不运行 candidate real Worker，也不把结果记为 Stage 0。
 4. 生产数据迁移成功后，按第 9 节创建新的 Schema 8 baseline，并按第 10 节恢复到独立新根；目标部署的 Schema 8 恢复检查必须单独记录，不能沿用第 10.1 节的 Schema 7 历史证据或第 10.2 节的本机临时目录结果。
 5. 最后才在维护窗口切换，并同时保留与 Schema 7 和 Schema 8 备份分别匹配的应用代码、依赖锁与恢复工具。
 
 只支持 Schema 7 或更低版本的旧代码不得打开 Schema 8 数据库。回滚 v0.5.x 只能同时恢复迁移前、与 Schema 7 兼容且已演练的数据库和匹配资产树；不得原地删除 migration marker、trigger、column 或 graph table，不得把旧数据库覆盖到新的资产树，也不得把 Schema 8 备份交给旧程序。若不存在经过验证的迁移前兼容备份，只能修复并向前升级，不能声称可安全回滚。
+
+### 11.2 Stage 0 CSV v3 与 capability 决定
+
+从 [`validation/sample_manifest.template.csv`](../validation/sample_manifest.template.csv) 和 [`validation/results.template.csv`](../validation/results.template.csv) 复制模板到 Git 仓库外的私有目录。两个 CSV 都必须保留 v3 精确且不重复的表头、正确行宽并填写 `job_kind`；results 的 `product_version` 必须填写实际执行包输出的完整 product identity。旧表头、重复列、行宽不符、缺字段、不安全 identity token、裸版本（例如 `0.19.0`）、build hash 不匹配或与 manifest 不符的结果都会 fail closed。
+
+先在实际执行验证的同一安装/checkout 中读取 identity；输出不含本机路径：
+
+```powershell
+uv run video-download-validation --print-product-identity
+```
+
+`expected_output_count` / `observed_output_count` 按 route 解释：`download` 是已发布且完成完整验证的媒体资产数；`discover` 是不可变 discovery snapshot 中唯一 child/source item 数。不要把 parent `discover` 成功记成媒体下载成功，也不要把未验证临时文件计入 `download`。
+
+```powershell
+uv run video-download-validation C:\private\samples.csv `
+  --results C:\private\results.csv `
+  --output C:\private\capability-report.md
+```
+
+一个证据单元固定为 `platform × source_type × job_kind × adapter × downloader_version × environment × product_version`；这里的 `product_version` 是 `0.19.0+build.sha256.<64 hex>` 形式的完整 build identity，不是裸版本。至少 10 个公开正向样本、独立负向样本和同一身份下最新连续三轮完整运行都达到门槛后，评估才为 qualified；更新但不完整的最新轮次会使其 fail closed。来源样本按规范的 `platform/source_type/source_id` 去重，外层保留 `job_kind`；TikTok 同一 video ID 的不同 handle/host 不算独立样本。Bilibili 同一投稿可同时表示为 BV/av，Stage 0 暂时只接受 BV 以防双算；普通下载仍接受 BV 和 av。报告只含 aggregate，不含 URL、来源 identity hash、sample/run ID。
+
+导入必须使用现有且已经就绪的 Schema 11 数据库、当前完整 build identity 和显式 environment key；CLI 不创建或迁移数据库。数据库路径必须是绝对、规范、单 hard-link 的普通文件，并在每次连接前后重验文件 identity，避免 hard-link 别名形成不同 WAL/SHM 锁域。它从 CSV 重新计算，不导入 Markdown status。导入后仍是未审批，必须用另一条 CAS 命令批准：
+
+```powershell
+$Database = (Resolve-Path -LiteralPath ".\data\control.sqlite3").Path
+uv run video-download-capabilities --database-path $Database import `
+  --manifest C:\private\samples.csv --results C:\private\results.csv `
+  --environment-key windows-x64-direct-no-cookie
+uv run video-download-capabilities --database-path $Database list --kind evidence
+uv run video-download-capabilities --database-path $Database approve `
+  --evidence-id REPLACE_WITH_EVIDENCE_ID --expected-revision 0 `
+  --reason-code stage0-reviewed
+uv run video-download-capabilities --database-path $Database list --kind decisions
+uv run video-download-capabilities --database-path $Database history `
+  --identity-key REPLACE_WITH_IDENTITY_KEY
+uv run video-download-capabilities --database-path $Database revoke `
+  --evidence-id REPLACE_WITH_CURRENT_EVIDENCE_ID --expected-revision 1 `
+  --reason-code regression
+```
+
+`revoke` 只允许当前已批准 evidence，并要求最新 revision；旧 build 的历史批准仍可撤销，但旧 evidence 不可批准为当前 build。相同证据撤销后不可重放，需产生并审阅新 evidence。approve reason 只允许 `stage0-reviewed` / `replacement-reviewed`，revoke reason 只允许 `regression` / `superseded` / `operator-withdrawn`；`list` / `history --limit` 范围为 1–500。CLI stdout/stderr 使用稳定的单行脱敏 JSON，不回显输入路径、样本值或底层异常；退出码为 0 成功、2 输入错误、3 策略拒绝、4 未找到、5 revision 冲突、6 readiness/完整性/I/O/构建漂移或不可读、70 未预期内部错误。构建摘要覆盖 package 内所有非 PEP 3147 cache-pyc 的普通文件，拒绝 link/reparse/special file，并在读取前后比较完整 inventory；导入和 approve 在事务提交前再次核对身份，漂移时回滚。evidence/decision 的 update/delete/replace 均被拒绝，readiness 复核 guard 与 ledger 语义。CSV 可被管理员手写，普通 SHA-256 也不能抵抗攻击者同时改库并重算摘要；本机制保证应用规则、内部一致性、幂等和审计链，不构成密码学 attestation。
 
 ## 12. 生产启用闸门
 
@@ -723,6 +922,6 @@ Schema 8 增加不可变 discovery、重建 relation/job 关联结构，并加�
 - HTTPS、认证、限流、存储配额与审计；
 - 将现有本地、best-effort、结构化脱敏日志接入受控集中式生产保留，并补齐磁盘/队列/熔断告警；
 - 生产容量、实际部署身份、加密/offsite 介质和既定 RTO/RPO 下的 Schema 迁移、备份、恢复与 forward-only 回滚演练；本机 14-test 独立根功能演练不满足此闸门；
-- 每个 `platform × source_type × adapter × downloader_version × environment` 的 Stage 0 证据达到验收线；
+- 每个 `platform × source_type × job_kind × adapter × downloader_version × environment × product_version` 的 Stage 0 CSV v3 evidence 达到验收线并经独立人工决定；导入本身不批准，批准也不启用执行 gate；
 - 对真实 X graph 另须证明 stable attachment key 可重复且唯一，并证明 pinned `YtDlpAdapter` 能 exact-select 一个附件且不下载 sibling；完成、审阅并更新 adapter capability 前，`VDC_ENABLE_X_GRAPH_V2` 必须为 `0`；
 - 授权、版权、平台条款与实际分发依赖的许可证审查。

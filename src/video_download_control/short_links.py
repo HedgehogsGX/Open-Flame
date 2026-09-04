@@ -140,22 +140,34 @@ class ShortLinkResolution:
 
 @dataclass(frozen=True, slots=True)
 class _PlatformPolicy:
-    start_host: str
+    start_hosts: tuple[str, ...]
     allowed_hosts: tuple[str, ...]
+    exact_hosts: bool = False
 
 
 _POLICIES: Mapping[Platform, _PlatformPolicy] = {
     Platform.X: _PlatformPolicy(
-        start_host="t.co",
+        start_hosts=("t.co",),
         allowed_hosts=("t.co", "x.com", "twitter.com"),
     ),
     Platform.BILIBILI: _PlatformPolicy(
-        start_host="b23.tv",
+        start_hosts=("b23.tv",),
         allowed_hosts=("b23.tv", "bilibili.com"),
     ),
     Platform.DOUYIN: _PlatformPolicy(
-        start_host="v.douyin.com",
+        start_hosts=("v.douyin.com",),
         allowed_hosts=("v.douyin.com", "douyin.com"),
+    ),
+    Platform.TIKTOK: _PlatformPolicy(
+        start_hosts=("vm.tiktok.com", "vt.tiktok.com"),
+        allowed_hosts=(
+            "vm.tiktok.com",
+            "vt.tiktok.com",
+            "tiktok.com",
+            "www.tiktok.com",
+            "m.tiktok.com",
+        ),
+        exact_hosts=True,
     ),
 }
 
@@ -292,7 +304,8 @@ class ControlledShortLinkResolver:
             raise ShortLinkResolutionError(
                 "not_short_link", "输入不是需要展开的受支持平台短链"
             )
-        if urlsplit(initial.canonical_url).hostname != policy.start_host:
+        initial_host = urlsplit(initial.canonical_url).hostname
+        if initial_host is None or initial_host not in policy.start_hosts:
             raise ShortLinkResolutionError("invalid_start", "短链起点与平台策略不匹配")
 
         started = self.monotonic()
@@ -306,7 +319,7 @@ class ControlledShortLinkResolver:
             dns_timeout_seconds=min(self.limits.dns_timeout_seconds, remaining),
         )
         seen = {_redirect_identity(current_url)}
-        policy_path: list[str] = [policy.start_host]
+        policy_path: list[str] = [initial_host]
 
         for redirect_count in range(1, self.limits.max_redirects + 1):
             remaining = total_timeout_seconds - (self.monotonic() - started)
@@ -394,6 +407,15 @@ class ControlledShortLinkResolver:
             parts = urlsplit(url)
             if parts.scheme.lower() != "https":
                 raise ShortLinkResolutionError("https_required", "短链解析只允许 HTTPS")
+            host = parts.hostname
+            if policy.exact_hosts and (
+                not isinstance(host, str)
+                or host.rstrip(".").lower() not in policy.allowed_hosts
+            ):
+                raise ShortLinkResolutionError(
+                    "egress_host_not_allowed",
+                    "短链目标域名不在精确允许列表",
+                )
             return resolve_public_target(
                 url,
                 resolver=lambda host, port: self._resolver.resolve(

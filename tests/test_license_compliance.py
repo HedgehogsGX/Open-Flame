@@ -27,12 +27,20 @@ def test_project_license_metadata_is_apache_2_0() -> None:
     assert "Copyright 2026 HedgehogsGX & Cyaegha_Xu" in notice_text
 
 
-def test_sdist_excludes_its_self_referential_release_evidence() -> None:
+def test_sdist_excludes_self_reference_and_local_runtime_trees() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))
     sdist = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]
 
     assert sdist["exclude"] == [
-        "/validation/apache-2.0-license-migration-evidence.md"
+        "/validation/apache-2.0-license-migration-evidence.md",
+        "/validation/local/**",
+        "/runtime-tools/**",
+        "/dist/**",
+        "/build/**",
+        "/.venv/**",
+        "/.open-flame-setup.lock",
+        "/.pytest_cache/**",
+        "/**/__pycache__/**",
     ]
 
 

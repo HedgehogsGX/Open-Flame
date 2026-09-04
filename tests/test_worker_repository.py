@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Event, current_thread
 
 import pytest
 
@@ -14,11 +16,14 @@ from video_download_control.worker_repository import (
     InvalidTransition,
     JobLease,
     LostLease,
+    RetryConflict,
     WorkerRepository,
 )
 
 
 NOW = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+CLAIM_RUN_A = "a" * 32
+CLAIM_RUN_B = "b" * 32
 
 
 def make_job(service: BatchService, url: str) -> str:
@@ -40,6 +45,28 @@ def worker_repository(database) -> WorkerRepository:
     return WorkerRepository(database)
 
 
+def open_claim_gate(
+    repository: WorkerRepository,
+    *,
+    run_id: str = CLAIM_RUN_A,
+    worker_id: str = "local-app-worker",
+    now: datetime = NOW,
+) -> None:
+    repository.prepare_claim_gate(run_id=run_id, worker_id=worker_id, now=now)
+    repository.activate_claim_gate(run_id=run_id, worker_id=worker_id, now=now)
+
+
+def test_claim_gate_cannot_activate_before_exact_run_is_prepared(
+    worker_repository: WorkerRepository,
+) -> None:
+    with pytest.raises(RuntimeError, match="not prepared"):
+        worker_repository.activate_claim_gate(
+            run_id=CLAIM_RUN_A,
+            worker_id="local-app-worker",
+            now=NOW,
+        )
+
+
 def test_two_workers_cannot_claim_the_same_job(
     service: BatchService, worker_repository: WorkerRepository
 ) -> None:
@@ -54,6 +81,423 @@ def test_two_workers_cannot_claim_the_same_job(
     attempts = worker_repository.attempts_for(claimed[0].job_id)
     assert len(attempts) == 1
     assert attempts[0]["status"] == "running"
+
+
+def test_stopped_claim_gate_prevents_a_new_job_or_attempt(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=stopped-gate")
+    open_claim_gate(worker_repository)
+    assert worker_repository.stop_claim_gate(
+        run_id=CLAIM_RUN_A,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    lease = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=2),
+        claim_gate_run_id=CLAIM_RUN_A,
+    )
+
+    assert lease is None
+    assert worker_repository.get_job(job_id)["status"] == "queued"
+    assert worker_repository.attempts_for(job_id) == []
+
+
+@pytest.mark.parametrize(
+    "malformation_sql",
+    [
+        "UPDATE worker_claim_gate SET accepting_claims = 2 WHERE id = 1",
+        "UPDATE worker_claim_gate SET activated_at = '' WHERE id = 1",
+    ],
+    ids=["non-boolean-accepting-claims", "empty-activation-timestamp"],
+)
+def test_malformed_open_claim_gate_cannot_create_a_job_attempt(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+    database,
+    malformation_sql: str,
+) -> None:
+    job_id = make_job(
+        service,
+        "https://www.youtube.com/watch?v=malformed-claim-gate",
+    )
+    open_claim_gate(worker_repository)
+    with database.connect() as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(malformation_sql)
+
+    lease = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=1),
+        claim_gate_run_id=CLAIM_RUN_A,
+    )
+
+    assert lease is None
+    assert worker_repository.get_job(job_id)["status"] == "queued"
+    assert worker_repository.attempts_for(job_id) == []
+
+
+def test_claim_gate_stop_detects_an_after_update_reopen_trigger(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+    database,
+) -> None:
+    job_id = make_job(
+        service,
+        "https://www.youtube.com/watch?v=triggered-claim-gate",
+    )
+    open_claim_gate(worker_repository)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reopen_gate_after_stop
+            AFTER UPDATE ON worker_claim_gate
+            WHEN NEW.accepting_claims = 0
+                 AND NEW.stop_requested_at IS NOT NULL
+            BEGIN
+                UPDATE worker_claim_gate
+                SET accepting_claims = 1,
+                    activated_at = NEW.stop_requested_at,
+                    stop_requested_at = NULL,
+                    updated_at = NEW.stop_requested_at
+                WHERE id = 1;
+            END
+            """
+        )
+
+    with pytest.raises(RuntimeError, match="stop was not persisted"):
+        worker_repository.stop_claim_gate(
+            run_id=CLAIM_RUN_A,
+            now=NOW + timedelta(seconds=1),
+        )
+
+    assert worker_repository.get_job(job_id)["status"] == "queued"
+    assert worker_repository.attempts_for(job_id) == []
+
+
+def test_claim_committed_before_stop_is_retained_but_run_cannot_claim_again(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+) -> None:
+    claimed_job = make_job(
+        service,
+        "https://www.youtube.com/watch?v=claim-before-stop",
+    )
+    queued_job = make_job(service, "https://x.com/example/status/981001")
+    open_claim_gate(worker_repository)
+
+    lease = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW,
+        claim_gate_run_id=CLAIM_RUN_A,
+    )
+    assert lease is not None
+    assert lease.job_id == claimed_job
+    assert worker_repository.stop_claim_gate(
+        run_id=CLAIM_RUN_A,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert (
+        worker_repository.claim_next(
+            worker_id="local-app-worker",
+            adapter="fake",
+            adapter_version="1.0",
+            now=NOW + timedelta(seconds=2),
+            claim_gate_run_id=CLAIM_RUN_A,
+        )
+        is None
+    )
+    assert worker_repository.get_job(claimed_job)["status"] == "probing"
+    assert len(worker_repository.attempts_for(claimed_job)) == 1
+    assert worker_repository.get_job(queued_job)["status"] == "queued"
+    assert worker_repository.attempts_for(queued_job) == []
+
+
+def test_preparing_and_activating_a_new_run_fences_a_stale_run_id(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=stale-run-fenced")
+    open_claim_gate(worker_repository)
+    worker_repository.prepare_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=1),
+    )
+    worker_repository.activate_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=1),
+    )
+
+    stale = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=2),
+        claim_gate_run_id=CLAIM_RUN_A,
+    )
+    current = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=2),
+        claim_gate_run_id=CLAIM_RUN_B,
+    )
+
+    assert stale is None
+    assert current is not None
+    assert current.job_id == job_id
+    assert len(worker_repository.attempts_for(job_id)) == 1
+
+
+def test_preparing_a_new_run_prevents_a_stale_supervisor_from_reactivating(
+    worker_repository: WorkerRepository,
+) -> None:
+    worker_repository.prepare_claim_gate(
+        run_id=CLAIM_RUN_A,
+        worker_id="local-app-worker",
+        now=NOW,
+    )
+    worker_repository.prepare_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=1),
+    )
+
+    with pytest.raises(RuntimeError, match="not prepared"):
+        worker_repository.activate_claim_gate(
+            run_id=CLAIM_RUN_A,
+            worker_id="local-app-worker",
+            now=NOW + timedelta(seconds=2),
+        )
+
+    opened = worker_repository.activate_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=2),
+    )
+    assert opened["accepting_claims"] is True
+
+
+def test_claim_transaction_linearizes_before_a_concurrent_gate_stop(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+    database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claimed_job = make_job(
+        service,
+        "https://www.youtube.com/watch?v=claim-linearizes-first",
+    )
+    queued_job = make_job(service, "https://x.com/example/status/981002")
+    open_claim_gate(worker_repository)
+    claim_holds_writer = Event()
+    release_claim = Event()
+    stop_entered_begin = Event()
+    original_connect = database.connect
+
+    class ConnectionProxy:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def execute(self, sql, parameters=()):
+            normalized = " ".join(sql.split())
+            role = current_thread().name
+            if role.startswith("stop-after-claim") and normalized == "BEGIN IMMEDIATE":
+                stop_entered_begin.set()
+            result = self.connection.execute(sql, parameters)
+            if (
+                role.startswith("claim-before-stop")
+                and "FROM worker_claim_gate WHERE id = 1" in normalized
+            ):
+                claim_holds_writer.set()
+                assert release_claim.wait(5.0)
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    @contextmanager
+    def controlled_connect():
+        with original_connect() as connection:
+            yield ConnectionProxy(connection)
+
+    monkeypatch.setattr(database, "connect", controlled_connect)
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="claim-before-stop"
+    ) as claim_executor, ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="stop-after-claim"
+    ) as stop_executor:
+        claim_future = claim_executor.submit(
+            worker_repository.claim_next,
+            worker_id="local-app-worker",
+            adapter="fake",
+            adapter_version="1.0",
+            now=NOW,
+            claim_gate_run_id=CLAIM_RUN_A,
+        )
+        assert claim_holds_writer.wait(5.0)
+        stop_future = stop_executor.submit(
+            worker_repository.stop_claim_gate,
+            run_id=CLAIM_RUN_A,
+            now=NOW + timedelta(seconds=1),
+        )
+        assert stop_entered_begin.wait(5.0)
+        assert not stop_future.done()
+        release_claim.set()
+        lease = claim_future.result(timeout=5.0)
+        assert stop_future.result(timeout=5.0) is True
+
+    assert lease is not None and lease.job_id == claimed_job
+    assert len(worker_repository.attempts_for(claimed_job)) == 1
+    assert worker_repository.get_job(queued_job)["status"] == "queued"
+    assert worker_repository.attempts_for(queued_job) == []
+
+
+def test_gate_stop_transaction_linearizes_before_a_concurrent_claim(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+    database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = make_job(
+        service,
+        "https://www.youtube.com/watch?v=stop-linearizes-first",
+    )
+    open_claim_gate(worker_repository)
+    stop_holds_writer = Event()
+    release_stop = Event()
+    claim_entered_begin = Event()
+    original_connect = database.connect
+
+    class ConnectionProxy:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def execute(self, sql, parameters=()):
+            normalized = " ".join(sql.split())
+            role = current_thread().name
+            if role.startswith("claim-after-stop") and normalized == "BEGIN IMMEDIATE":
+                claim_entered_begin.set()
+            result = self.connection.execute(sql, parameters)
+            if (
+                role.startswith("stop-before-claim")
+                and normalized.startswith("SELECT run_id FROM worker_claim_gate")
+            ):
+                stop_holds_writer.set()
+                assert release_stop.wait(5.0)
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    @contextmanager
+    def controlled_connect():
+        with original_connect() as connection:
+            yield ConnectionProxy(connection)
+
+    monkeypatch.setattr(database, "connect", controlled_connect)
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="stop-before-claim"
+    ) as stop_executor, ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="claim-after-stop"
+    ) as claim_executor:
+        stop_future = stop_executor.submit(
+            worker_repository.stop_claim_gate,
+            run_id=CLAIM_RUN_A,
+            now=NOW + timedelta(seconds=1),
+        )
+        assert stop_holds_writer.wait(5.0)
+        claim_future = claim_executor.submit(
+            worker_repository.claim_next,
+            worker_id="local-app-worker",
+            adapter="fake",
+            adapter_version="1.0",
+            now=NOW + timedelta(seconds=2),
+            claim_gate_run_id=CLAIM_RUN_A,
+        )
+        assert claim_entered_begin.wait(5.0)
+        assert not claim_future.done()
+        release_stop.set()
+        assert stop_future.result(timeout=5.0) is True
+        assert claim_future.result(timeout=5.0) is None
+
+    assert worker_repository.get_job(job_id)["status"] == "queued"
+    assert worker_repository.attempts_for(job_id) == []
+
+
+def test_stopped_run_active_attempt_is_recovered_only_after_lease_expiry(
+    service: BatchService,
+    worker_repository: WorkerRepository,
+) -> None:
+    interrupted_job = make_job(
+        service,
+        "https://www.youtube.com/watch?v=active-stop-recovery",
+    )
+    untouched_job = make_job(service, "https://x.com/example/status/981003")
+    open_claim_gate(worker_repository)
+    first_lease = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW,
+        lease_seconds=10,
+        claim_gate_run_id=CLAIM_RUN_A,
+    )
+    assert first_lease is not None and first_lease.job_id == interrupted_job
+    assert worker_repository.stop_claim_gate(
+        run_id=CLAIM_RUN_A,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert (
+        worker_repository.claim_next(
+            worker_id="local-app-worker",
+            adapter="fake",
+            adapter_version="1.0",
+            now=NOW + timedelta(seconds=2),
+            claim_gate_run_id=CLAIM_RUN_A,
+        )
+        is None
+    )
+
+    worker_repository.prepare_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=11),
+    )
+    worker_repository.activate_claim_gate(
+        run_id=CLAIM_RUN_B,
+        worker_id="local-app-worker",
+        now=NOW + timedelta(seconds=11),
+    )
+    recovered_lease = worker_repository.claim_next(
+        worker_id="local-app-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=11),
+        lease_seconds=10,
+        claim_gate_run_id=CLAIM_RUN_B,
+    )
+
+    assert recovered_lease is not None
+    assert recovered_lease.job_id == interrupted_job
+    assert recovered_lease.attempt_id != first_lease.attempt_id
+    assert recovered_lease.attempt_no == 2
+    attempts = worker_repository.attempts_for(interrupted_job)
+    assert [attempt["status"] for attempt in attempts] == ["abandoned", "running"]
+    assert attempts[0]["error_code"] == ErrorCode.WORKER_LOST.value
+    assert worker_repository.get_job(untouched_job)["status"] == "queued"
+    assert worker_repository.attempts_for(untouched_job) == []
 
 
 def test_worker_claim_filters_platform_source_and_job_route(
@@ -223,6 +667,31 @@ def test_global_concurrency_is_two_across_three_platforms(
     assert second is not None
     assert first.platform != second.platform
     assert third is None
+
+
+def test_refill_skips_expired_recovery_and_excludes_live_job_ids(
+    service: BatchService, worker_repository: WorkerRepository
+) -> None:
+    expired_job = make_job(service, "https://www.youtube.com/watch?v=live-expired")
+    live_job = make_job(service, "https://x.com/example/status/900005")
+    available_job = make_job(service, "https://www.bilibili.com/video/BV1xx411c7mD")
+    original = claim(worker_repository, "local-worker")
+    assert original and original.job_id == expired_job
+
+    refilled = worker_repository.claim_next(
+        worker_id="local-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW + timedelta(seconds=61),
+        perform_recovery=False,
+        excluded_job_ids=frozenset({live_job}),
+    )
+
+    assert refilled and refilled.job_id == available_job
+    assert worker_repository.get_job(expired_job)["status"] == "probing"
+    assert worker_repository.attempts_for(expired_job)[0]["status"] == "running"
+    assert len(worker_repository.attempts_for(expired_job)) == 1
+    assert worker_repository.attempts_for(live_job) == []
 
 
 def test_heartbeat_extends_lease_and_reports_cancel(
@@ -534,6 +1003,165 @@ def test_failure_can_retry_but_hard_stops_at_four_attempts(
     assert batch["status"] == "failed"
     assert batch["failed_count"] == 1
     assert batch["inputs"][0]["error_code"] == "network_error"
+
+
+def test_explicit_retry_starts_a_new_generation_and_preserves_attempt_history(
+    service: BatchService, worker_repository: WorkerRepository
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=manual-retry")
+    first = claim(worker_repository, "worker-one")
+    assert first is not None
+    assert worker_repository.finish_failure(
+        first,
+        error_code=ErrorCode.NETWORK_ERROR,
+        diagnostic="terminal synthetic failure",
+        now=NOW,
+    ) is JobStatus.FAILED
+
+    retried = worker_repository.request_retry(
+        job_id,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert retried == {
+        "job_id": job_id,
+        "status": "queued",
+        "run_generation": 2,
+        "platform": "youtube",
+        "previous_error_code": "network_error",
+    }
+    job = worker_repository.get_job(job_id)
+    assert job["status"] == "queued"
+    assert job["attempt_count"] == 1
+    assert job["run_generation"] == 2
+    assert job["generation_attempt_count"] == 0
+    assert job["final_error_code"] is None
+    batch = service.get_batch(job["batch_id"])
+    assert batch["status"] == "queued"
+    assert batch["queued_count"] == 1
+    assert batch["failed_count"] == 0
+    assert batch["inputs"][0]["status"] == "queued"
+    assert batch["inputs"][0]["active_run_generation"] == 2
+    assert batch["inputs"][0]["error_code"] is None
+
+    second = claim(worker_repository, "worker-two", NOW + timedelta(seconds=2))
+    assert second is not None
+    assert second.job_id == job_id
+    assert second.attempt_no == 2
+    assert second.run_generation == 2
+    attempts = worker_repository.attempts_for(job_id)
+    assert [attempt["run_generation"] for attempt in attempts] == [1, 2]
+    assert [attempt["generation_attempt_no"] for attempt in attempts] == [1, 1]
+
+
+def test_explicit_retry_rejects_non_failed_and_missing_jobs(
+    service: BatchService, worker_repository: WorkerRepository
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=retry-conflict")
+
+    with pytest.raises(RetryConflict, match="terminal failed"):
+        worker_repository.request_retry(job_id, now=NOW)
+    assert worker_repository.request_retry("missing-job", now=NOW) is None
+
+
+def test_concurrent_explicit_retry_advances_only_one_generation(
+    service: BatchService, worker_repository: WorkerRepository
+) -> None:
+    job_id = make_job(service, "https://www.youtube.com/watch?v=retry-double")
+    lease = claim(worker_repository, "worker-one")
+    assert lease is not None
+    worker_repository.finish_failure(
+        lease,
+        error_code=ErrorCode.NETWORK_ERROR,
+        diagnostic="terminal synthetic failure",
+        now=NOW,
+    )
+
+    def retry_once() -> str:
+        try:
+            result = worker_repository.request_retry(
+                job_id,
+                now=NOW + timedelta(seconds=1),
+            )
+        except RetryConflict:
+            return "conflict"
+        assert result is not None
+        return "queued"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _index: retry_once(), range(2)))
+
+    assert sorted(outcomes) == ["conflict", "queued"]
+    job = worker_repository.get_job(job_id)
+    assert job["run_generation"] == 2
+    assert job["generation_attempt_count"] == 0
+    assert len(worker_repository.attempts_for(job_id)) == 1
+
+
+def test_explicit_retry_rejects_when_same_source_has_new_live_work(
+    service: BatchService, worker_repository: WorkerRepository
+) -> None:
+    url = "https://www.youtube.com/watch?v=retry-live-conflict"
+    failed_job_id = make_job(service, url)
+    lease = claim(worker_repository, "worker-one")
+    assert lease is not None
+    worker_repository.finish_failure(
+        lease,
+        error_code=ErrorCode.NETWORK_ERROR,
+        diagnostic="terminal synthetic failure",
+        now=NOW,
+    )
+    live_job_id = make_job(service, url)
+    assert live_job_id != failed_job_id
+
+    with pytest.raises(RetryConflict, match="live or ready work"):
+        worker_repository.request_retry(
+            failed_job_id,
+            now=NOW + timedelta(seconds=1),
+        )
+
+    assert worker_repository.get_job(failed_job_id)["status"] == "failed"
+    assert worker_repository.get_job(live_job_id)["status"] == "queued"
+
+
+def test_explicit_retry_rejects_graph_parent_even_when_terminal_failed(
+    repository,
+    settings,
+    worker_repository: WorkerRepository,
+) -> None:
+    graph_service = BatchService(
+        repository=repository,
+        max_batch_urls=settings.max_batch_urls,
+        route_policy_version=settings.route_policy_version,
+        x_graph_v2_enabled=True,
+    )
+    batch = graph_service.create_batch(
+        name="graph retry rejected",
+        raw_inputs=["https://x.com/example/status/991099"],
+    )
+    job_id = batch["jobs"][0]["id"]
+    lease = worker_repository.claim_next(
+        worker_id="graph-worker",
+        adapter="fake",
+        adapter_version="1.0",
+        now=NOW,
+        supports_exact_selector=True,
+    )
+    assert lease is not None and lease.job_id == job_id
+    worker_repository.finish_failure(
+        lease,
+        error_code=ErrorCode.ADAPTER_UNSUPPORTED,
+        diagnostic="terminal graph failure",
+        now=NOW,
+    )
+
+    with pytest.raises(InvalidTransition, match="flat download"):
+        worker_repository.request_retry(
+            job_id,
+            now=NOW + timedelta(seconds=1),
+        )
+
+    assert worker_repository.get_job(job_id)["status"] == "failed"
 
 
 def test_input_and_batch_wait_for_all_jobs_before_terminal_aggregation(

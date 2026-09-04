@@ -116,12 +116,58 @@ def test_x_aliases_share_stable_canonical_identity() -> None:
 
 
 @pytest.mark.parametrize(
+    ("url", "canonical", "source_id"),
+    (
+        (
+            "https://x.com/example/status/0001234567890",
+            "https://x.com/i/status/1234567890",
+            "1234567890",
+        ),
+        (
+            "https://www.bilibili.com/video/av000170001",
+            "https://www.bilibili.com/video/av170001",
+            "av170001",
+        ),
+        (
+            "https://www.douyin.com/video/0007123456789012345678",
+            "https://www.douyin.com/video/7123456789012345678",
+            "7123456789012345678",
+        ),
+        (
+            "https://www.tiktok.com/@Example/video/0007461234567890123456",
+            "https://www.tiktok.com/@example/video/7461234567890123456",
+            "7461234567890123456",
+        ),
+    ),
+)
+def test_numeric_source_ids_remove_leading_zero_aliases(
+    url: str,
+    canonical: str,
+    source_id: str,
+) -> None:
+    result = normalize_url(url)
+
+    assert result.canonical_url == canonical
+    assert result.source_id == source_id
+
+
+@pytest.mark.parametrize("host", ("vm.tiktok.com", "vt.tiktok.com"))
+def test_normalizes_tiktok_share_short_links(host: str) -> None:
+    result = normalize_url(f"http://{host}/ZShort123/?share_app_id=123#fragment")
+
+    assert result.canonical_url == f"https://{host}/ZShort123"
+    assert result.platform is Platform.TIKTOK
+    assert result.source_type is SourceType.SHORT_LINK
+    assert result.source_id is None
+
+
+@pytest.mark.parametrize(
     ("url", "code"),
     [
         ("https://www.tiktok.com/@x/video/1", ErrorCode.UNSUPPORTED_LINK_TYPE),
         ("https://www.tiktok.com/@x", ErrorCode.UNSUPPORTED_LINK_TYPE),
-        ("https://vm.tiktok.com/ZMshort/", ErrorCode.UNSUPPORTED_LINK_TYPE),
-        ("https://vt.tiktok.com/ZShort/", ErrorCode.UNSUPPORTED_LINK_TYPE),
+        ("https://vm.tiktok.com/", ErrorCode.INVALID_URL),
+        ("https://vt.tiktok.com/", ErrorCode.INVALID_URL),
         ("https://www.instagram.com/p/AbC_def-123/", ErrorCode.UNSUPPORTED_LINK_TYPE),
         ("https://www.instagram.com/example/", ErrorCode.UNSUPPORTED_LINK_TYPE),
         ("https://127.0.0.1/video/1", ErrorCode.UNSUPPORTED_PLATFORM),
@@ -146,6 +192,10 @@ def test_x_aliases_share_stable_canonical_identity() -> None:
             "https://www.bilibili.com/video/BV1xx411c7mD?p=1&p=",
             ErrorCode.UNSUPPORTED_LINK_TYPE,
         ),
+        ("https://x.com/example/status/0", ErrorCode.INVALID_URL),
+        ("https://www.bilibili.com/video/av000", ErrorCode.INVALID_URL),
+        ("https://www.douyin.com/video/0", ErrorCode.INVALID_URL),
+        ("https://www.tiktok.com/@example/video/00000", ErrorCode.INVALID_URL),
     ],
 )
 def test_rejects_unsafe_or_out_of_scope_links(url: str, code: ErrorCode) -> None:

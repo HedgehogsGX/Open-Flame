@@ -1,11 +1,84 @@
 # 多平台视频下载项目开发交接
 
-> 每轮结束更新本文件的状态、证据、风险、下一入口和历史。  
-> 最后更新：2026-09-03  
-> 当前迭代：Iteration 0.10.0 — 六平台显式下载能力与 Worker 路由
-> 当前版本：`0.10.0`；数据库：Schema `8`
+> 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
+> 最后更新：2026-09-04
+> 当前迭代：Iteration 0.23.0 — 源码发行工具、最终 debug 与版本交付
+> 当前版本：`0.23.0`；数据库：Schema `11`；本轮最终全量回归 **1670 passed / 8 skipped**
 
-Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力注册表、公开能力 API/UI，以及 Worker 对 `platform × source_type × job_kind` 的原子领取过滤。Bilibili、Douyin、TikTok、Instagram 采用现有固定 `yt-dlp` 子进程边界，不增加第三方依赖；直接 URL 的离线队列/Worker/资产链已覆盖。随后一条 NASA 官方公开 Instagram Reel 在全新 data root、Windows 本机直连、无 Cookie、显式 Node 和固定工具链下以 `1/1 ready` 完成 DB、AssetStore/manifest、API copy、完整解码、清理、JSONL 日志与浏览器 UI 闭环。Bilibili 真实尝试遇 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，未提供 Cookie 时正确归类为 `authentication_required`；TikTok 未实跑。单个 Instagram 样本不是 Stage 0，六个平台仍全部为 `candidate`。Linux 隔离 Worker、Docker、真实 Cookie、完整 Stage 0 和平台级认证均未完成。源码许可已闭合，但 dependency wheelhouse、冻结可执行文件、OCI/container image 与 yt-dlp/FFmpeg 工具包的第三方再分发门禁不因此放宽。
+## 本次交接入口
+
+普通 Windows x64 使用：完整源码 ZIP 解压后，先运行 `Setup-Open-Flame.cmd`，成功后运行 `Start-Open-Flame.cmd`。需要已安装 64 位 CPython 3.12+，无需 Codex 或 uv，仍不是免 Python EXE。安装、修复、日志位置与故障处理见 [Windows 安装](docs/WINDOWS_SETUP.md) 和 [启动指南](docs/WINDOWS_LAUNCHER.md)。
+
+新增 [明确发行清单](release-files.txt) 与仓库内的 [构建/归档核对](scripts/release.py)、[解压安装验收](scripts/verify_windows_release.py)、[wheel 安装验收](scripts/verify_wheel_release.py)，不再依赖 ignored 历史 verifier。实际源码 ZIP 安装/repeat/Start 检查、wheel 新环境的 13 个依赖和 13 个命令入口均通过。前端已在独立正常应用中实际检查页面渲染、无效输入、刷新恢复批次、空成品列表、日志刷新、匿名模式；通过 PTY Ctrl+C 停止后，应用日志为 normal，三个进程退出、端口释放。未做 Explorer 双击或物理键盘验收。
+
+精确运行包身份仍为 `0.23.0+build.sha256.64a62ca9ccb395d6e559d276feea2dea1fa562da0fb25035ee53838f0eda77cf`。本轮发行工具不修改业务包与四个根启动入口；标准源码包/wheel/便捷 ZIP 从同一清单冻结字节生成。最终摘要只放归档外 `release-manifest.json` / `SHA256SUMS`；不同文档快照的 ZIP 不能混用摘要。详见 [发行用法](docs/RELEASE.md) 与 [本轮验收](validation/iteration-0.23.0-release-evidence.md)。
+
+本机交付候选目录为 ignored `dist/Open-Flame-0.23.0-final-r2/release/`；只交付其中五个文件，不交付构建环境、测试 profile、原始日志或工具二进制。Git 目标是 `HedgehogsGX/Open-Flame` 的 `main`，使用正常 fast-forward push，不覆盖远端历史；具体提交以 `git log` / GitHub 提交页为准。Git push 不等于创建 GitHub Release 或上传这些本机制品。
+
+### 仍待开发 / 验收（按下一步顺序）
+
+| 优先级 | 工作 | 当前限制与完成条件 |
+|---|---|---|
+| P1 | 抖音真实登录态下载 | 匿名实测要求登录；由用户提供本地只读 Cookie **配置路径**后，验证成功、过期、失效与重试，不索取聊天中的 Cookie 内容 |
+| P1 | 六平台稳定性与下载回归 | 已有不同旧构建的单样本成功记录，不是本次全面证明；用有权使用的样本覆盖短链、重复、并发、取消、冷却和失败恢复，保留版本/构建级证据 |
+| P1 | 普通用户界面 | 当前偏工程控制面；任务入口前移、中文状态收敛、Worker 实际健康状态与隔离开关区别、任务列表与下载成品展示，避免将“工具就绪”误解为“平台全部可用” |
+| P2 | 免 Python 独立发行 | 嵌入式运行时/打包方案、清洁 Windows 机器安装升级卸载、双击/键盘生命周期、签名与第三方源码/NOTICE义务；现有源码安装不是这些项目的验收 |
+| P2 | 多媒体内容类型 | Bilibili 多 P/合集、Douyin 图集/合集、Instagram 帖子/轮播/Story/Live 尚未实现；X graph-v2 真实 exact-selector 仍关闭，先验证上游选择契约再启用 |
+| P2 | Linux / Docker / NAS | 需要真实 Linux/POSIX/root/getfacl 环境；目前 8 个相关测试跳过，不能以 Windows 结果代替网络隔离与容器验收 |
+| 后续 | 媒体编辑 | 用户要求先完善下载；剪切/转码/字幕处理应派生新文件，保留下载原件与来源信息 |
+| 后续 | 上传 / 发布 | 尚未实现；先选目标平台并核对官方 API/OAuth、配额、幂等与失败重试，再开发，不复用下载 Cookie 假定上传授权 |
+
+继续开发前先读本节、对应运行指南和相关测试；不要重复建设安装器、日志系统或历史 verifier。不要将本机媒体、数据库、凭据、诊断和工具缓存加入 Git。源码 Apache-2.0 / Copyright NOTICE 保持不变，第三方各自许可与离线 bundle 再分发检查仍独立。
+
+## Iteration 0.23.0 源码安装阶段历史摘要
+
+新增 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd) 与 stdlib bootstrap。已安装 Windows x64 CPython 3.12+ 时，无需 uv/Codex 即可准备 `.venv` 和锁定媒体工具；已有健康环境复用，未知损坏环境不改写，自建环境可重试/`--repair`，安装写锁与源码启动共享读锁互斥，6 个固定安装诊断码落盘。使用说明见 [首次安装与修复](docs/WINDOWS_SETUP.md)。它仍不是免 Python EXE。
+
+真实安装揭露旧 FFmpeg daily URL 连续 HTTP 404；已切换到 BtbN 官方月末保留构建 `n9.0.1-11-ge47273f4d9-20260831`。API digest、官方 checksum 与本地 ZIP hash 一致，9 个 managed 文件、实际版本/configuration、LGPL 条件与离线音视频 smoke 已验证。旧本机工具保留在 ignored `runtime-tools/retained-windows-x64-20260820-v023`；新 canonical 工具由当前精确锁重新安装，未删除旧版本。
+
+冻结构建 `0.23.0+build.sha256.64a62ca9ccb395d6e559d276feea2dea1fa562da0fb25035ee53838f0eda77cf`：真实隐藏 CMD 从无环境/工具的独立源码目录、外部中文/空格/`!` CWD，通过系统 Python **3.13.14** 完成默认联网安装 **35.437s**；重复安装 **6.172s**，环境与工具内容不变；空 wheelhouse 修复失败正确落盘，再联网修复 **27.938s** 成功；实际 Start `--check` **5.734s**、端口释放。相同新环境的正常应用 **6.047s** 完成 ready/health/HTML/一次浏览器打开请求与正常停机，三个进程同 run、无残留。浏览器 opener 被拦截、停止为 test-only SIGINT 桥，不冒充实际 GUI 渲染或键盘验收。全量 **1532 passed, 8 skipped in 185.44s**。详细边界及 4 个包外入口 hash 见 [Iteration 0.23.0](validation/iteration-0.23.0-source-setup-evidence.md)。
+
+最终收尾：258 文件静态隐私检查未发现真实敏感数据，6 个忽略规则探针通过；41 份 Markdown / 148 本地链接、compileall、离线 24 总包锁及 whitespace 检查通过。13 个 runtime 外部依赖、23 个全部外部 Python 包版本未变；LICENSE / NOTICE / Python 许可材料保持原样，FFmpeg 第三方声明已同步。静态检查不是未知秘密完全排除或法律批准。
+
+该安装阶段当时的下一入口是独立发行工具与解压验收，现已由上方交付阶段接续。其当时尚未打包或 push；历史单样本和旧包 identity 不能作为当前整体验收。
+
+## Iteration 0.22.0 历史摘要
+
+新增根目录 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)，使用项目本地 Python 环境启动一体化应用；支持从其他工作目录运行、明确工具参数覆盖和启动后自动请求打开浏览器。参数错误、端口占用、缺工具/依赖等现在可保存到独立诊断目录；启动阶段取消及英文终端编码问题已修复。它仍是源码启动器，不是免 Python EXE。使用说明见 [Windows 启动器](docs/WINDOWS_LAUNCHER.md)。
+
+最终验证：`1492 passed, 8 skipped in 142.88s`。真实 CMD 入口测试 **6/6 通过**；精确构建 `0.22.0+build.sha256.a2e442135f50f4777c952eeb6976b44b97d16edf29c2bed3aa194427237863da` 的正常模式验证在 5.546 秒内完成 ready、健康 API、HTML、一次浏览器打开请求和正常停止，三个进程退出、无残留、端口释放。浏览器请求被测试钩子拦截，停止用 test-only SIGINT 桥，不能声称已做 Explorer 双击、实际浏览器渲染或键盘 Ctrl+C 验收。本轮没有重新下载媒体、添加依赖或生成发布包。详细证据与两个包外入口 SHA-256 见 [Iteration 0.22.0](validation/iteration-0.22.0-launcher-diagnostics-evidence.md)。
+
+文档与发布面收尾：248 文件静态隐私复核未发现本轮阻断项；39 份 Markdown、133 个本地链接通过，编译、离线 24 包锁与 whitespace 检查通过。Apache-2.0、精确 NOTICE 与外部依赖未改；扫描不保证排除所有未知形式的秘密。
+
+该轮的源码首次安装/修复入口已由上方 0.23.0 接续。原平台和分发缺口继续保留，不能把旧工具或旧发布包记录改标为当前构建。
+
+## Iteration 0.21.0 历史摘要
+
+本轮继续实际一体化应用测试：Douyin 匿名要求登录；Instagram Reel 下载、hash/API/ffprobe/完整解码通过。TikTok 最初有非稳定解析失败，随后正常下载阶段稳定暴露 `.image` 后缀 JPEG 封面被拒绝的问题；以固定 yt-dlp 原生 `image>png` 封面转换修复，不放宽输出白名单，不转码视频原件。CLI 早期错误改为显式端口/工具目录/Cookie 配置分类，输出中文处理建议与日志状态；未知运行错误不误标启动阶段。精确构建、基线失败与修复后验证分别记录于 [Iteration 0.21.0](validation/iteration-0.21.0-platform-startup-evidence.md)。
+
+最终验证：`1447 passed, 8 skipped in 153.95s`。固定工具合成封面回归通过；最终构建 `0.21.0+build.sha256.4d089ef9b8fc44bc162dcc7cc3540f77340d3f414a1a9801e93087e3a0cd4a5d` 的 TikTok + Instagram 新下载 **2/2 ready、各第 1 次成功**，两份 hash/API/ffprobe/完整解码与停机后 strict `-xerror` 原件/封面检查通过。三个应用进程正常退出，无残留、端口释放。239 文件发布面复查、37 份 Markdown 链接与编译/离线锁/whitespace 检查通过；没有新依赖、真实 Cookie、发布包或 push。
+
+该轮下一入口是源码级启动器与独立持久化启动诊断；现已由上方 0.22.0 接续。该轮平台下载结果仅属于 0.21.0 精确构建。
+
+## Iteration 0.20.0 历史摘要
+
+Iteration 0.20.0 修复重复输入无法读取原 owner 成品、混合活跃批次隐藏 ready 文件的问题，并增加手动“刷新成品”。新任务、凭证、资产和 Schema 不因复用而改写。第一轮全量 `1433 passed, 8 skipped in 142.01s`；真实 Windows 一体化应用、固定工具、匿名且无额外 JS runtime 的两个样本均 ready：YouTube 第一次、Bilibili 第一次 rate_limited 后由产品自身冷却/重试成功。主验收检查两份 DB/manifest/API 的 size/SHA-256、ffprobe 与完整解码，三进程同 run、正常停止、无残留与端口释放均通过。该下载记录绑定当时精确构建；随后独立审查新增了慢响应同批次 assets 请求竞争的回归与修复，最终构建将用已有媒体重启/复用验收，不冒称再次平台下载。详见 [Iteration 0.20.0](validation/iteration-0.20.0-asset-availability-live-evidence.md)。
+
+最终补充：慢响应单飞修复后完整回归为 `1436 passed, 8 skipped in 146.28s`；最终构建重启既有目录、提交两个 duplicate 输入、两份成品 hash/API/ffprobe/完整解码验收通过，`new_jobs/new_attempts/new_media_assets=0`，原记录不变，三进程正常退出、claim gate stopped、端口释放。最终复用报告完整记录当前 product identity；早期真实下载报告只存源码未漂移布尔值，不能用于 Stage 0 精确 build 审批，亦不能改标成最终 UI 构建的新下载成绩。
+
+下一入口：按用户原定顺序继续 Douyin、TikTok、Instagram 的实际样本验收；需要真实登录态时由用户通过本地只读配置提供，不读取浏览器秘密或绕过访问控制。另一个已发现但未实现的可用性缺口是启动早期的端口占用/工具缺失/配置错误仍统一显示 local_app_failed，应补可操作的安全错误分类。发布包与 push 要单独完成当前源码/隐私/许可检查，不能沿用 0.19 包的 hash。
+
+以下 0.19.0 及更早内容保留为历史；不代表当前源码已经重新打包。
+
+Iteration 0.19.0 接通普通 Windows 一体化入口：明确 `--allow-direct-network` 时，控制面使用复用既有 numeric-IP/TLS/peer/逐跳校验的短链 transport；JSON、TXT、CSV 均在线程池展开，避免阻塞健康检查和取消。Cookie source JSON v2 的 `default_cookie_platforms` 明确选择本次启动默认平台；正常启动注册或复用可用 profile，`--check` 不注册或修改 profile。新任务与显式重试在同一 SQLite 事务中完成绑定，网页可选匿名；v1 和没有配置的平台保持匿名，重试无请求体保持旧绑定。配置失效拒绝默认模式，不静默降级；重复输入不改写现有任务。完整说明与证据见 [0.19 接入证据](validation/iteration-0.19.0-short-links-cookie-defaults-evidence.md) 和 7.9。本轮仅 synthetic/offline 与独立本地页面测试，没有真实平台、真实 Cookie 或新发布结论。
+
+上一轮 0.18.0 历史总结（不作为 0.19.0 发布证明）：
+
+Iteration 0.18.0 修复了“SQLite 允许总活动 2，但实际 Windows 入口串行执行”的产品缺口：一体化应用和独立 `local-worker --drain` / `--poll-interval-seconds` 现在使用同一双槽调度器，跨平台任务可重叠，空槽可在另一个任务未结束时立即补位，单次模式仍只执行一项。任务完成最后的文件清理前保留本地槽位和 job 排除；有本地在途工作时不运行目录、asset-intent 或过期 lease 回收。暂停写库失败锁存在当前 Worker，Ctrl+C/异常通过共享 subprocess stop 信号停止所属工具。实际入口先 red 后 green；heartbeat 与 reader 线程启动失败清理已修复，最终全量 `1307 passed, 8 skipped in 118.43s`、静态门禁与独立 spawned app `--check` 通过。0.18 source-equivalent package 预检已通过，文档冻结后的精确制品须匹配同一验收契约并由包外最终报告绑定。见 [0.18 并发证据](validation/iteration-0.18.0-concurrent-worker-evidence.md) 与本文件 7.8。没有新增真实平台请求、真实 Cookie 或浏览器验收；六平台仍为 `candidate`。
+
+上一轮 0.17.0 历史总结（保留，不作为 0.18.0 发布证明）：
+
+Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新代重试与 cooldown/manual reset 契约之上，为真实 yt-dlp 下载加入固定脱敏 stdout 控制协议和有界完整行观察器。字幕等 sidecar 不计入主媒体进度；顺序视频/音频与 indexed fragment 采用最多两个 transfer slot 的保守聚合，未知总量只续租不虚构百分比，进入 `postprocessing` 后阶段保持单调，输出映射、文件检查、验证与发布成功后才到 `ready=100%`。API/Web 显示持久化中文阶段、估算百分比、原生进度条与 ARIA。定向回归、独立 loopback synthetic 浏览器 QA、最终全量、静态门禁及 0.17 project-only source-equivalent package 已完成；没有新增真实平台、真实 Cookie、Stage 0、Linux/Docker、安装器或第三方再分发结论。
 
 ## 1. 权威规格与边界
 
@@ -20,17 +93,18 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 | 决策 | 当前值 | 证据状态 |
 |---|---|---|
 | 产品 | 单机/NAS、单管理员、私有自托管 | FastAPI 已实现；Windows 本机可独立使用；无认证且强制 loopback |
-| 批量/并发 | 每批 1–50；总活动 2；单平台 1 | 输入验证与 SQLite claim 事务强制；YouTube/X 双样本和 Instagram 单样本均已实际经过 Batch/claim/terminal 链 |
-| 数据 | Schema 8；旧 flat-v1 保留 | graph-v2 离线编排/恢复已验证；真实 X exact selector 未验证 |
-| 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；YouTube、X、Instagram 共三个精确输入已经本机直连 Worker 实跑，平台整体未验证 |
-| 短链 | 可信 egress 逐跳展开 | UDS/HMAC/replay/peer attestation 已离线实现；gate=0 |
-| 凭证 | 按平台 opaque ref；网页不编辑秘密 | DB 只存 ref；Cookie override 已静态验证；真实 Cookie 未挂载 |
-| 资产 | 不可变原件 + 脱敏 manifest/sidecar | fake/crash recovery、YouTube/X 双样本和 Instagram 单样本的真实 Worker/AssetStore/manifest/API 下载链均已验证；API 不暴露本机路径 |
-| 前端/API | Batch 提交、最近批次、状态、ready 资产、运行日志与声明式下载能力矩阵 | YouTube/X 双样本和 Instagram 单样本均可从最近批次重开并通过资产下载链接取回；能力 API/UI 只显示声明状态，不构成平台证明 |
-| 运行日志 | 控制面/Worker allowlist JSONL + 近期事件 API/UI | `local-worker` 已纳入既有脱敏、轮转、读取和前端展示契约；日志仍为 best-effort |
-| 部署 | Windows 控制面 + 本机直连 Worker；Docker Compose 单机候选 | 本机 direct Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
-| 备份 | DB 快照 + 已发布资产；秘密单独恢复 | Schema 8 Windows 小数据恢复已验证；无 Linux/NAS 证据 |
-| 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 源码和重新验证的 project-only sdist/wheel 可按许可分发；第三方 binary/container/tool bundle 仍 blocked |
+| 批量/并发 | 每批 1–50；单 Worker 进程总执行槽 2；单平台活动 Job 1 | 0.18 Windows app 与 standalone drain/poll 已接入真实调度循环，并由无网络屏障回归证明跨平台重叠与连续补位；SQLite claim 事务仍强制上限；历史真实样本不能证明本轮并发 |
+| 数据 | Schema 11；旧 flat-v1/graph 保留 | Schema 10 治理模型继续保留；新增单例 run-scoped Worker claim gate，canonical DDL、无 trigger、singleton/state/timestamp 均 fail closed，prepare/activate/stop 与 claim 通过 SQLite writer 顺序 fencing |
+| 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；0.17 固定脱敏 progress/phase 控制协议只在 download 启用，真实平台历史样本不等于本轮进度验收或平台整体验证 |
+| 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
+| 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
+| 资产 | 不可变原件 + 脱敏 manifest/sidecar | ready 列表含 thumbnail/caption DTO；原件与辅助产物分别由严格下载端点重验；API 不暴露本机路径或用户标题 |
+| 前端/API | 一体化入口自动打开 Batch、持久化阶段/估算进度、ready 原件/辅助产物、运行日志，以及 implementation/evidence/decision 三层能力视图 | 中文阶段、约百分比、原生 `<progress>` 与 ARIA 已通过 synthetic 隔离浏览器 QA；terminal failed flat Job 新代重试与 cooldown/manual reset 继续保留；没有网页能力审批按钮 |
+| 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
+| 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
+| 备份 | DB 快照 + 已发布资产；秘密单独恢复 | 当前 0.23.0 沿用 Schema 11，无新增 migration；备份回归纳入最终全量。Schema 8/9/10 须先由匹配历史版本恢复，在副本上 forward-migrate 后另建并实际恢复 Schema 11 基线 |
+| Stage 0 | CSV v3；七字段精确 identity | `product_version` 为版本 + 完整包载荷 hash；规范 source identity 防别名充样本；最新 partial run fail closed；报告 aggregate-only，导入只追加 evidence，approve/revoke 另走 revision CAS |
+| 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 0.19 project-only 包预检已通过 source-equivalence、metadata、法律文件、依赖、build identity 与隐私复核；最终重建须匹配冻结契约，精确 archive hash 只在包外报告；旧包记录保留为历史，第三方 binary/container/tool bundle 仍 blocked |
 
 ## 3. 累计交付
 
@@ -62,14 +136,14 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 
 ### 3.4 Iteration 0.7：Linux/Docker acceptance
 
-- [`run-linux-acceptance.sh`](deployment/run-linux-acceptance.sh) 默认 `--preflight`，不执行变更；full mode 额外要求精确授权 token、private env/override、digest-pinned tool image、deny-only policy、四 synthetic Cookie source、Schema 8 backup 和专用空根。
+- [`run-linux-acceptance.sh`](deployment/run-linux-acceptance.sh) 默认 `--preflight`，不执行变更；当前 full mode 额外要求精确授权 token、private env/override、digest-pinned tool image、deny-only policy、六 synthetic Cookie source、Schema 11 backup 和专用空根。
 - 必须由 clean trusted root launcher 以绝对路径启动；execute 要求 effective root。runner 要求 `bash -p`、固定 `/usr/bin/python3` 且验证 Python 3.12+，所有 host Python 均用 `-I`。
 - Docker endpoint 正确尊重非空 `DOCKER_CONTEXT` 高于 `DOCKER_HOST` 的官方优先级，任何 current/default context 也只能解析到 local Unix Linux daemon。execute 拒绝 inherited `DOCKER_CONTEXT`、`DOCKER_HOST`、`DOCKER_CONFIG`、`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY`、`BUILDKIT_HOST`、`BUILDX_BUILDER`、`COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`、`COMPOSE_PROFILES`。
 - private env/override 精确 `root:root 0600`；policy 精确 `root:10001 0440`，并检查 nlink/size/ACL/祖先/snapshot。baseline/effective Compose 逐 service 精确比较；除 reviewed Cookie wrapper 和两个 Worker-only read-only bind 外，任何 command、healthcheck、namespace、mount、network/IPAM/name、secret、hook 或非 Worker 变化均拒绝。
-- Dockerfile 无外部 syntax image；`wheel_builder`/`runtime` 两个 Python `FROM` 硬编码同一 3.12.13 digest，无 ARG override。`pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`，build/runtime lock 均 exact+hashed。唯一 package 联网步骤是 hash-checked、wheel-only `pip download`；后续 install/build 均 `RUN --network=none` + `--no-index`，项目 wheel 关闭 build isolation/deps 并按精确路径安装，runtime 最后 `pip check`。Lock 同时存在 wheel/sdist hashes 不会放行 sdist，`--only-binary=:all:` 会拒绝它。Runner 的 network-none runtime contract 另精确核对 13 个 runtime-lock distributions + project `0.10.0`，并拒绝 hatchling/packaging/pathspec/pluggy/trove-classifiers 五个 build-only distributions 泄漏；target Linux 尚未执行。
+- Dockerfile 无外部 syntax image；`wheel_builder`/`runtime` 两个 Python `FROM` 硬编码同一 3.12.13 digest，无 ARG override。`pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`，build/runtime lock 均 exact+hashed。唯一 package 联网步骤是 hash-checked、wheel-only `pip download`；后续 install/build 均 `RUN --network=none` + `--no-index`，项目 wheel 关闭 build isolation/deps 并按精确路径安装，runtime 最后 `pip check`。Lock 同时存在 wheel/sdist hashes 不会放行 sdist，`--only-binary=:all:` 会拒绝它。当前 Runner 的 network-none runtime contract 另精确核对 13 个 runtime-lock distributions + project `0.17.0`，并拒绝 hatchling/packaging/pathspec/pluggy/trove-classifiers 五个 build-only distributions 泄漏；target Linux 尚未执行。
 - Fresh local build tag 只作初始定位；runner 立即捕获/验证不可变 `sha256:...` image ID，把该 ID 写进 effective Compose，递归拒绝任意 string key/value 中的 `$`，在 env 同目录创建 `root:root 0600` frozen JSON。二次 `compose config` 必须与原 JSON 深等值、重过完整 validator 且 identity/snapshot 不变；之后 Compose mutation、direct runs、checkpoint image inspect 与 runtime container `Image` 校验全部绑定同一 ID，避免 tag rebind。正常退出按 identity 删除 frozen file，crash/identity drift 则保留供人工定点审计。
 - full mode 同时要求 non-pipe host `/proc/sys/kernel/core_pattern` 与 `RLIMIT_CORE=(0,0)`，并用 Docker inspect 确认 Cookie bind exact Source/Type/`RW=false`。
-- Full-mode 代码路径及静态测试设计覆盖 cold start、health、namespace/UDS、SSRF、peer attestation、SIGTERM/lease recovery、stale socket 和独立 Schema 8 restore。首个 Compose `up` 前已武装 scoped cleanup，因此部分启动后失败也会 stop；脚本无 recursive delete。目标 Linux/Compose execute 尚未发生。
+- Full-mode 代码路径及静态测试设计覆盖 cold start、health、namespace/UDS、SSRF、peer attestation、SIGTERM/lease recovery、stale socket 和独立 Schema 11 restore。首个 Compose `up` 前已武装 scoped cleanup，因此部分启动后失败也会 stop；脚本无 recursive delete。目标 Linux/Compose execute 尚未发生。
 
 ### 3.5 Iteration 0.7.1：前端、回归与许可证
 
@@ -126,12 +200,92 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 - 控制端与 `local-worker` 的字段白名单 JSONL 生命周期事件可读取；前端显示 0.10.0、`ready`、`1/1 ready` 和成品下载链接，实际下载可用，验收期间浏览器控制台无 error/warn。
 - 同轮探索中，Bilibili 公开电影样本遇 HTTP 412；Douyin 官方宣传样本要求 fresh cookies，因未提供 Cookie 正确终止为 `authentication_required`；TikTok 未实跑。精确 URL/Reel ID、账号内部 ID、运行 UUID、本机绝对路径、媒体指纹、签名 URL、Cookie 和日志原文均不进入公开证据。权威脱敏汇总见 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md)。这一条正向样本不是 Stage 0，所有能力继续为 `candidate`。
 
+### 3.11 Iteration 0.11.0：Schema 9、Stage 0 CSV v2 与 Bilibili 412
+
+- Schema 9 为 `platform_capabilities` 增加受约束的 `job_kind`，唯一索引纳入完整 route identity；Schema 8 既有行保守迁移为 `download`，readiness 检查列、CHECK 与索引形状。
+- Stage 0 样本/结果 CSV v2 都强制 `job_kind`，结果必须匹配样本；`expected_output_count` / `observed_output_count` 按 `download` 已发布完整验证资产与 `discover` 不可变 snapshot 唯一 child/source item 分别解释。旧 media-count 表头不自动兼容。
+- 报告按 `platform × source_type × job_kind × adapter × downloader_version × environment` 分格，只生成脱敏 Markdown，不运行下载器、不写能力表、不自动改变公开 API/UI 的 `candidate` 状态。
+- Bilibili 固定工具、同一公开样本、无 Cookie 的重复诊断得到 raw `2/2` 成功与产品 fresh attempt `4/6` 成功、`2/6` probe HTTP 412。只将该平台受限 412 标记映射为 `rate_limited`，让现有 Worker 退避/冷却；不添加 Cookie/header/代理绕过，不将间歇成功外推为稳定能力。
+- 升级前必须用 0.10.0 对精确 Schema 8 制作并恢复备份；副本迁移成功后，再用 0.11.0 对精确 Schema 9 制作并恢复另一基线。两次演练、应用版本与恢复工具必须分别保留。
+- 脱敏边界、Apache-2.0 与第三方 dependency/binary/container/tool-bundle 再分发门禁保持不变。公开证据见 [Iteration 0.11.0 Schema 9 / Bilibili 412](validation/iteration-0.11.0-schema9-bilibili-evidence.md)。
+
+### 3.12 Iteration 0.12.0：辅助产物、TikTok 短链与 MVP 路由离线 E2E
+
+- ready asset DTO 新增 `artifacts`，只列数据库登记的 thumbnail/caption metadata 和 opaque 下载 URL，不返回本机路径或用户标题；UI 只用 DOM API 构造链接。
+- `/api/v1/artifacts/{artifact_id}/download` 只服务 ready asset/job 下的 thumbnail/caption，并重验规范 UUID、唯一 parent original、目录/文件名/MIME/language、regular/single-link、identity、size 与 SHA-256；损坏旧 sidecar 逐行跳过，不影响有效原件。已校验内容进入 1 MiB memory-capped spool 后按 64 KiB 分块输出，正常、disconnect/cancel 与 `send` 异常均显式关句柄；响应固定文件名并带精确 `Content-Length`、`private, no-store`、`nosniff`。
+- TikTok `vm.tiktok.com` / `vt.tiktok.com` 进入默认关闭的短链 gate。受控 resolver 每跳继续执行 HTTPS、DNS public-address、numeric target 与 peer attestation，只接受五个精确 TikTok hostname，拒绝相似子域和后缀欺骗。
+- 隔离临时数据库、fake Worker 与 synthetic bytes 覆盖 YouTube video/Shorts、Bilibili BV/av、受 gate 保护的 Douyin 短链和 TXT/CSV 导入的规范化→队列→ready asset→下载闭环。没有真实媒体请求，也不构成 Stage 0。
+- 最终全量回归为 `969 passed, 8 skipped in 63.58s`；隔离 API/UI 显示 v0.12.0 / Schema 9 和 synthetic `1/1 ready`，原件、缩略图、字幕下载均成功，console 无 warning/error。公开证据见 [Iteration 0.12.0 artifact / TikTok evidence](validation/iteration-0.12.0-artifact-tiktok-evidence.md)。
+
+### 3.13 Iteration 0.13.0：Schema 10 capability governance
+
+- Stage 0 CSV v3 在 route identity 中加入 `product_version`，其值必须是 `0.13.0+build.sha256.<完整 64 hex>`；摘要覆盖按相对路径排序、带长度 framing 的 importable package 源码、数据与 sourceless bytecode，只排除可再生成的 `__pycache__/*.pyc`。缓存目录中的其他文件仍计入摘要，包根或内部 link/reparse/special file 会被拒绝，前后两次完整 inventory 还会识别哈希期间的新增、删除或 metadata 漂移。导入和 approve 精确匹配当前构建，并在事务提交前再次复核；history/readiness/revoke 保留旧构建历史。严格校验不重复表头、行宽、安全 token 与 manifest/result 的 `job_kind` 一致性。
+- 样本按 `job_kind + platform/source_type/source_id` 去重；TikTok 同一 video ID 的不同 handle、host 或 query 不能充成独立样本，跨 bundle 也得到同一 canonical evidence。Bilibili 同一投稿的 BV/av 双标识暂不做本地转换，因此 Stage 0 只接受 BV，普通下载入口仍接受两者。每一 identity 只看最新三次相关执行，较新的 partial run 不会被旧完整运行掩盖。
+- 脱敏报告改为 aggregate-only，不再输出 URL、URL hash、sample ID 或 run ID。导入端重新解析原始 CSV、使用固定 `stage0-v3` 门槛，并计算与行序、换行和规范 URL 别名无关的 canonical evidence digest；相同内容重复导入幂等，但永不自动批准。
+- Schema 10 将 Schema 9 可写 `platform_capabilities` 改名为不可写的 `capability_legacy_schema9` 档案；新增不可变 `capability_evidence`、append-only `capability_decisions` 与只读 current `platform_capabilities` view。UPDATE、DELETE 和 `INSERT OR REPLACE` 均被 guard 拒绝，连接启用 recursive triggers；readiness 复核 guard 及 root revoke 等语义。approve/revoke 要求精确 identity、允许的 reason code 和 expected revision；撤销后不能重放同一 evidence。被禁用 route 必须保留 registry tombstone，因此历史批准仍可撤销。
+- 启动 readiness 复核精确 1–10 migration history、表/view 类型、列/索引/trigger/FK、evidence identity/hash/policy/static-route，以及 decision revision chain/current view。HTTP probe 的完整审计最多缓存 5 秒，并用 SQLite schema cookie 立即识别 DDL；审计期间 schema 变化或最终 cookie 不可读会 fail closed。管理员、备份与恢复路径不使用该缓存。旧 Schema 9 的 `verified` 值不会复制到新 ledger，也不会变成当前批准。
+- 新增本地 `video-download-capabilities` CLI，以及 implementation/evidence/current decision/history 的兼容只读 API；CLI 要求既有 ready Schema 10、绝对规范且单 hard-link 的普通数据库文件，并在每次连接前后重验文件 identity；`list` / `history` 不会偷偷迁移旧库。`capability-snapshot` 在一次 readiness 后用单一 SQLite 读事务返回三层、当前 build identity、总数/截断状态，并补齐 current decision 引用的旧 evidence。前端只在首次打开或手动刷新时读取，按 `identity_key + evidence_id` 精确关联，区分当前/历史构建和被截断的未知状态，仍不提供变更按钮。CSV 或本地管理员不是受信硬件证明，能够伪造输入或同时改写数据库与 digest 的主体仍可伪造结论。
+- 本轮只使用 synthetic/offline 数据验证治理路径，不发起真实平台请求、不启用真实 Worker/短链/graph gate，也不在仓库中附带 evidence 数据库或批准记录。最终工程证据见 [Iteration 0.13.0 capability governance evidence](validation/iteration-0.13.0-capability-governance-evidence.md)。
+
+### 3.14 Iteration 0.14.0：Windows 本机 Worker Cookie 接入
+
+- `video-download-local-worker` 新增可重复的 `--cookie-source PLATFORM:OPAQUE_REF=ABSOLUTE_PATH`、有界 `--max-cookie-bytes` 与互斥 `--check`；同一 resolver 现在服务 Windows direct Worker 与 Linux candidate。CLI 配置拒绝非规范相对路径、重复平台以及 source 与 data/tool root 重叠。
+- Worker 在任何 claim 前验证全部 source：必须是只读、非空、有界、稳定、普通且非 link/reparse 的单链接文件；不同平台不能通过路径别名复用同一 `(device, inode)`。probe/download 各自获得新的 Attempt `secrets/*.cookies.txt` 副本，完成后删除，原 source 路径/ref/内容不写入业务库、普通日志或 Adapter request。
+- `--check` 使用真实 builder 验证现有 Schema 10 数据库、固定工具链、ffprobe 与 Cookie source，然后输出只含平台列表的 JSON；它不调用 `run_once()`。真实构建链回归会对 `download_jobs`、`job_attempts`、`media_assets`、`asset_commit_intents` 做前后快照，并确认没有 secrets 副本。日志使用 `worker.preflight_started/succeeded/failed`，不再伪装为常驻 Worker 已启动。
+- synthetic Douyin E2E 覆盖 profile 注册/分配、claim 校验、probe/download 两次独立 Cookie 副本、ready Asset 与 cleanup；Cookie/ref/path/content 泄漏标记均为 0 hit。Bilibili Stage 0 的 BV-only fail-closed 回归另用 pinned yt-dlp 已确认的 `BV13x41117TL ↔ av8903802` 等价对加固，普通下载仍接受 BV/av。
+- 本轮没有真实 Cookie、真实媒体请求或平台级结论。合法 Windows CLI 参数仍会出现在本机进程列表/PowerShell history，且当前未证明私有 NTFS DACL；`--check` 也不判断 queued Job credential coverage 或 Cookie 登录态有效性。只允许受信任单用户本机使用，生产凭据仍需 ACL + secret sidecar/per-platform/per-Attempt process isolation。工程证据见 [Iteration 0.14.0 local Cookie evidence](validation/iteration-0.14.0-local-cookie-evidence.md)。
+
+### 3.15 Iteration 0.15.0：Windows 一体化本机应用
+
+- `video-download-local-app` 默认使用 `%LOCALAPPDATA%\Open-Flame\video-download-control`，固定 `data\control.sqlite3` 与默认同根工具目录；不从 CWD 或环境中的旧 VDC 路径拼接隐式数据库。可显式覆盖绝对 app/tool root 与端口，但拒绝 root/UNC/device/reserved/trailing-dot-space、link/reparse 和 data/tool/config/source 重叠。
+- supervisor 在任何数据库/子进程副作用前以 `SO_EXCLUSIVEADDRUSE` 预占 `127.0.0.1`；以私有 Pipe 验证 control、Worker preflight、Worker ready 的严格 protocol/role/phase/run/build/schema 身份，并在每阶段调用 `/health` 与 capability snapshot。浏览器只在第三次验证后打开；失败只写脱敏 warning，不影响已就绪服务。
+- 一次启动由 `.local-app.lock`、Windows kill-on-close Job Object 和最小子进程环境管理。正常停止及异常清理均先关闭 Worker command channel、有限等待，再关闭 control；仍存活的本应用 Job 才会被定点终止。子进程忽略 console 信号，由 supervisor 处理 Ctrl+C/SIGBREAK；强杀任一子进程会得到固定 JSON 错误、回收另一进程并释放端口。
+- 旧共享 `multiprocessing.Event` 控制曾在 Worker 被强杀、恰好阻塞于 `Event.wait()` 时令父进程永久卡在 `Event.set()`；已以单向 Pipe 命令和 EOF stop 取代，并加入独立 spawn 子进程回归。真实 Windows `--check`、常驻 health/UI、Ctrl+C、10 次重复启动、同根 singleton、worker/control 强杀均使用独立随机 root/port 验证，未触碰用户既有 8000 服务。
+- `video-download-control --help` 现在会在读取运行配置前正常返回，不再意外尝试启动 8000 服务；13 个命令模块的 `--help` 均返回 0。
+- `--cookie-config` 只把一个配置文件路径放入 argv；严格 JSON snapshot 内的 ref/source path 不进入 CLI 输出和普通日志。真实凭据、Windows DACL 私有性、安装器/冻结 EXE、第三方工具包再分发和平台 Stage 0 仍未完成。工程证据见 [Iteration 0.15.0 local application evidence](validation/iteration-0.15.0-local-app-evidence.md)。
+
+### 3.16 Iteration 0.16.0：Schema 11 claim fencing 与显式 retry
+
+- Schema 11 新增唯一 `worker_claim_gate` 行，保存当前 `run_id`、`worker_id`、是否接受领取、激活时间与 stop 请求时间。readiness 要求规范化后的 canonical constrained DDL 精确匹配，拒绝 gate 上任何 trigger，并只接受严格 singleton 与 coherent pristine/prepared/active/stopped 状态。新 supervisor 在 control 身份就绪后先以关闭状态 `prepare` 并 fence 旧 run；Worker preflight 与第二次 HTTP 身份复核通过后才 `activate`，`--check` 永不打开 gate。
+- 一体化 Worker 将当前 `run_id` 作为 claim fencing token。`claim_next()` 在既有 `BEGIN IMMEDIATE` 写事务中先核对 run、worker 与 `accepting_claims`，再执行过期 lease 恢复、`queued → probing`、lease 写入和新 Attempt 插入；`stop_claim_gate()` 使用同一 SQLite writer serialization。若 stop 先提交，后续 claim 不创建 Job lease/Attempt；若 claim 先提交，该笔 active Attempt 保持已提交事实，stop 只阻止下一次领取。
+- supervisor 清理现在先提交 gate stop，再关闭 Worker command Pipe 并等待 Worker，随后关闭 control。`stop_claim_gate()` 在同一事务中写后重读；若状态未持久化或 SQLite stop 事务抛错，无法证明 stop-before-claim 顺序，则先 fail-safe 终止该应用拥有的 Windows Job，再触碰 advisory Pipe，并记录 forced shutdown；新 run 的 `prepare` 也会立即 fence 旧 generation。
+- active Attempt 的恢复沿用 lease 语义而不是“恢复同一 Attempt”：被强停的 lease 到期后，下一 run 在 claim 事务中把旧 Attempt 终止为 `abandoned` / `worker_lost`，清除旧 lease，再创建递增 attempt number 的新 Attempt。确定性 barrier 回归覆盖 claim-first、stop-first、旧 run fencing、idle EOF 不二次 `run_once()`，以及 stop 后等待 lease expiry 再重领。
+- 新增 `POST /api/v1/jobs/{job_id}/retry`，仅接受终态 `failed` 的 flat `download` Job；graph parent/child、非失败状态、同 source 已有 live/ready 工作及并发重复请求均 fail closed。成功请求在同一写事务中递增 `run_generation`、把 generation retry budget 归零、保留累计 Attempt 历史，并恢复 Input/Batch 为 queued。该动作不会关闭或绕过 platform circuit。
+- 前端只为可重试的 flat failure 显示“新一代”按钮；平台状态显示自动 cooldown 截止时间、一次 half-open probe，且只在 `requires_manual_reset=true` 时显示人工复位。reset API 对不存在平台返回 404，对无需人工复位或并发冲突返回 409；`job.retry_requested` / `circuit.reset` 只记录有界控制字段。异步 submit、queue 和 circuit refresh 均有 generation guard，过时响应不会回滚当前 UI。
+- claim gate 记录 prepared/activated/stopped 及 prepare/activate/stop failure/fenced 事件；forced shutdown 只接受 `gate_stop_failed + claim_gate_stop` 或 `child_timeout + child_shutdown` 配对，读取器拒绝不完整或篡改状态，日志不含路径、异常文本或重复 run ID。
+- synthetic `rate_limited → terminal failed → explicit retry → cooldown 等待 → ready` 已覆盖，旧/新 generation 的 Attempts 均保留，成功后 circuit 回到 closed。最终回归、真实 Windows 隔离 UI/active-lease 关停、日志和 project-only package 均已完成；本轮仍未运行真实下载、真实 Cookie、Stage 0、目标 Linux/Docker、安装器或第三方发布流程。
+
+### 3.17 Iteration 0.17.0：脱敏实时阶段估算
+
+- yt-dlp download 命令加入固定 `download:` / `postprocess:` progress template、`--progress --newline --progress-delta 0.5`；probe 不启用。控制行只含常量 presence bit 与有界状态/数值字段，不输出 URL、source/format ID、标题、文件名或路径。
+- subprocess runner 以 bounded buffer 流式观察 stdout 的完整 LF/CRLF/CR 行与末尾 fragment；超限 partial line 不交给 observer，observer 异常走既有有界停机并只记录异常类型/failure site。真实 Adapter 不观察 stderr；普通运行日志禁止原始 stdout/stderr、argv 与控制行内容。
+- parser 严格要求两个主媒体 presence bit，字幕/sidecar 因缺失而不参与 progress，但仍按原资产契约映射、验证与发布。顺序视频/音频占两个保守 slot；indexed fragment 聚合各 slot 最新 fraction，未知总量只 heartbeat 不造百分比。`total_bytes_estimate` 可为有限非负 int/float，只用于 ratio，不冒充 exact total；畸形/超限/多于两路均忽略。
+- Adapter 下载估算封顶低于完成，进入 `postprocessing` 后不退回 downloading；Worker 将其映射到 Job 的下载阶段区间，验证单列，只有 mapping、stat、完整验证和 ready 发布成功才写 `1.0`。这是一种阶段估算，不是精确全任务字节进度，单主流可能在进入后处理前保守停留于约半个下载区间。
+- Batch API 原样返回持久化 progress；Web 显示中文阶段、`约 N%`、原生 `<progress>` 与仅含 platform/phase/percent 的 ARIA。独立 loopback synthetic QA 已验证 queued `0%`、downloading `24%`、postprocessing `79%` 与 console 0 error，并释放验收端口且未触碰既有 8000 服务。
+- 已完成 broad/review/deterministic 聚焦回归、最终全量与静态检查，以及 project-only package 的 source-equivalence、identity、许可和隐私复核。权威记录见 [Iteration 0.17.0 real progress evidence](validation/iteration-0.17.0-real-progress-evidence.md)。本轮不新增真实平台、真实 Cookie、Stage 0、Linux/Docker 或第三方再分发结论。
+
+### 3.18 Iteration 0.18.0：单进程双槽执行
+
+- Windows app Worker child、standalone drain/poll 复用双槽协调器；实际执行可跨平台重叠并在空槽连续补位，不是只允许数据库领取两个任务。one-shot 与 check 模式保持原含义。
+- claim/execute 拆分，live Future 包括最后清理阶段；补位排除仍由本进程持有的 job，并关闭目录、intent 与过期 lease 回收。暂停写库失败锁存，共享 stop Event 处理中断，受控 `WORKER_LOST` 仍为 terminal/manual retry。
+- 入口先 red 后 green，`127 passed` 保留为阶段性记录；最终全量为 `1307 passed, 8 skipped in 118.43s`，reader 启动失败 4 项、Worker stop 5 项、实际入口 4 项均通过。静态门禁、独立 spawned `--check` 与 package 预检通过；冻结制品契约见 [0.18 并发证据](validation/iteration-0.18.0-concurrent-worker-evidence.md)。没有新真实平台、Cookie 或 UI 验收。
+
 ## 4. 已执行验证
 
-2026-09-03，Windows / Python 3.12.13 / uv 0.11.25。0.8.0–0.9.0 的历史基线保留；0.9.1 用独立版本承载 Apache-2.0 迁移，避免复用 proprietary 0.9.0 的制品版本号：
+0.19.0 最终全量为 `1410 passed, 8 skipped in 135.51s`；compileall、离线 lock（24 packages）、diff 与 35 Markdown 相对链接（0 missing）通过。默认模式/匿名/旧重试、短链导入、实际 Worker/Cookie 私有副本、前端可执行 JS、独立浏览器创建/取消均有回归。审查发现并修复 Cookie 状态接口遗漏日志路由白名单导致误降级；最终浏览器复验为正常/零拒绝/零写失败。真实 spawned local-app v2 synthetic `--check` 退出 0，三进程共享 run_id，profile/batch/job/attempt/asset 均为 0，未 claim/打开浏览器/复制 Cookie，三进程退出且 18821 可重新 bind。0.19 项目包预检通过 231 source / 232 sdist / 63 package / 99 wheel-RECORD / 32 legal / 13 CLI / 14 distributions，以及隐私 8 markers + 11 patterns 零命中；最终文档冻结后必须重新构建并验证同一契约，精确 hash 和最终结果仅保留在包外报告，不能复用预检 hash。
+
+当前 0.19.0 结果以本轮证据和包外最终报告为准。下方 0.18.0 的最终全量、静态门禁、独立 spawned app 与 source-equivalent package 记录，以及 0.17.0 和更早各行，均是 point-in-time 历史基线，不能自动继承为 0.19 通过。0.9.1 用独立版本承载 Apache-2.0 迁移，避免复用 proprietary 0.9.0 的制品版本号：
+
+0.19 文档完整后的冻结 inventory 为 **232 checkout source / 233 sdist 普通文件**；比上方早期预检多出本轮 evidence.md。63 package / 99 wheel-RECORD 与其余许可、CLI、依赖、隐私契约不变。最终报告必须对应包含本段最新文档的独立重建，不能把较早的预检或文档未完整版本作为最终包。
 
 | 检查 | 结果 |
 |---|---|
+| 0.18.0 实际入口 red reproduction | 阻塞第一个平台后，旧 local-worker drain/poll 与 app Worker child 不能启动第二个平台；actual entrypoint 回归先失败后修复。工具构建边界注入 synthetic Worker，不访问平台 |
+| 0.18.0 阶段性集中回归 | `127 passed`；仅覆盖当时实现切片，不是最终结果；后续线程启动和 stop 修复已纳入下方最终回归 |
+| 0.18.0 最终全量与静态门禁 | `1307 passed, 8 skipped in 118.43s`；`compileall -q src tests`、`uv lock --check --offline`（24 packages）、`git diff --check` 通过；34 个 Markdown 文件的相对链接检查 0 missing |
+| 0.18.0 故障/入口回归 | reader startup 4 个真实 child 回归、Worker stop 5 项、实际入口并发/中断 4 项通过；heartbeat 启动异常不再遗留无心跳的 running Attempt |
+| 0.18.0 独立 spawned app 预检 | 最终源码 `local_app_cli --check`、独立 app root/18819、固定本地 tool root；stdout 为 checked，preflight/stop JSONL 存在，未 claim、未使用 Cookie/媒体/浏览器，端口已释放 |
+| 0.18.0 package/许可/隐私契约 | 预检通过并冻结为最终重建门槛：221 checkout source、222 sdist 普通文件、61 package 文件逐字节一致、97 wheel/RECORD 条目、32 legal、13 CLI、14 runtime/project distributions；metadata/import 0.18.0/Apache-2.0/精确 NOTICE、依赖和 checkout/wheel build identity 一致；8 个已知真实标记与 11 类高置信秘密模式均 0 hit。精确最终 archive hash/重建结果只留在包外报告 |
 | 0.8.0 全套 pytest 历史基线 | `846 passed, 8 skipped` |
 | 0.8.1 全套 pytest 历史基线 | `853 passed, 8 skipped in 47.79s`；该版本构建、隔离 wheel 安装和本机服务复验均已完成 |
 | 0.9.0 全套 pytest 最终结果 | `881 passed, 8 skipped in 49.45s`；`compileall` 与 `uv lock --check --offline` 同步通过 |
@@ -139,6 +293,35 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 | 0.10.0 六平台路由阶段性 pytest | `914 passed, 8 skipped in 53.84s`；该数字早于本轮真实下载修复，只作为路由切片的时间点记录 |
 | 0.10.0 本轮最终全套 pytest | `920 passed, 8 skipped in 52.23s`；`compileall`、`uv lock --check --offline` 与 `git diff --check` 通过 |
 | 0.10.0 Instagram 单样本本机 E2E | 全新 data root、Windows direct/no-cookie/Node、固定 yt-dlp/FFmpeg；`1/1 ready`，DB/manifest/API copy/完整解码/清理/JSONL/UI 均通过；不是 Stage 0 |
+| 0.11.0 Bilibili 重复诊断 | 固定 yt-dlp `2026.08.19`、同一公开样本、无 Cookie；raw probe `2/2` 成功，产品同款 fresh attempt `4/6` 成功、`2/6` 在 probe 阶段 HTTP 412；只支持“瞬时平台门禁最符合观测”的推断，不是 Stage 0 或稳定下载证明 |
+| 0.11.0 Schema/migration/backup 定向回归 | `78 passed, 4 skipped`；Schema 8→9、并发迁移、readiness、Schema 9 backup/restore 与 Stage 0 CSV v2 均覆盖，skip 为目标 Linux/root 环境边界 |
+| 0.11.0 Bilibili/retry 定向回归 | `67 passed`；覆盖 probe/download 的 HTTP 412 与 API `code -412`、仅 Bilibili 生效、平台级 cooldown 及版本探测不误分类 |
+| 0.11.0 最终全套 pytest | `935 passed, 8 skipped in 56.55s`；`compileall`、`uv lock --check --offline` 与 `git diff --check` 通过 |
+| 0.11.0 隔离 API/UI 验收 | health 返回版本 `0.11.0`、Schema `9`；7 条能力均为 `candidate` 且显示 `job_kind=download`；完成 synthetic batch 创建/取消、日志刷新，浏览器控制台无 error/warn；隔离实例有意不配置工具根，未执行真实下载 |
+| 0.11.0 package 与隐私 | sdist/wheel 离线构建成功；wheel metadata 为 `0.11.0` / `Apache-2.0`，包含要求的项目法律材料；tracked tree 与解包 sdist 的敏感标记扫描通过，未跟踪媒体、数据库、Cookie、日志或 JSONL 运行产物 |
+| 0.12.0 辅助产物/TikTok/离线路由 | 离线定向回归 `160 passed in 14.08s`；辅助稳健性回归 `18 passed in 5.74s`；最终全套 `969 passed, 8 skipped in 63.58s`；覆盖损坏 sidecar、>1 MiB 流式响应/断连清理、TikTok gate/exact-host policy，以及 YouTube/Bilibili/Douyin/TXT/CSV fake E2E |
+| 0.12.0 隔离 API/UI | v0.12.0 / Schema 9；synthetic batch `1/1 ready`；页面列出并实际触发原件、缩略图与 en-US 字幕下载；API 内容/长度/安全头通过，浏览器 console 0 warning/error；未配置工具根、未访问真实平台 |
+| 0.12.0 package/许可/隐私 | 回填最终证据后的 source-equivalent sdist/wheel offline rebuild 与隔离 wheel 安装通过；metadata/import `0.12.0` / `Apache-2.0`、11 个 console scripts、32 个 legal files；53 个包源码文件逐字节匹配；193 个 publishable 源文件与两个 archive 的已知私有标记扫描 0 hit |
+| 0.13.0 capability governance 全量回归 | `1072 passed, 8 skipped in 81.80s`；`compileall`、离线 lock check、Ruff `E9,F63,F7,F82` 与 `git diff --check` 通过；默认完整 Ruff 规则集不是当前发布门禁 |
+| 0.13.0 隔离 API/UI/日志 | v0.13.0 / Schema 10；7 implementation、0 evidence、0 decision；YouTube/Bilibili/TikTok synthetic batch `3/3 ready`，3 个下载端点的内容/长度/hash/安全头匹配；control/offline-worker 日志无写入或拒绝事件，浏览器 console 0 warning/error；未访问真实平台 |
+| 0.13.0 package/许可/隐私 | 最终文档回填后离线重建并隔离安装；metadata/import `0.13.0` / `Apache-2.0`、12 个项目 console scripts、32 个 legal files；wheel 中 56 个 package 文件与 checkout 逐字节匹配，checkout/wheel build identity 相同；201 个 source-tree publishable 文件、202 个 sdist 文件条目、92 个 wheel 文件条目及两个 archive 的已知私有标记扫描 0 hit |
+| 0.14.0 Windows 本机 Worker/Cookie 回归 | `1084 passed, 8 skipped in 90.42s`；`compileall`、离线 lock check 与 `git diff --check` 通过；本机未安装 Ruff，因此不声称本版本 Ruff 通过 |
+| 0.14.0 独立 CLI/API/UI/日志 | 真实固定工具链 + synthetic Douyin Cookie source 的 `local-worker --check` 成功且数据库四张工作表前后不变；v0.14.0 / Schema 10；Bilibili/Douyin/TikTok synthetic batch `3/3 ready`，原件 API 内容/hash/安全头一致，浏览器 console 0 warning/error；Cookie 标记 0 hit，未访问真实平台 |
+| 0.14.0 package/许可/隐私 | 文档回填后离线重建并隔离安装；metadata/import `0.14.0` / `Apache-2.0`、12 个项目 console scripts、32 个 legal files；202 个 publishable/source 文件、203 个 sdist 条目、92 个 wheel 条目、56/56 个 package 文件逐字节一致；wheel 隐私/秘密扫描 0 hit，sdist 仅有 tests synthetic canary |
+| 0.15.0 一体化生命周期/回归 | local-app/control CLI 定向 `96 passed`，supervisor/API/Cookie 切片 `249 passed, 1 skipped`；最终全量 `1196 passed, 8 skipped in 93.06s`；`compileall`、离线 lock check 与 `git diff --check` 通过；check Worker 只有收到第二次 HTTP 身份校验后的专用完成命令才记录 `check_complete`，EOF 始终表示 supervisor shutdown |
+| 0.15.0 真实进程/UI/日志 | `--check`、10 次重复、singleton、Ctrl+C/SIGBREAK、worker/control 强杀与死 Pipe receiver 均有界收敛；随机根/port 的 v0.15.0 UI 完成四类刷新、safe `.invalid` 失败批次与重开，console 0 warning/error；三组件共享 `run_id`且泄漏 marker 0 hit |
+| 0.15.0 package/许可/隐私 | 最终文档回填后离线重建，从精确 sdist 构建 wheel 并隔离安装；metadata/import `0.15.0` / `Apache-2.0`、13 个 console scripts、32 个 legal files；211 个 publishable/source 文件、212 个 sdist 普通文件、96 个 wheel/RECORD 条目、60/60 个 package 文件逐字节一致；14 个隔离 runtime/project distributions 通过 dependency check，checkout/wheel build identity 一致，已知隐私与高置信凭据 marker 0 hit |
+| 0.16.0 claim/retry 核心阶段性回归 | 首轮定向核心回归 `243 passed in 28.11s`；发生在最终版本号与两阶段 prepare 调整前，只作为实现切片的时间点记录，不是当前发布验收 |
+| 0.16.0 最终聚焦回归 | claim/migration/backup 四模块 `101 passed in 27.92s`；local-app/log/API 四模块 `135 passed in 9.01s`；两个不重叠切片合计 236 tests，覆盖 exact gate DDL/trigger/state、stop 写后验证、生命周期日志、UI generation guards、retry/circuit 与备份 |
+| 0.16.0 首次全量阶段性回归 | `1219 passed, 8 skipped in 99.56s`；该次发生在后续 hardening 前，仅作为时间点记录 |
+| 0.16.0 最终全量与静态门禁 | `1238 passed, 8 skipped in 104.14s`；`compileall -q src tests`、`uv lock --check --offline` 与 `git diff --check` 通过 |
+| 0.16.0 真实 Windows UI/日志/active lease | 独立随机根/端口的 `--check` 与完整 TTY 生命周期均正确 prepare/activate/stop 并释放端口；延迟旧 submit/queue/circuit 响应不覆盖新状态，console 0 warning/error；外部 claim 提交 Attempt 1 后正常 stop 关闭 gate 且不倒写 active lease，Worker 尚未启动媒体、无平台请求；日志 write/reject/leak marker 均为 0，用户既有 8000 未动 |
+| 0.16.0 package/许可/隐私 | 最终文档回填后离线重建，从精确 sdist 构建 wheel 并按 runtime lock 隔离安装；metadata/import `0.16.0` / `Apache-2.0`、13 个 console scripts、32 个 legal files及精确 NOTICE；212 个 checkout publishable 文件、213 个 sdist 普通文件、96 个 wheel/RECORD 条目、60/60 个 package 文件逐字节一致；14 个 runtime/project distributions 通过 dependency check，checkout/wheel build identity 一致，已知真实隐私标记与高置信秘密 0 hit |
+| 0.17.0 broad progress 聚焦回归 | `186 passed in 24.95s`；覆盖 Adapter/parser/runner/Worker/API/UI 的较宽实现切片，属于阶段性工程证据 |
+| 0.17.0 review 聚焦回归 | `149 passed in 13.66s`；另有两个确定性握手回归 `2 passed in 1.34s` |
+| 0.17.0 隔离浏览器 QA | gitignored 独立根与 `127.0.0.1:18779` synthetic YouTube Batch：queued `0%`；DB 状态 downloading `0.24` 显示“正在下载 / 约 24%”；postprocessing `0.79` 显示“正在合并/后处理 / 约 79%”；原生 progress value/ARIA 正确，console 0 error；服务已关闭并释放 18779，既有 loopback 8000 未动 |
+| 0.17.0 最终全量与静态门禁 | `1270 passed, 8 skipped in 106.62s`；`compileall -q src tests`、`uv lock --check --offline`、`git diff --check` 通过；26 个 Markdown 文件的相对链接检查为 0 missing |
+| 0.17.0 package/许可/隐私 | 最终文档回填后离线重建，从精确 sdist 构建 wheel 并按 runtime lock 隔离安装；metadata/import `0.17.0` / `Apache-2.0`、13 个 console scripts、32 个 legal files及精确 NOTICE；215 个 checkout publishable 文件、216 个 sdist 普通文件（215 source）、96 个 wheel/RECORD 条目、60/60 个 package 文件逐字节一致；14 个 runtime/project distributions 通过 dependency check，checkout/wheel build identity 一致，已知真实隐私标记与高置信秘密 0 hit。精确 archive hash 只留在 gitignored verifier/外部验收报告，避免源内自引用 |
 | 0.9.0 本机 Worker/API/UI/日志 | Windows-only direct Worker 的双重显式启用、Schema/toolchain/logger/singleton lock、claim/phase/terminal；最近批次、ready asset list/download、路径/identity/size 拒绝；`local-worker` 日志读取均已纳入当前测试集 |
 | 最终 v3 双样本 E2E | 两个 Job 均被真实 Worker claim 并 `ready`；输入 URL、运行时 UUID 与媒体指纹不进入公开记录，完整值保留在 gitignored 本机证据中 |
 | 资产 API 与完整解码 | 两个 `/api/v1/assets/{asset_id}/download` 均返回完整原件；下载文件 size/SHA-256 与 DB/manifest 一致，两个文件完整流解码 clean |
@@ -147,11 +330,23 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 | 0.9.1 Apache package | sdist/wheel 独立构建并隔离安装通过；metadata `0.9.1`、`Apache-2.0`、11 个 console scripts、32 个 legal files；不含日志、数据库、媒体、`runtime-tools` 或 `validation/local` |
 | 0.10.0 package | sdist/wheel 离线构建成功；metadata `0.10.0`、`Apache-2.0`、11 个项目 console scripts 与包内容隐私边界通过；临时验证产物已删除 |
 
-最终 0.10.0 回归中的 8 个 skip 均为明示环境边界：1 个 POSIX Cookie directory-FD cleanup、4 个 root POSIX/getfacl 的 0/1/3/6 source metadata contract、1 个真实 AF_UNIX roundtrip、2 个 POSIX path-swap/permission test。必须在目标 Linux 重跑，不得当作通过。
+0.16.0 最终全量中的 8 个 skip 均为明示环境边界：1 个 POSIX Cookie directory-FD cleanup、4 个 root POSIX/getfacl 的 0/1/3/6 source metadata contract、1 个当前 Windows 环境不可用的 AF_UNIX roundtrip、1 个 POSIX open-file replacement、1 个 POSIX permission test。必须在目标 Linux 重跑，且不得当作通过。
 
-0.9.0 最终 v3 的 gitignored 原始数据库、资产/manifest、API 下载和 JSONL 位于 `validation/local/local-worker-e2e-20260903-v3/`，可提交汇总见 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md)。0.10.0 的 Instagram 单样本临时 data root 已在取证后定点删除，只提交 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md) 的去标识汇总。0.8.1 的一次性工具样本见 [Iteration 0.8.1 live platform evidence](validation/iteration-0.8.1-live-platform-evidence.md)；[Iteration 0.8.0 local toolchain evidence](validation/iteration-0.8.0-local-toolchain-evidence.md)、[Iteration 0.7.2 runtime logging evidence](validation/iteration-0.7.2-runtime-logging-evidence.md) 与 0.7.1 的 [debug/use/license evidence](validation/iteration-0.7.1-debug-use-license-evidence.md) 保留为历史基线。`dist/` 中的 0.9.0 及更早制品都是 proprietary 历史包，不得发布或使用通配符上传；当前 Apache-2.0 构建必须使用 0.10.0，并在 gitignored 独立目录验证。
+0.9.0 最终 v3 的 gitignored 原始数据库、资产/manifest、API 下载和 JSONL 位于 `validation/local/local-worker-e2e-20260903-v3/`，可提交汇总见 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md)。0.10.0 的 Instagram 单样本临时 data root 已在取证后定点删除，只提交 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md) 的去标识汇总。0.11.0 的 Schema/CSV/412、0.12.0 的辅助产物/TikTok/离线 E2E、0.13.0 的 capability governance、0.14.0 的本机 Cookie 接入与 0.15.0 的一体化应用汇总只在各自公开证据文件保留去标识事实。`dist/` 中的 0.9.0 及更早制品都是 proprietary 历史包，不得发布或使用通配符上传；0.16.0 project-only Apache-2.0 sdist/wheel 已在新的 gitignored 独立目录从最终源码重建并验证，没有覆盖或改名复用旧制品。该结果不包含第三方可再分发工具、安装器、wheelhouse 或 OCI image。
 
-明确未执行：TikTok 真实下载请求、Docker build/pull/up、Linux namespace/UDS/ACL/resource/core-pattern/runtime bind、真实 Cookie 流程、完整 Stage 0、X exact selector、Linux/NAS 恢复验收，以及任何第三方 binary/container/tool-bundle 发布。Bilibili 与 Douyin 已发起真实尝试但未形成 ready 资产；Instagram 仅有一条成功样本。项目自有源码已获 Apache-2.0 授权；不得把离线链路、失败探索或 YouTube/X/Instagram 三个精确输入的成功外推为平台级兼容性。
+0.13.0 本轮明确没有发起任何真实媒体请求；仅执行 synthetic/offline Worker 和隔离 UI/API 验收。仍未执行：TikTok 真实下载请求、Docker build/pull/up、Linux namespace/UDS/ACL/resource/core-pattern/runtime bind、真实 Cookie 流程、完整 Stage 0、X exact selector、Schema 8→9/10 的目标生产数据迁移前后恢复演练、Linux/NAS 恢复验收，以及任何第三方 binary/container/tool-bundle 发布。历史上的 Bilibili 重复 probe 诊断未形成 ready 资产，Douyin 尝试也无 ready 资产；Instagram 仅有一条成功样本。项目自有源码已获 Apache-2.0 授权；不得把离线链路、间歇 probe、失败探索或 YouTube/X/Instagram 三个精确输入的成功外推为平台级兼容性。
+
+0.14.0 同样没有发起真实媒体请求，也没有接触真实 Cookie；只使用 synthetic Cookie/fake media 验证 Windows 本机 Worker 的凭据接线。不得把这条工程回归写成 Douyin、TikTok、Bilibili 或 Instagram 的真实登录态下载成功。
+
+0.15.0 也没有发起真实平台请求或使用真实 Cookie；浏览器验收只提交保留的 `.invalid` 输入并在本地规范化阶段终止。该轮只证明一体化生命周期，不新增任何平台结论。
+
+0.16.0 同样没有发起真实平台请求或使用真实 Cookie；`rate_limited → retry → ready`、浏览器 manual reset 及真实 spawned active lease 都使用 synthetic/no-network 状态。active lease 只证明已提交 Attempt 的关停语义，不是 active platform download。该轮只能证明 claim fencing、显式 retry、UI 竞态与 circuit 展示的受测契约，不能升级任何平台能力、隔离部署或第三方再分发状态。
+
+0.17.0 同样没有发起真实平台请求或使用真实 Cookie；进度浏览器验收通过直接注入 synthetic 持久化阶段，只证明 API/DOM/ARIA 展示与阶段单调契约。顺序/fragment/sidecar/未知总量由确定性测试和固定 bundle 的离线模板求值覆盖，不是平台网络实跑。最终全量、静态检查与 project-only package 已通过，但这些结果不能升级任何平台、Linux 隔离或第三方再分发状态。
+
+0.18.0 本轮只新增无网络的并发/入口/中断工程回归；没有新浏览器验收，也没有使用真实 Cookie 或访问真实媒体平台。`WORKER_LOST` 经现有 retry policy 处理时为终态失败，不自动重试；合法 flat failed Job 可由用户显式发起新一代重试。该受控中断与进程强杀后由 lease-expiry recovery 创建新 Attempt 是不同路径，不能混写。
+
+0.18.0 最终全量的 8 个 skip 为 POSIX directory-FD cleanup 1 项、root/getfacl Cookie source metadata 4 项、AF_UNIX roundtrip 1 项、POSIX open-file replacement 1 项、POSIX permission 1 项；不是通过，仍需目标 Linux 验证。当时 checkout/wheel package-payload identity 为 `0.18.0+build.sha256.b36396390d9782343f0b3579d220e6a32314e4c78ffc82d4fd55a98f518afdf2`，它不是当前 0.19 identity 或包含本交接文件的 archive hash。
 
 ## 5. 继续工作入口
 
@@ -160,7 +355,8 @@ Iteration 0.10.0 在 0.9.1 的 Apache-2.0 基线上加入不可变下载能力�
 ```powershell
 uv sync --extra dev
 uv run pytest -q
-uv run video-download-control
+$ToolRoot = (Resolve-Path -LiteralPath ".\runtime-tools\windows-x64").Path
+uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 ```
 
 依赖变更只在受审阅分支刷新，随后检查 lock diff、target wheel availability、hash/publisher/provenance 与 license：
@@ -180,53 +376,30 @@ uv run --frozen pytest -q \
 
 默认地址 `http://127.0.0.1:8000`；不自动读 `.env`。普通 offline fake 只验证 flat-v1，必须保持 `VDC_ENABLE_X_GRAPH_V2=0` 和 `VDC_ENABLE_SHORT_LINK_RESOLUTION=0`。
 
-Windows 本机工具验收入口：
+Windows 本机工具与一体化入口：
 
 ```powershell
 $ToolRoot = (Resolve-Path -LiteralPath ".\runtime-tools\windows-x64").Path
 uv run video-download-tools verify --tool-root $ToolRoot
 uv run video-download-tools smoke --tool-root $ToolRoot
 uv run video-download-tools status --tool-root $ToolRoot
-$env:VDC_TOOL_ROOT = $ToolRoot
-uv run video-download-control
-```
-
-页面中的工具 `ready` 只证明固定工具完整且离线 smoke 通过；`local_direct_worker_available=true` 只表示当前 Windows 主机具备显式启动入口。控制面不会猜测外部 Worker 进程是否存活，三项 `network_download_enabled` / `isolated_worker_ready` / `platform_download_verified` gate 仍应保持 `false`。
-
-Windows 本机实际下载必须同时运行控制面和独立 Worker。终端 A：
-
-```powershell
-$DataRoot = (Join-Path (Resolve-Path '.').Path 'data')
-$ToolRoot = (Resolve-Path '.\runtime-tools\windows-x64').Path
-$env:VDC_DATA_ROOT = $DataRoot
-$env:VDC_TOOL_ROOT = $ToolRoot
-$env:VDC_ENABLE_X_GRAPH_V2 = '0'
-uv run video-download-control
-```
-
-终端 B：
-
-```powershell
-$DataRoot = (Join-Path (Resolve-Path '.').Path 'data')
-$ToolRoot = (Resolve-Path '.\runtime-tools\windows-x64').Path
-$Node = (Get-Command node.exe).Source
-$env:VDC_ENABLE_LOCAL_REAL_WORKER = '1'
-uv run video-download-local-worker `
-  --data-root $DataRoot `
+uv run video-download-local-app `
   --tool-root $ToolRoot `
-  --js-runtime "node:$Node" `
   --allow-direct-network `
-  --poll-interval-seconds 2
+  --check
+uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 ```
 
-随后打开 `http://127.0.0.1:8000`。页面可提交批次、打开“最近批次”、观察 terminal 状态，并在 `ready`/`partial_success` 批次的“可下载成品”区域直接取回文件；“运行日志”可检查 control 与 `local-worker` 近期事件。两个进程均用 `Ctrl+C` 正常停止。本机 Worker 是 direct-network 模式，不等同于隔离 deployment Worker。
+页面中的工具 `ready` 只证明固定工具完整且离线 smoke 通过；`local_direct_worker_available=true` 只表示当前 Windows 主机具备显式启动入口。一体化 supervisor 会确认它自己的控制面和 Worker 身份，但对外 API 仍不把三项 `network_download_enabled` / `isolated_worker_ready` / `platform_download_verified` gate 猜成 `true`。
+
+普通 Windows 实际下载只启动一个 `video-download-local-app`；它在三次私有握手/HTTP 身份校验后打开浏览器，`Ctrl+C` 先停 Worker 再停控制面。需要 Cookie 时，先按 Runbook 7.2 登记/分配 profile，然后按 Runbook 2.2 只向一体化入口传入受保护的 `--cookie-config` 路径。单独的 `video-download-control` 和 `video-download-local-worker` 只保留给高级排障。本机 Worker 是 direct-network 模式，不等同于隔离 deployment Worker。
 
 部署前必读：[Deployment candidate](deployment/README.md)、[Runbook](docs/RUNBOOK.md)、[Linux/Docker checklist](validation/linux-docker-acceptance.md)。full acceptance 必须由 clean trusted root launcher 以绝对路径、清空环境和 `bash -p` 启动，只使用 synthetic Cookie source 和 deny-only `replace.invalid` policy。授权 token、owner/mode/ACL、保留证据和清理边界以 checklist 为准。
 
 ## 6. 未完成项与残余风险
 
-1. Stage 0 未执行；YouTube/X 各一个明确样本和 Instagram 一个 NASA 官方公开样本的 Windows 本机全链路成功仍不足以完成平台认证，六平台继续为 `candidate`，X graph-v2 另外保持 `disabled`。Bilibili 的 HTTP 412 与 Douyin 的 `authentication_required` 是当前单次尝试结果，不是平台级否定结论。
-2. Cookie override 只是 service-level isolation：单个被攻陷的 Worker/downloader 可读全部平台 source。真凭据前必须改为 credential sidecar、per-platform Worker 或 per-Attempt mount namespace。
+1. Stage 0 未执行；CSV v3 按 `platform × source_type × job_kind × adapter × downloader_version × environment × product_version` 分格，`product_version` 必须是版本号加当前完整 package-payload hash。报告不写数据库，导入只追加 evidence，批准/撤销另走本地 revision CAS。仓库没有当前批准记录。YouTube/X 各一个明确样本和 Instagram 一个 NASA 官方公开样本的 Windows 本机全链路成功仍不足以完成平台认证，六平台兼容视图继续为 `candidate`，X graph-v2 另外保持 `disabled`。Bilibili 重复 probe 中的间歇 HTTP 412 与 Douyin 的 `authentication_required` 都不是平台级否定或支持结论。
+2. Linux Cookie override 只是 service-level isolation：单个被攻陷的 Worker/downloader 可读全部平台 source。Windows 一体化入口只在 argv 中暴露受保护的 config 路径，但高级手动 `--cookie-source` 仍会在进程命令行/PowerShell history 暴露合法 ref 与绝对 source 路径，且 readonly 不等于私有 NTFS DACL。真凭据前必须补 owner/DACL 实证，并改为 credential sidecar、per-platform Worker 或 per-Attempt process/mount namespace。
 3. DNS/replay OS blocking I/O 不可强制取消；slot 有界并 fail-fast，但 replay root 必须是可靠本地文件系统，更强保证需 process isolation。injected resolver 仍须遵守 timeout contract。
 4. short-link egress 还没进 Compose/supervisor；真实 POSIX owner/mode、TLS/SNI、DNS rebinding、restart/replay 和 redirect chain 仍是 target gate。
 5. acceptance 依赖 clean root launcher、reviewed/exclusive checkout/build context、local Docker/BuildKit 和无 physical alias/pre-existing bind mount。Unix Docker socket 不能单独证明 daemon/build/mount namespace 同机；Cookie root 的 host `nodev,nosuid,noexec` mount flags 也是 operator prerequisite，runner/YAML 当前不证明。
@@ -235,17 +408,19 @@ uv run video-download-local-worker `
 8. Host pipe `core_pattern` 会使 `RLIMIT_CORE=0` 不足以排除 crash capture；runner 已 fail closed，但目标 host 尚未验证。
 9. yt-dlp 的 remote components 继续禁用；显式单一 JS runtime 接线已实现，本轮 YouTube 既完成 Node.js A/B 探测，也在最终本机 Worker E2E 中显式使用 Node。Node.js 尚未进入 tool bundle lock，未配置时仍默认 `--no-js-runtimes`，因此不能把单样本结果外推为 YouTube 全站兼容。
 10. 控制面与 ready 资产下载 API 无认证，只允许 loopback；不得直接监听 LAN/公网。本机 direct Worker 使用宿主机直连网络，双重显式开关与单实例锁只减少误启动/并发冲突，不提供 Linux 隔离 Worker 的网络边界。
-11. control 与 `local-worker` 日志已统一到本机 best-effort JSONL，但仍无集中采集、告警、反代、存储配额或灾难切换；日志不能替代 SQLite、manifest、备份和外部监控。
+11. supervisor、control 与 `local-worker` 日志已统一到共享 `run_id` 的本机 best-effort JSONL，但仍无集中采集、告警、反代、存储配额或灾难切换；日志不能替代 SQLite、manifest、备份和外部监控。
 12. 首次公开 Git 提交使用 GitHub `noreply` 作者身份，避免把本机真实邮箱写入永久历史；远端已有历史必须线性保留，禁止 force push。
 13. 项目权利人已明确授予 Apache-2.0，版权声明为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu`。这只闭合项目自有源码、文档和脚本的公开许可，不重新许可任何第三方材料。
 14. `pydantic-core` 的原生 Rust 闭包必须按实际 target/architecture 生成 Cargo SBOM、依赖映射和法律文件包；Linux amd64 调查不能外推到 Windows、macOS、ARM 或其他目标。
 15. Python base image 必须按目标平台的 OCI child manifest 审计 OS packages 与许可证；multi-arch index digest 和上游 `NOASSERTION` SBOM 不能代替这一工作。
 16. Windows x64 yt-dlp/FFmpeg/ffprobe 本机 bundle 已安装、hash/version/configuration 校验并完成离线 smoke，YouTube、X、Instagram 共三个精确输入也已经过 Worker/AssetStore/manifest/API/UI 全链路；但对应源码/build closure、完整 SBOM、目标架构法律文本和人工批准仍未闭合，故该第三方工具包及包含它的容器/二进制再分发继续 blocked。detached signature 目前只保留，未完成密码学验签。
-17. 0.9.0 最终回归为 `881 passed, 8 skipped`；sdist/wheel、隔离安装、31 个法律文件、11 个命令入口与包外 SHA-256 已复验。`pip-audit` 只是 2026-09-03 的时间点扫描；Bandit 仍保留已逐项审阅的 low 告警，全库默认 Ruff 仍有 91 条非门禁历史建议。
+17. 0.9.0 的 `881 passed, 8 skipped`、31 个法律文件和 11 个入口仅是 proprietary 历史记录。0.13.0 当时的关键 Ruff 错误规则 `E9,F63,F7,F82` 已通过；本机当前未安装 Ruff，因此不声称 0.17.0 Ruff 通过，也不能误称全库 Ruff clean。`pip-audit` 也只是 2026-09-03 的时间点扫描，不代表当前或未来无漏洞。
 18. Candidate tool validator 现在会实际读取 `sources/` 下的 source artifact，拒绝缺失、路径越界、目录、symlink/reparse、hardlink、空文件和 SHA-256 不符；但其 SBOM 检查仍只验证受 hash 约束的非空 JSON 形状，不能替代组件语义审计或法律批准。
 19. 0.9.1 Apache 迁移后全量回归为 `882 passed, 8 skipped`；独立 sdist/wheel 构建、隔离安装、`Apache-2.0` metadata、32 个法律文件与 11 个命令入口已复验。构建只写入 gitignored 验收目录，不覆盖 proprietary 0.9.0 制品。
+20. v0.16.0 已把一体化 run 的 stop 与新 lease/Attempt 领取线性化：以 SQLite writer transaction 的提交顺序为准，不能把 console 信号到达时刻当作线性化点。stop 不撤销已先提交的 active Attempt；强停后要等待 lease expiry，旧 Attempt 才会变为 `abandoned/worker_lost` 并由新 Attempt 重领。`run_once()` 在最终 claim 事务前仍可能执行有界的终态目录 reconciliation 或 asset-intent recovery，因此这里只承诺 stop commit 后不新增该 run 的 Job lease/Attempt，不宣称“停止后零文件系统副作用”或强制取消阻塞 I/O。当前 deterministic repository/cleanup 回归已覆盖此契约，真实平台 active-download 强停不属于本轮证据。
+21. v0.17.0 progress 是保守阶段估算，不是全任务精确 byte accounting。字幕/sidecar 不推动进度，未知总量不显示伪百分比，顺序双流最多按两个 slot 聚合，单流可能在后处理前停留于较低估算；浏览器约 2 秒轮询也可能错过很短阶段。为保持隐私，普通排障不得打开原始 stdout/stderr、argv、URL、source ID、标题、文件名或路径日志。
 
-## 7. Iteration 0.10.0 收尾与后续精确入口
+## 7. 历史收尾与后续精确入口
 
 1. 保留 `validation/local/local-worker-e2e-20260903-v3/` 的历史 YouTube/X exact batch；Instagram 单样本的临时 data root 已删除，只保留 [Iteration 0.10.0 Instagram live evidence](validation/iteration-0.10.0-instagram-live-evidence.md) 的公开脱敏汇总。继续保持 [Iteration 0.9.0 local Worker E2E evidence](validation/iteration-0.9.0-local-worker-e2e-evidence.md) 的既有边界，不把原始媒体、精确 URL 或运行标识纳入可分发制品。
 2. 在用户明确授权准备系统运行时后，于 clean target Linux/WSL 或 Docker 环境用 synthetic-only 输入先跑 preflight；修正环境后再由用户/运维明确授权 full mode，保留 JSONL、restore root 和 stale socket。
@@ -255,7 +430,89 @@ uv run video-download-local-worker `
 6. 延续 Bilibili → Douyin → TikTok → Instagram 的验收优先级：先调查 Bilibili HTTP 412 的可复现边界；Douyin 仅在用户提供 fresh cookies 并确认授权后重跑；再执行 TikTok 首个真实样本；最后把 Instagram 从当前一个正向样本扩展到正式 Stage 0。每个 evidence identity 仍需 10+ 正向、独立负向和连续三轮；X 只在真实 stable key/exact-one-selector 通过后才考虑开 graph gate。
 7. 项目自有源码已按 Apache-2.0 公开；如需发布 dependency wheelhouse、冻结可执行文件、OCI/container image 或 tool bundle，仍须按实际目标架构完成 `pydantic-core` Cargo closure、Python base OS/OCI child image 与精确 tool bundle 的 SBOM/法律文件/源码义务审计，并对 source artifact 与 SBOM 做语义核验，通过第三方发布门禁后才允许交付。
 
+### 7.1 Iteration 0.11.0 后续精确入口
+
+1. 0.11.0 全量回归、migration/backup targeted tests、`compileall`、离线 lock check、包构建与隐私清单已完成并记录；后续不得沿用 0.10.0 的测试数或制品。
+2. 在真实迁移前，用 v0.10.0 对 Schema 8 制作备份并恢复到独立新根；在副本上迁移到 Schema 9 后，再用 v0.11.0 制作并恢复第二个基线。两次演练都要保留匹配的应用与恢复工具。
+3. Stage 0 只用 CSV v2：`download` 统计已发布完整验证资产，`discover` 统计不可变 snapshot 唯一 child/source item；旧 CSV 不转换，直接 fail closed。报告生成后仍需人工审阅，不能直接写能力表或晋级 API。
+4. Bilibili 保持 `candidate`。后续在已授权样本集上观测 412 频率、阶段与 cooldown 行为；不要通过 Cookie/header/代理绕过，也不要把偶发成功 probe 表述为下载能力已修复。
+5. 延续 Douyin（仅在用户提供 fresh cookies 并确认授权后）→ TikTok → Instagram Stage 0 的优先级；每个 route-specific identity 分别满足样本量和连续三轮门槛。
+
+### 7.2 Iteration 0.12.0 后续精确入口
+
+1. 0.12.0 全量回归、package/隔离安装与隐私扫描已经完成；该节只保留历史边界，当前不得沿用 0.11.0 或 0.12.0 的数字作为 0.13.0 证明。
+2. 0.12.0 已在 loopback 隔离实例验证含 thumbnail/caption 的 ready asset 列表、辅助下载和 UI；后续继续禁止用用户标题或本机路径作为下载文件名。
+3. TikTok 短链真实验收只能在用户授权样本、target POSIX、受控 egress service 与 gate 明确开启时进行；保持精确 host allowlist，禁止扩大为任意子域。
+4. 当时的 YouTube/Bilibili/Douyin/TXT/CSV E2E 只使用 fake adapter；0.13.0 已升级为 CSV v3/product-build identity，平台 Stage 0 必须按 v3 重新独立完成，旧 v2 不转换。
+
+### 7.3 Iteration 0.13.0 后续精确入口
+
+1. 这是 0.13.0 当时的历史入口，已由下方 7.4 取代：用户 `127.0.0.1:8000` 进程需在原终端正常 `Ctrl+C` 后重启；当轮验收使用独立端口，没有终止或替换该进程。不要再按本条选择版本。
+2. 不得把 `validation/local/` 中的 synthetic QA 数据库、evidence 或 decision 复制到生产；仓库也不得附带任何批准数据库。
+3. 真实 Stage 0 必须在 Git 仓库外的私有目录使用 CSV v3、当前精确 build identity 与 ready Schema 10 单 hard-link 数据库。Bilibili Stage 0 只接受 BV；导入后由独立复核者使用 expected revision 明确 approve/revoke。
+4. 发布或维护时先正常停止所有控制面和 Worker，再替换只读 package，随后核对 checkout/wheel build identity、Schema readiness 与恢复基线；不要在运行中的包目录热替换文件。
+5. 目标 Linux/root 的 8 个跳过项、Docker/UDS/ACL/Cookie/恢复门禁、真实六平台 Stage 0 和第三方再分发审计仍是下一阶段，不因 Windows synthetic 验收而解除。
+
+### 7.4 Iteration 0.14.0 历史入口（已由 7.5 取代）
+
+1. 当时的 8000 服务未被本轮开发/验收杀死或替换；若要切换，仍须由用户在原终端正常 `Ctrl+C`，再启动当前 v0.15 一体化入口。
+2. Windows `video-download-local-app` supervisor 已在 0.15.0 完成，该条不再是未完成项。
+3. 随后为 terminal failed Job 提供显式 retry/new-generation 流程与 cooldown 可见性，先用 synthetic `rate_limited → retry → ready` 锁定行为，再处理 Bilibili 的间歇 412；不得用隐式无限重试或绕过平台门禁。
+4. `--cookie-source` 后续应改为只暴露一个受 ACL 保护的配置文件路径，预检队列中 credential coverage，并在 Windows 用 owner/DACL 实证拒绝宽泛继承 ACE。完成前不要把 synthetic Douyin Cookie E2E 当作真实凭据上线批准。
+5. 真实 Bilibili、Douyin、TikTok、Instagram 验收仍按用户授权样本进行；Stage 0 每一精确 identity 要求 10+ 正向、独立负向与连续三轮。仓库不附带 URL、Cookie、运行数据库或人工批准记录。
+
+### 7.5 Iteration 0.15.0 历史入口（已由 7.6 取代）
+
+1. 用户现有 loopback 8000 服务仍不得由开发流程终止或替换。需要切换时，由用户在原终端正常停止，然后使用 v0.15.0 `video-download-local-app`；并行 QA 继续使用独立根与随机端口。
+2. 当时待办的 terminal failed Job 显式 retry/new-generation 与 cooldown 可见性已由 0.16.0 完成；synthetic `rate_limited → retry → ready` 已锁定 API/UI/日志行为，仍不允许隐式无限重试。
+3. 当时待办的 Worker cycle/claim barrier、SQLite DB-linearized stop gate、idle EOF 与 active Attempt lease recovery 已由 0.16.0 实现并进入聚焦回归；精确保证以 stop/claim 写事务提交顺序为准。
+4. 真凭据前实证 Windows app/config/source owner 与私有 DACL；冻结 EXE/安装器只能在目标 Windows 的第三方源码、SBOM、notices、relinking 与人工批准门禁闭合后进行。
+5. 真实 Bilibili、Douyin、TikTok、Instagram 验收仍按用户授权样本和 Stage 0 v3 独立完成；任何单样本、离线 E2E 或间歇 412 观测都不得转成平台批准。
+6. 在 clean authorized target Linux 执行 8 个 Windows skip 的合约和完整 Docker acceptance，然后才能更新隔离部署结论。
+
+### 7.6 Iteration 0.16.0 历史入口（已由 7.7 取代）
+
+1. 用户现有 loopback 8000 服务仍不得由开发流程终止或替换。需要切换时，由用户在原终端正常停止，再使用最终验收过的 v0.16.0 `video-download-local-app`；并行 QA 继续使用独立根与随机端口。
+2. 本轮最终 pytest、`compileall`、离线 lock、diff、source-equivalent sdist→wheel、隔离安装、metadata/entry points/legal files、build identity、依赖、隐私、高置信秘密与隔离 UI/API/日志门禁已经完成；后续任何源代码或发布证据改动都必须重复这些门禁并生成新的制品，不得复用本轮 hash。
+3. 用匹配历史版本在独立根建立并实际恢复 Schema 8/9/10 基线，再由 v0.16.0 在副本上 forward-migrate，并另建、实际恢复 Schema 11 基线；目标 Linux/NAS、真实容量、独立介质与灾难主机恢复仍分别验收。
+4. 真凭据前实证 Windows app/config/source owner 与私有 DACL，并继续收窄高级手动 `--cookie-source` 的 argv/history 暴露与单 Worker 全平台 source 可读范围；只用 synthetic source 先验收 credential coverage、rotation 和 durability。
+5. 按用户授权样本独立完成真实 Bilibili、Douyin、TikTok、Instagram Stage 0 v3；每一精确 identity 仍需至少 10 条正向、独立负向与最新连续三轮，任何单样本、离线 E2E、间歇 412 或 synthetic retry 都不得转成平台批准。X graph 继续等待真实 stable key/exact selector。
+6. 将 short-link egress 纳入 supervisor/Compose，并在 clean authorized target Linux 执行 8 个 Windows skip、AF_UNIX/owner/mode、真实 TLS/DNS/redirect/restart/replay、完整 Docker acceptance 和恢复演练，之后才能更新隔离部署结论。
+7. 冻结 EXE/安装器、dependency wheelhouse、OCI image 或 tool bundle 之前，按精确目标/架构闭合第三方源码、Cargo/OS SBOM、notices、relinking、签名验证、provenance 与人工批准；项目 Apache-2.0 不解除这些门禁。
+8. 继续补足真实 thumbnail/caption 样本，并在可可靠判定时区分平台人工字幕与自动字幕；不能用 synthetic auxiliary artifact 关闭该项。
+
+### 7.7 Iteration 0.17.0 历史入口（已由 7.8 取代）
+
+1. 本轮最终 pytest、`compileall`、离线 lock、diff、source-equivalent sdist→wheel、隔离安装、metadata/entry points/legal files、build identity、依赖与隐私门禁均已完成；后续任何源码或发布证据改动都必须重跑并生成新制品，不得复用本轮 hash。精确 archive hash 只保存在 gitignored verifier/外部验收报告，不能写回被打包源。
+2. 用用户明确授权且合法的样本分别完成 Bilibili、Douyin、TikTok、Instagram 真实下载与 Stage 0 v3；进度测试、旧单样本、离线 fake、间歇 412 或 synthetic Cookie 均不能替代每个精确 identity 的 10+ 正向、独立负向和最新连续三轮。X graph 继续等待真实 stable key/exact selector。
+3. 在真实平台试运行中单独观察 main video/audio 顺序流、indexed fragment、未知 total、字幕/thumbnail sidecar、后处理和失败/取消；只验证阶段估算语义，不把它包装成精确总字节百分比，也不记录原始工具输出或来源标识。
+4. 在 clean authorized target Linux 执行 8 个 Windows skip、完整 Docker acceptance、AF_UNIX/ACL/core-pattern/runtime bind/恢复演练，并验证容器中的进度控制行；当前 Windows 回归不能更新隔离部署结论。
+5. 真凭据前完成 Windows app/config/source owner 与私有 DACL 实证，并继续将 credential 暴露收窄到 secret sidecar、per-platform Worker 或 per-Attempt process/mount namespace；short-link egress 仍须进入受控 supervisor/Compose。
+6. 冻结 EXE/安装器、dependency wheelhouse、OCI image 或 tool bundle 之前，按精确目标/架构闭合第三方源码、Cargo/OS SBOM、notices、relinking、签名验证、provenance 与人工批准；项目 Apache-2.0 不解除这些门禁。
+
+### 7.8 Iteration 0.18.0 历史入口（已由 7.9 取代）
+
+1. 下一轮优先接通 Windows 一体化短链展开，让普通前端可使用 Bilibili/Douyin/TikTok 等已列入范围的分享短链；现有 POSIX/UDS primitive 不等于 Windows 产品通路完成。
+2. 随后接通平台默认 Cookie/profile 选择和 queued credential coverage，使普通前端任务能使用已配置的合法凭据；秘密仍不进入网页、公开 API 或普通日志。先用 synthetic source 锁定选择、禁用/过期、缺失与取消契约，再进行授权凭据验收。
+3. 0.18 的并发、线程启动清理、stop、最终全量和静态结果已记录；无需把本轮已完成审核重新列为下一功能。未来任何源码变更仍需新回归和新制品，不得复用 0.17/0.18 数字或 archive hash。现有开发环境使用 `.venv\Scripts\python.exe`，未经依赖变更任务不要先 `uv sync`。
+4. 保持一个 Worker 进程、双槽、单平台上限、连续补位和清理完成前保留槽位的契约；one-shot 只执行一项，`--check` 永不领取。停止时区分正常 EOF 收尾与 Ctrl+C/异常中断，受控 `WORKER_LOST` 为 terminal/manual retry。
+5. 继续 Bilibili → Douyin → TikTok → Instagram 的授权样本及 Stage 0 验收，不因并发、spawned preflight 或旧单样本提升 `candidate`；目标 Linux/Docker、真凭据权限与第三方再分发仍单独闭合。
+6. 用户既有 loopback 8000 服务不得被开发流程终止或替换；本轮未更新它，也没有新增真实网络/Cookie/UI 证据。没有新的 commit/push 或第三方再分发授权。精确最终包身份和哈希以包外冻结后重建报告为准。
+
+### 7.9 Iteration 0.19.0 当前精确入口
+
+1. Windows 短链和默认 Cookie 前端通路已经接入，不再重复列为待实现功能；先读本轮证据与包外 final report，不将旧 0.18 package hash 用于当前源码。
+2. 后续优先验证完整 spawned local-app 的实际短链/下载行为，按 Bilibili → Douyin → TikTok → Instagram 使用授权样本；真实 Cookie 需要用户配置，不能从历史 profile 推断默认或从浏览器自行提取。工程 fake/synthetic 不提升 `candidate`。
+3. `--check` 允许原有 SQLite 初始化、日志和 claim gate 写入，但不领取、不打开浏览器、不注册 profile、不改变 Job 凭据。正常启动只对 v2 明确选择的平台准备默认；缺失/重复/禁用/到期或配置漂移应失败，不能悄悄匿名。
+4. JSON/import 默认 `use_default`；未配置的平台匿名。显式 `anonymous` 可用于新任务/failed flat retry；retry 无 body 保持旧绑定。source-level live/ready 去重仍不新建任务、更不改既有 Cookie，页面已说明。
+5. 一个 Worker、双槽、单平台上限、stop/claim fencing、私有 Attempt 副本清理与脱敏日志继续保留。保持 `.venv\Scripts\python.exe` 开发环境；无依赖变更时不要 `uv sync`。没有本轮 commit/push 授权。
+6. 当前临时浏览器 smoke 为独立 synthetic control-only 18820，已完成两种模式创建/取消并停服；未启动或替换用户 8000。后续目标 Linux、真实私有 DACL、安装器和第三方 binary/container 再分发仍独立验收。
+
+建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
+
 ## 8. 迭代历史
+
+- **0.19.0 — 2026-09-04**：Windows 一体化短链、JSON/TXT/CSV threadpool、v2 显式平台默认 Cookie、事务内新任务与重试绑定、匿名选择与可用性 UI/API。新增来源/复制/去重/竞态/日志/前端回归，修复新接口导致日志误降级；最终 `1410 passed, 8 skipped in 135.51s`，静态与35文档链接检查、浏览器复验、真实 spawned synthetic `--check` 和 source-equivalent package 预检通过。最终包依冻结契约另行重建，hash只在包外报告；无新真实平台、真 Cookie、Linux/installer 或 push 结论。
 
 - **0.1 — 2026-09-02**：FastAPI/SQLite、MVP URL、Batch/Input/Source/Job；`18 passed`。
 - **0.2 — 2026-09-03**：migration、lease/Attempt/retry/cancel、AssetStore 和 fake E2E；`75 passed`。
@@ -271,3 +528,11 @@ uv run video-download-local-worker `
 - **0.9.0 — 2026-09-03**：v0.9.0 / Schema 8；新增 Windows 本机 direct Worker、显式启用/直连确认/单实例锁，最近批次与 ready 资产列表/下载 API/UI，并把 `local-worker` 纳入结构化日志。最终 v3 完成用户指定 YouTube/X 双样本从 API 队列到 AssetStore/manifest 和 API/UI 下载的真实 E2E；输入 URL、运行时 UUID 与媒体指纹不进入公开记录，API 下载 hash 与本机 manifest 一致、完整解码 clean、浏览器无 error/warn。最终回归 `881 passed, 8 skipped`；0.9.0 sdist/wheel、隔离安装、11 个命令入口、31 个法律文件与包外哈希均通过。项目仍 proprietary，公开/容器/二进制再分发保持 blocked。
 - **0.9.1 — 2026-09-03**：项目自有源码、文档与脚本迁移到 Apache-2.0，加入 `NOTICE` 与双版权人声明；公开隐私清理移除本机路径、位置时区、真实验收 URL/账号/运行 UUID/媒体指纹。版本独立于 proprietary 0.9.0 制品；全量回归 `882 passed, 8 skipped`，Apache sdist/wheel、隔离安装、32 个法律文件和 11 个入口通过；第三方 binary/container/tool-bundle gate 保持 blocked。
 - **0.10.0 — 2026-09-03**：新增六平台静态能力矩阵和 `platform × source_type × job_kind` Worker claim 过滤；接入 TikTok 单视频、Instagram Reel，收紧 Bilibili 默认分 P 并明确 TikTok 短链 deferred；扩展六平台 Cookie/acceptance 资产与能力 API/UI。修复 Worker `max_height` 透传、不受限 `/b` 格式回退、fresh-cookie 错误分类，以及高度策略无匹配格式时误触平台熔断；Instagram 一个 NASA 官方公开 Reel 已完成 Windows direct/no-cookie/Node `1/1 ready` 全链路，Bilibili 尝试遇 HTTP 412，Douyin 无 Cookie 尝试为 `authentication_required`，TikTok 未实跑。真实 Stage 0 未执行。最终回归数字见本文件验证表；`compileall`、`uv lock --check --offline`、`git diff --check` 通过；0.10.0 sdist/wheel 离线构建成功，临时验证产物已删除。
+- **0.11.0 — 2026-09-03**：v0.11.0 / Schema 9；Stage 0 CSV v2 将 `job_kind` 纳入样本、结果、报告与能力证据身份，route-specific output count 分别覆盖完整验证下载资产与不可变 discovery snapshot child/source item。Schema 8 能力行保守迁移为 `download`；旧 CSV fail closed，报告不自动写能力表/API。Bilibili 固定工具、同一公开样本、无 Cookie 重复诊断中 raw `2/2` 成功、产品 fresh attempt `4/6` 成功且 `2/6` probe HTTP 412；仅 Bilibili 受限 412 映射 `rate_limited` 以退避/冷却，不声称稳定下载或 `verified`。最终回归 `935 passed, 8 skipped`，0.11.0 package、隔离 API/UI 与隐私检查通过；Apache-2.0 与第三方再分发门禁不变。
+- **0.12.0 — 2026-09-03**：v0.12.0 / Schema 9；ready asset 列出 thumbnail/caption，并新增严格辅助下载端点/UI；损坏 sidecar 被隔离，较大辅助文件经验证后分块发送且断连显式释放；TikTok `vm`/`vt` 短链进入默认关闭、精确 hostname allowlist 的受控 resolver；YouTube video/Shorts、Bilibili BV/av、受 gate 保护的 Douyin 短链与 TXT/CSV 完成离线 fake E2E。最终回归 `969 passed, 8 skipped`，隔离 synthetic API/UI 三类下载、source-equivalent Apache package 和隐私复核通过；真实平台/Stage 0 结论不变，第三方再分发门禁不变。
+- **0.13.0 — 2026-09-04**：v0.13.0 / Schema 10；Stage 0 CSV v3 将完整 package build identity 纳入七字段 evidence identity，Schema 9 能力行只读封存，新增不可变 evidence、append-only decision chain、revision CAS、current view、治理 CLI 与单事务 UI snapshot。构建摘要、数据库文件 identity、提交前复核、readiness cache/schema cookie 与错误脱敏均 fail closed；Bilibili Stage 0 暂只接受 BV。最终全量回归 `1072 passed, 8 skipped in 81.80s`，隔离 synthetic `3/3 ready` UI/API/日志、source-equivalent Apache package 与隐私复核通过；本轮无真实平台请求，真实 Stage 0、Linux/Docker 与第三方再分发门禁不变。
+- **0.14.0 — 2026-09-04**：v0.14.0 / Schema 10；Windows 本机 Worker 接入按平台 Cookie source 和 Attempt-private 副本，新增不领取 Job 的 `--check`，拒绝空/超限/可写/link/物理复用 source，并用独立 preflight 日志事件；Bilibili Stage 0 BV-only 等价身份回归进一步加固。最终全量回归 `1084 passed, 8 skipped in 90.42s`，独立 synthetic `3/3 ready` CLI/API/UI/日志、source-equivalent Apache package 与隐私复核通过；无真实 Cookie/平台请求，Windows DACL、目标 Linux/Docker、真实 Stage 0 与第三方再分发门禁仍未完成。
+- **0.15.0 — 2026-09-04**：v0.15.0 / Schema 10；新增 Windows `video-download-local-app` 一体化 supervisor、固定 app/data/database/tool 配置、私有三阶段握手与 HTTP 身份检查、端口预占、单实例、Windows Job Object、Worker-first 停机、严格 launch/claim/check-complete 单字节命令、EOF 停机和三组件共享 `run_id` 日志；补上无副作用的 control `--help`。真实 Windows `--check`、10 次重复、singleton、Ctrl+C/SIGBREAK、worker/control 强杀、隔离 UI 与安全失败输入均收敛；最终全量 `1196 passed, 8 skipped in 93.06s`，source-equivalent Apache package 与隐私复核通过。无真实 Cookie/新平台请求；DB-linearized stop/claim、Windows DACL/安装器、目标 Linux/Docker、Stage 0 与第三方再分发门禁仍未完成。
+- **0.16.0 — 2026-09-04**：v0.16.0 / Schema 11；新增 exact-DDL/no-trigger、run-scoped `worker_claim_gate`，supervisor 以 prepare→activate→stop 管理本次 `run_id`，stop 与 `claim_next()` 通过 SQLite `BEGIN IMMEDIATE` 建立唯一提交顺序，stop 写后重读失败时先 fail-safe 终止 owned Windows Job。已先领取的 active Attempt 不被倒写撤销，lease 到期后旧 Attempt 以 `abandoned/worker_lost` 收尾并由新 Attempt 重领。终态失败 flat Job 可经 API/UI 显式进入新 `run_generation`，不绕过 cooldown/circuit；UI generation guard、claim gate 生命周期日志及 state/cause 配对已加固。最终全量 `1238 passed, 8 skipped in 104.14s`；真实 Windows 隔离 UI/active-lease/日志与 project-only source-equivalent Apache package/隐私复核通过。本轮无真实平台/Cookie/Stage 0/Linux/Docker/安装器/第三方发布结论。
+- **0.17.0 — 2026-09-04**：v0.17.0 / Schema 11；新增固定脱敏 yt-dlp stdout progress/phase 协议、有界完整行观察器、sidecar 忽略、顺序双流与 indexed fragment 保守聚合、未知总量 heartbeat、持久化 postprocessing，以及 API/UI 中文阶段、约百分比、原生 progress/ARIA。阶段性回归 `186 passed in 24.95s`、`149 passed in 13.66s`、确定性握手 `2 passed in 1.34s`，隔离 synthetic 浏览器 QA 通过并未触碰既有 8000；最终全量 `1270 passed, 8 skipped in 106.62s`、静态门禁和 project-only source-equivalent Apache package/隐私复核通过。本轮无真实平台/Cookie/Stage 0/Linux/Docker/安装器/第三方发布结论。
+- **0.18.0 — 2026-09-04**：v0.18.0 / Schema 11；修复 Windows 实际入口串行执行，接入单 Worker 进程双槽调度、跨平台重叠、单平台上限与连续补位；拆分 claim/execute，保留 live cleanup 槽位与排除项，仅本地静默时回收；暂停持久化失败锁存，共享 subprocess stop 信号用于 Ctrl+C/异常。实际入口先 red 后 green，heartbeat/reader 启动失败清理修复；最终全量 `1307 passed, 8 skipped in 118.43s`、静态门禁、独立 spawned app `--check` 和 source-equivalent Apache package 预检通过，冻结契约与最终重建精确身份由包外报告绑定。没有新增真实网络、Cookie、浏览器或平台/第三方发布结论。

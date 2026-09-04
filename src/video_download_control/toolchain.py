@@ -674,7 +674,7 @@ def _download_artifact(artifact: Artifact, destination: Path) -> None:
         headers={
             "Accept": "application/octet-stream",
             "Accept-Encoding": "identity",
-            "User-Agent": "video-download-control-toolchain/0.10.0",
+            "User-Agent": "video-download-control-toolchain/0.23.0",
         },
         method="GET",
     )

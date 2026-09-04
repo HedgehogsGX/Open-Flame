@@ -60,6 +60,7 @@ class Settings:
     route_policy_version: str = "mvp-v1"
     x_graph_v2_enabled: bool = False
     short_link_resolution_enabled: bool = False
+    local_direct_short_links: bool = False
     short_link_transport_socket: Path | None = field(default=None, repr=False)
     short_link_attestation_key_file: Path | None = field(default=None, repr=False)
     storage_min_free_bytes: int = DEFAULT_STORAGE_MIN_FREE_BYTES
@@ -79,7 +80,16 @@ class Settings:
             backup_count=self.runtime_log_backup_count,
         )
         object.__setattr__(self, "runtime_log_level", log_config.level)
-        if self.short_link_resolution_enabled and (
+        if not isinstance(self.local_direct_short_links, bool):
+            raise ValueError("local short-link acknowledgement must be boolean")
+        if self.local_direct_short_links and (
+            not self.short_link_resolution_enabled
+            or os.name != "nt"
+            or self.short_link_transport_socket is not None
+            or self.short_link_attestation_key_file is not None
+        ):
+            raise ValueError("local short-link mode requires Windows opt-in without Unix transport paths")
+        if self.short_link_resolution_enabled and not self.local_direct_short_links and (
             self.short_link_transport_socket is None
             or self.short_link_attestation_key_file is None
         ):
@@ -112,6 +122,8 @@ class Settings:
         """Re-check the bind boundary immediately before app construction."""
 
         require_loopback_bind_host(self.host)
+        if self.local_direct_short_links and os.name != "nt":
+            raise ValueError("local short-link mode requires Windows")
 
     @classmethod
     def from_env(cls) -> Settings:

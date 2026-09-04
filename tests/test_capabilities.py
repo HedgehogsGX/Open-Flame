@@ -117,5 +117,5 @@ def test_default_short_link_status_distinguishes_supported_gated_and_deferred() 
         ShortLinkStatus.GATED
     )
     assert by_platform_and_type[(Platform.TIKTOK, SourceType.TIKTOK_VIDEO)] is (
-        ShortLinkStatus.DEFERRED
+        ShortLinkStatus.GATED
     )

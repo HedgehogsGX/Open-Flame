@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Callable
 
@@ -28,9 +31,13 @@ from video_download_control.domain import ErrorCode, Platform, SourceType
 from video_download_control.subprocess_runner import (
     CommandCancelled,
     CommandOutputLimitExceeded,
+    CommandProcessError,
     CommandResult,
     CommandSpec,
     CommandTimedOut,
+    SecureSubprocessRunner,
+    SubprocessExecutionError,
+    SubprocessPolicyError,
 )
 
 
@@ -123,12 +130,18 @@ def make_context(tmp_path: Path) -> AdapterContext:
     )
 
 
-def make_probe_request(*, max_items: int = 1) -> ProbeRequest:
+def make_probe_request(
+    *,
+    max_items: int = 1,
+    canonical_url: str = "https://www.youtube.com/watch?v=stable-id",
+    platform: Platform = Platform.YOUTUBE,
+    source_type: SourceType = SourceType.YOUTUBE_VIDEO,
+) -> ProbeRequest:
     return ProbeRequest(
         job_id="job-1",
-        canonical_url="https://www.youtube.com/watch?v=stable-id",
-        platform=Platform.YOUTUBE,
-        source_type=SourceType.YOUTUBE_VIDEO,
+        canonical_url=canonical_url,
+        platform=platform,
+        source_type=source_type,
         max_items=max_items,
     )
 
@@ -137,15 +150,18 @@ def make_download_request(
     context: AdapterContext,
     *,
     expected_media_keys: tuple[str, ...] = ("video-123",),
+    canonical_url: str = "https://www.youtube.com/watch?v=stable-id",
+    platform: Platform = Platform.YOUTUBE,
+    source_type: SourceType = SourceType.YOUTUBE_VIDEO,
 ) -> DownloadRequest:
     output = context.temporary_dir / "output"
     output.mkdir(exist_ok=True)
     return DownloadRequest(
         job_id="job-1",
         source_item_id="source-item-1",
-        canonical_url="https://www.youtube.com/watch?v=stable-id",
-        platform=Platform.YOUTUBE,
-        source_type=SourceType.YOUTUBE_VIDEO,
+        canonical_url=canonical_url,
+        platform=platform,
+        source_type=source_type,
         output_dir=output,
         expected_media_keys=expected_media_keys,
     )
@@ -323,13 +339,20 @@ def test_nonzero_version_command_is_always_extractor_breakage(tmp_path: Path) ->
     runner = FakeRunner(
         command_result(
             returncode=1,
-            stderr=b"HTTP Error 429 with credential=secret",
+            stderr=b"HTTP Error 412: Precondition Failed credential=secret",
         )
     )
     adapter = YtDlpAdapter(factory=make_factory(tmp_path), runner=runner)  # type: ignore[arg-type]
 
     with pytest.raises(AdapterFailure) as caught:
-        adapter.probe(make_probe_request(), make_context(tmp_path))
+        adapter.probe(
+            make_probe_request(
+                canonical_url="https://www.bilibili.com/video/BV1Fb4111732/",
+                platform=Platform.BILIBILI,
+                source_type=SourceType.BILIBILI_VIDEO,
+            ),
+            make_context(tmp_path),
+        )
 
     assert caught.value.code is ErrorCode.EXTRACTOR_BROKEN
     assert "secret" not in caught.value.diagnostic
@@ -377,12 +400,96 @@ def test_nonzero_exit_maps_to_stable_code_without_stderr_leak(
 
 
 @pytest.mark.parametrize(
+    ("platform", "source_type", "canonical_url", "stderr", "expected"),
+    [
+        (
+            Platform.BILIBILI,
+            SourceType.BILIBILI_VIDEO,
+            "https://www.bilibili.com/video/BV1Fb4111732/",
+            b"ERROR: Unable to download webpage: HTTP Error 412: Precondition Failed",
+            ErrorCode.RATE_LIMITED,
+        ),
+        (
+            Platform.BILIBILI,
+            SourceType.BILIBILI_VIDEO,
+            "https://www.bilibili.com/video/BV1Fb4111732/",
+            b"ERROR: Bilibili view API returned code -412: request was banned",
+            ErrorCode.RATE_LIMITED,
+        ),
+        (
+            Platform.YOUTUBE,
+            SourceType.YOUTUBE_VIDEO,
+            "https://www.youtube.com/watch?v=stable-id",
+            b"ERROR: Unable to download webpage: HTTP Error 412: Precondition Failed",
+            ErrorCode.NETWORK_ERROR,
+        ),
+    ],
+)
+def test_http_412_throttling_classification_is_scoped_to_bilibili(
+    tmp_path: Path,
+    platform: Platform,
+    source_type: SourceType,
+    canonical_url: str,
+    stderr: bytes,
+    expected: ErrorCode,
+) -> None:
+    runner = FakeRunner(
+        command_result(stdout=b"2026.08.19"),
+        command_result(returncode=1, stderr=stderr),
+    )
+    adapter = YtDlpAdapter(factory=make_factory(tmp_path), runner=runner)  # type: ignore[arg-type]
+
+    with pytest.raises(AdapterFailure) as caught:
+        adapter.probe(
+            make_probe_request(
+                canonical_url=canonical_url,
+                platform=platform,
+                source_type=source_type,
+            ),
+            make_context(tmp_path),
+        )
+
+    assert caught.value.code is expected
+    assert "412" not in caught.value.diagnostic
+
+
+def test_bilibili_download_uses_the_same_412_throttling_classification(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    request = make_download_request(
+        context,
+        canonical_url="https://www.bilibili.com/video/BV1Fb4111732/",
+        platform=Platform.BILIBILI,
+        source_type=SourceType.BILIBILI_VIDEO,
+    )
+    runner = FakeRunner(
+        command_result(stdout=b"2026.08.19"),
+        command_result(
+            returncode=1,
+            stderr=b"ERROR: HTTP Error 412: Precondition Failed",
+        ),
+    )
+    adapter = YtDlpAdapter(factory=make_factory(tmp_path), runner=runner)  # type: ignore[arg-type]
+
+    with pytest.raises(AdapterFailure) as caught:
+        adapter.download(request, context, lambda _update: None, NeverCancelled())
+
+    assert caught.value.code is ErrorCode.RATE_LIMITED
+    assert "412" not in caught.value.diagnostic
+
+
+@pytest.mark.parametrize(
     ("failure", "expected"),
     [
         (CommandCancelled("credential=secret"), ErrorCode.WORKER_LOST),
         (CommandTimedOut("credential=secret"), ErrorCode.WORKER_TIMEOUT),
         (
             CommandOutputLimitExceeded("credential=secret"),
+            ErrorCode.EXTRACTOR_BROKEN,
+        ),
+        (
+            SubprocessPolicyError("credential=secret"),
             ErrorCode.EXTRACTOR_BROKEN,
         ),
     ],
@@ -400,6 +507,179 @@ def test_runner_control_failures_have_stable_sanitized_codes(
 
     assert caught.value.code is expected
     assert "secret" not in caught.value.diagnostic
+
+
+def test_runner_owned_process_failure_maps_to_extractor_breakage(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner(CommandProcessError("private process diagnostic"))
+    adapter = YtDlpAdapter(
+        factory=make_factory(tmp_path),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(AdapterFailure) as caught:
+        adapter.probe(make_probe_request(), make_context(tmp_path))
+
+    assert caught.value.code is ErrorCode.EXTRACTOR_BROKEN
+    assert "private process diagnostic" not in caught.value.diagnostic
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    [
+        CommandCancelled,
+        CommandTimedOut,
+        CommandOutputLimitExceeded,
+        CommandProcessError,
+        SubprocessPolicyError,
+    ],
+)
+def test_cancellation_callback_runner_error_type_collision_preserves_identity(
+    tmp_path: Path,
+    failure_type: type[BaseException],
+) -> None:
+    cancellation_failure = failure_type("cancellation source collision")
+
+    class RaisingCancellation:
+        @staticmethod
+        def is_cancelled() -> bool:
+            raise cancellation_failure
+
+    class CancellationInvokingRunner:
+        @staticmethod
+        def run(
+            _spec: CommandSpec,
+            *,
+            is_cancelled: Callable[[], bool] | None = None,
+        ) -> CommandResult:
+            assert is_cancelled is not None
+            is_cancelled()
+            raise AssertionError("the cancellation failure must stop the runner call")
+
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    adapter = YtDlpAdapter(
+        factory=make_factory(tmp_path),
+        runner=CancellationInvokingRunner(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(failure_type) as caught:
+        adapter.download(
+            request,
+            context,
+            lambda _update: None,
+            RaisingCancellation(),
+        )
+
+    assert caught.value is cancellation_failure
+
+
+def test_progress_reporter_oserror_passes_through_adapter_unchanged(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    reporter_failure = OSError("storage reporter unavailable")
+
+    def stream_progress(spec: CommandSpec) -> CommandResult:
+        assert spec.stdout_line_observer is not None
+        spec.stdout_line_observer(
+            b'VDC_PROGRESS|1|1|"downloading"|1|4|NA|NA|NA'
+        )
+        raise AssertionError("the observer failure must stop the runner call")
+
+    def report(update) -> None:
+        if update.fraction > 0:
+            raise reporter_failure
+
+    runner = FakeRunner(
+        command_result(stdout=b"2026.08.19"),
+        stream_progress,
+    )
+    adapter = YtDlpAdapter(
+        factory=make_factory(tmp_path),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(OSError) as caught:
+        adapter.download(request, context, report, NeverCancelled())
+
+    assert caught.value is reporter_failure
+    assert not (context.temporary_dir / "yt-dlp-after-move.jsonl").exists()
+
+
+def test_progress_reporter_subprocess_error_passes_through_adapter_unchanged(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    reporter_failure = SubprocessExecutionError("reporter type collision")
+
+    def stream_progress(spec: CommandSpec) -> CommandResult:
+        assert spec.stdout_line_observer is not None
+        spec.stdout_line_observer(
+            b'VDC_PROGRESS|1|1|"downloading"|3|4|NA|NA|NA'
+        )
+        raise AssertionError("the observer failure must stop the runner call")
+
+    def report(update) -> None:
+        if update.fraction > 0:
+            raise reporter_failure
+
+    runner = FakeRunner(
+        command_result(stdout=b"2026.08.19"),
+        stream_progress,
+    )
+    adapter = YtDlpAdapter(
+        factory=make_factory(tmp_path),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(SubprocessExecutionError) as caught:
+        adapter.download(request, context, report, NeverCancelled())
+
+    assert caught.value is reporter_failure
+    assert not (context.temporary_dir / "yt-dlp-after-move.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    [CommandProcessError, CommandCancelled],
+)
+def test_progress_reporter_runner_error_type_collision_preserves_identity(
+    tmp_path: Path,
+    failure_type: type[SubprocessExecutionError],
+) -> None:
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    reporter_failure = failure_type("reporter runner-type collision")
+
+    def stream_progress(spec: CommandSpec) -> CommandResult:
+        assert spec.stdout_line_observer is not None
+        spec.stdout_line_observer(
+            b'VDC_PROGRESS|1|1|"downloading"|2|4|NA|NA|NA'
+        )
+        raise AssertionError("the observer failure must stop the runner call")
+
+    def report(update) -> None:
+        if update.fraction > 0:
+            raise reporter_failure
+
+    runner = FakeRunner(
+        command_result(stdout=b"2026.08.19"),
+        stream_progress,
+    )
+    adapter = YtDlpAdapter(
+        factory=make_factory(tmp_path),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(failure_type) as caught:
+        adapter.download(request, context, report, NeverCancelled())
+
+    assert caught.value is reporter_failure
+    assert not (context.temporary_dir / "yt-dlp-after-move.jsonl").exists()
 
 
 def test_expired_context_deadline_prevents_process_execution(tmp_path: Path) -> None:
@@ -538,6 +818,279 @@ def test_download_executes_once_and_classifies_controlled_outputs(
         for item in group
     )
     assert not (context.temporary_dir / "yt-dlp-after-move.jsonl").exists()
+
+
+def test_download_reports_only_bounded_monotonic_structured_tool_progress(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    secret = "signed-url-secret-must-not-be-parsed"
+
+    def write_outputs(spec: CommandSpec) -> CommandResult:
+        observer = spec.stdout_line_observer
+        assert observer is not None
+        assert spec.stderr_line_observer is None
+        for line in (
+            f"untrusted title and URL token={secret}".encode(),
+            b'VDC_PROGRESS|1|1|"downloading"|1024|4096|NA|NA|NA',
+            b'VDC_PROGRESS|1|1|"downloading"|not-json|4096|NA|NA|NA',
+            b'VDC_PROGRESS|1|1|"unknown"|2048|4096|NA|NA|NA',
+            b"VDC_PROGRESS|1|1|[]|2048|4096|NA|NA|NA",
+            b'VDC_PROGRESS|1|1|"downloading"|2048|4096|NA|NA|NA',
+            b'VDC_PROGRESS|1|1|"downloading"|1024|4096|NA|NA|NA',
+            b'VDC_PROGRESS|1|1|"downloading"|3072|NA|4096|NA|NA',
+            b'VDC_PROGRESS|1|1|"downloading"|-1|4096|NA|NA|NA',
+            b'VDC_PROGRESS|1|1|"finished"|4096|4096|NA|NA|NA',
+            b"VDC_PHASE|postprocessing",
+            b'VDC_PROGRESS|1|1|"finished"|4096|4096|NA|NA|NA|extra-field',
+            b"VDC_PROGRESS|1|1|\xff|4096|4096|NA|NA|NA",
+        ):
+            observer(line)
+        original = request.output_dir / "video-123.mp4"
+        original.write_bytes(b"video")
+        append_mapping(
+            spec,
+            {"id": "video-123", "filepath": str(original.resolve())},
+        )
+        return command_result(stdout=b"bounded yt-dlp output")
+
+    runner = FakeRunner(command_result(stdout=b"2026.08.19\n"), write_outputs)
+    adapter = YtDlpAdapter(factory=make_factory(tmp_path), runner=runner)  # type: ignore[arg-type]
+    updates = []
+
+    result = adapter.download(
+        request,
+        context,
+        updates.append,
+        NeverCancelled(),
+    )
+
+    assert [update.fraction for update in updates] == [
+        0.0,
+        0.1225,
+        0.245,
+        0.3675,
+        0.99,
+        1.0,
+    ]
+    assert [
+        (update.downloaded_bytes, update.total_bytes) for update in updates[1:-1]
+    ] == [
+        (1024, 4096),
+        (2048, 4096),
+        (3072, None),
+        (None, None),
+    ]
+    assert result.files[0].path.name == "video-123.mp4"
+    assert secret not in repr(updates)
+
+
+def test_multi_stream_reset_never_regresses_the_download_phase_estimate() -> None:
+    updates = []
+    tracker = yt_dlp_module._YtDlpProgressTracker(updates.append)
+
+    for line in (
+        b'VDC_PROGRESS|1|1|"downloading"|50|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"finished"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|10|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|90|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"finished"|100|100|NA|NA|NA',
+    ):
+        tracker(line)
+
+    assert [update.fraction for update in updates] == pytest.approx(
+        [0.245, 0.49, 0.539, 0.931, 0.98]
+    )
+    assert [update.downloaded_bytes for update in updates] == [50, 100, 10, 90, 100]
+
+
+def test_auxiliary_transfer_cannot_advance_media_progress() -> None:
+    updates = []
+    tracker = yt_dlp_module._YtDlpProgressTracker(updates.append)
+
+    for line in (
+        b'VDC_PROGRESS|0|0|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|0|0|"finished"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|10|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"finished"|100|100|NA|NA|NA',
+        b"VDC_PHASE|postprocessing",
+    ):
+        tracker(line)
+
+    assert [update.fraction for update in updates] == [0.049, 0.49, 0.99]
+    assert [update.phase for update in updates] == [
+        "downloading",
+        "downloading",
+        "postprocessing",
+    ]
+
+
+def test_indexed_transfers_are_aggregated_instead_of_assumed_complete() -> None:
+    updates = []
+    tracker = yt_dlp_module._YtDlpProgressTracker(updates.append)
+
+    for line in (
+        b'VDC_PROGRESS|1|1|"downloading"|80|100|NA|0|2',
+        b'VDC_PROGRESS|1|1|"downloading"|20|100|NA|1|2',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|0|2',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|1|2',
+    ):
+        tracker(line)
+
+    assert [update.fraction for update in updates] == pytest.approx(
+        [0.392, 0.49, 0.588, 0.98]
+    )
+
+
+def test_fragment_float_estimates_drive_sequential_and_indexed_progress() -> None:
+    sequential_updates = []
+    sequential = yt_dlp_module._YtDlpProgressTracker(sequential_updates.append)
+
+    sequential(
+        b'VDC_PROGRESS|1|1|"downloading"|1024|NA|4096.0|NA|NA'
+    )
+    sequential(
+        b'VDC_PROGRESS|1|1|"downloading"|2048|NA|4096.0|NA|NA'
+    )
+
+    assert [update.fraction for update in sequential_updates] == pytest.approx(
+        [0.1225, 0.245]
+    )
+    assert all(update.total_bytes is None for update in sequential_updates)
+
+    indexed_updates = []
+    indexed = yt_dlp_module._YtDlpProgressTracker(indexed_updates.append)
+    indexed(
+        b'VDC_PROGRESS|1|1|"downloading"|512|NA|1024.0|0|2'
+    )
+    indexed(
+        b'VDC_PROGRESS|1|1|"downloading"|512|NA|1024.0|1|2'
+    )
+
+    assert [update.fraction for update in indexed_updates] == pytest.approx(
+        [0.245, 0.49]
+    )
+    assert all(update.total_bytes is None for update in indexed_updates)
+
+
+def test_malformed_transfer_identity_and_indices_fail_closed() -> None:
+    updates = []
+    tracker = yt_dlp_module._YtDlpProgressTracker(updates.append)
+
+    for line in (
+        b'VDC_PROGRESS|1|0|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|media|1|"downloading"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|0|NA',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|2|2',
+        b'VDC_PROGRESS|1|1|"downloading"|100|100|NA|0|3',
+        b'VDC_PROGRESS|1|1|"finished"|100|100|NA|NA|NA',
+        b'VDC_PROGRESS|1|1|"finished"|100|100|NA|NA|NA',
+    ):
+        tracker(line)
+
+    assert updates == []
+
+
+def test_real_subprocess_streams_progress_through_adapter_without_network(
+    tmp_path: Path,
+) -> None:
+    python = Path(sys.executable).resolve()
+    tools = (tmp_path / "streaming-tools").resolve()
+    tools.mkdir()
+    tool = tools / "yt-dlp-fixture.py"
+    release = tmp_path / "allow-streaming-fixture.txt"
+    tool_script = (
+        """
+import json
+import pathlib
+import sys
+import time
+
+arguments = sys.argv[1:]
+if "--version" in arguments:
+    print("2026.08.19", flush=True)
+    raise SystemExit(0)
+
+output = pathlib.Path(arguments[arguments.index("--paths") + 1])
+mapping = pathlib.Path(
+    arguments[arguments.index("--print-to-file") + 2].replace("%%", "%")
+)
+media = output / "video-123.mp4"
+media.write_bytes(b"video")
+print('VDC_PROGRESS|1|1|"downloading"|1|4|NA|NA|NA', flush=True)
+release = pathlib.Path(__RELEASE_PATH__)
+while not release.exists():
+    time.sleep(0.005)
+print('VDC_PROGRESS|1|1|"downloading"|3|4|NA|NA|NA', flush=True)
+print("VDC_PHASE|postprocessing", flush=True)
+with mapping.open("a", encoding="utf-8", newline="\\n") as handle:
+    handle.write(json.dumps({"id": "video-123", "filepath": str(media.resolve())}))
+    handle.write("\\n")
+""".lstrip().replace("__RELEASE_PATH__", repr(str(release)))
+    )
+    tool.write_text(
+        tool_script,
+        encoding="utf-8",
+        newline="\n",
+    )
+    factory = YtDlpCommandFactory(
+        executable=python,
+        zipimport_entrypoint=tool,
+        ffmpeg_directory=tools,
+        expected_version="2026.08.19",
+        egress=DirectEgress(),
+    )
+    adapter = YtDlpAdapter(
+        factory=factory,
+        runner=SecureSubprocessRunner(
+            allowed_executable_roots=[python.parent],
+            poll_interval_seconds=0.005,
+        ),
+    )
+    context = make_context(tmp_path)
+    request = make_download_request(context)
+    updates = []
+    first_progress = Event()
+
+    def report(update) -> None:
+        updates.append(update)
+        if update.fraction == 0.1225:
+            first_progress.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            adapter.download,
+            request,
+            context,
+            report,
+            NeverCancelled(),
+        )
+        try:
+            assert first_progress.wait(timeout=2)
+            assert not future.done()
+        finally:
+            release.write_text("release", encoding="utf-8")
+        result = future.result(timeout=5)
+
+    assert [update.fraction for update in updates] == [
+        0.0,
+        0.1225,
+        0.3675,
+        0.99,
+        1.0,
+    ]
+    assert [update.phase for update in updates] == [
+        "downloading",
+        "downloading",
+        "downloading",
+        "postprocessing",
+        "postprocessing",
+    ]
+    assert result.files[0].path.read_bytes() == b"video"
 
 
 def test_photo_only_download_treats_images_as_original_media(tmp_path: Path) -> None:

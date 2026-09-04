@@ -107,6 +107,41 @@ def test_runner_uses_fixed_repository_paths_and_defaults_to_preflight() -> None:
     assert 'if [ "$EUID" -ne 0 ]; then' in runner
 
 
+def test_linux_acceptance_assets_target_v018_schema_11_contract() -> None:
+    runner = read(RUNNER)
+    checklist = read(CHECKLIST)
+
+    for contract in (
+        'RESTORE_NAME="vdc-schema11-acceptance-$RUN_ID"',
+        "--backup-root ABSOLUTE_SCHEMA11_BACKUP_DIR",
+        '"video-download-control": "0.23.0"',
+        "SCHEMA_VERSION == 11",
+        "schema11_exact_runtime_lock_and_no_real_exact_selector",
+        "schema11_empty_database_ready",
+        "schema11_restore independent_restore_ready_and_retained",
+    ):
+        assert contract in runner
+
+    assert "schema10_restore" not in runner
+    assert "ABSOLUTE_SCHEMA9_BACKUP_DIR" not in runner
+    assert checklist.startswith("# Iteration 0.23.0 target Linux/Docker acceptance")
+    for contract in (
+        "Schema 11 backup",
+        "video-download-control==0.23.0",
+        "confirms Schema 11",
+        "Schema 11 restore",
+        "`schema11_restore`",
+        "Schema version 11 readiness",
+        "/absolute/read-only/schema11-backup",
+    ):
+        assert contract in checklist
+
+    # Older versions remain relevant only as an explicit forward-migration path.
+    assert "v0.15" in checklist
+    assert "Schema 10" in checklist
+    assert "re-backed up as Schema 11" in checklist
+
+
 def test_runner_freezes_the_validated_effective_compose_model_before_start() -> None:
     runner = read(RUNNER)
 
@@ -233,7 +268,7 @@ def test_runner_covers_each_required_target_acceptance_area() -> None:
         "cookie_mount_permissions",
         "worker_sigterm",
         "sigterm_lease_recovery",
-        "schema8_restore",
+        "schema11_restore",
         "stack_shutdown",
         "stale_socket",
         "audit_redaction",
@@ -270,7 +305,7 @@ def test_runner_covers_each_required_target_acceptance_area() -> None:
         'item.get("Destination")',
         "docker kill --signal TERM",
         "lease.attempt_no == 2",
-        "SCHEMA_VERSION == 8 and ready",
+        "SCHEMA_VERSION == 11 and ready",
         "stale_identity",
     ):
         assert runtime_contract in runner
@@ -793,6 +828,8 @@ def test_checklist_states_nonclaims_and_retained_cleanup_boundary() -> None:
         "Stage 0",
         "stale Unix socket for explicit cleanup",
         "contains no recursive delete",
+        "Schema 11 restore",
+        "A Schema 8, 9, or 10 backup must first",
     ):
         assert boundary in normalized_checklist
 
@@ -826,6 +863,8 @@ def test_linux_acceptance_runner_help_is_non_mutating() -> None:
     )
     assert completed.returncode == 0
     assert "Default preflight performs no build" in completed.stdout
+    assert "ABSOLUTE_SCHEMA11_BACKUP_DIR" in completed.stdout
+    assert "ABSOLUTE_SCHEMA9_BACKUP_DIR" not in completed.stdout
     assert completed.stderr == ""
 
 

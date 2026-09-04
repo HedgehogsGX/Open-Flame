@@ -1,23 +1,57 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import stat
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import perf_counter
+from typing import BinaryIO, Iterator
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
+from starlette.concurrency import run_in_threadpool
+from starlette.types import Receive, Scope, Send
 
 from . import __version__
+from .assets import (
+    CAPTION_MIME_TYPES,
+    DEFAULT_MAX_AUXILIARY_FILE_BYTES,
+    THUMBNAIL_MIME_TYPES,
+)
+from .build_identity import (
+    ProductBuildDriftError,
+    ProductBuildUnavailableError,
+    current_product_identity,
+)
 from .capabilities import DEFAULT_DOWNLOAD_CAPABILITIES
+from .capability_evidence import (
+    CapabilityEvidenceRepository,
+    CapabilityGovernanceError,
+    list_registered_implementations,
+)
 from .config import Settings
+from .credential_defaults import (
+    CredentialDefaults,
+    CredentialDefaultsError,
+    CredentialMode,
+    revalidate_credential_defaults,
+    resolve_default_profile_locked,
+)
 from .database import SCHEMA_VERSION, Database
-from .domain import Platform
+from .domain import ErrorCode, Platform
 from .importers import MAX_IMPORT_BYTES, BatchImportError, parse_batch_file
+from .local_short_links import LocalDirectShortLinkTransport
 from .observability import collect_metrics
 from .repository import BatchRepository
 from .runtime_logging import RuntimeLogConfig, RuntimeLogger, safe_exception_type
@@ -26,11 +60,18 @@ from .schemas import (
     BatchCreateRequest,
     BatchResponse,
     BatchSummaryResponse,
+    CapabilityDecisionResponse,
+    CapabilityEvidenceResponse,
+    CapabilityImplementationResponse,
+    CapabilitySnapshotResponse,
+    CredentialDefaultsResponse,
     DownloadCapabilityResponse,
     HealthResponse,
     InputCancelResponse,
     InputRediscoverResponse,
     JobCancelResponse,
+    JobRetryRequest,
+    JobRetryResponse,
     MetricsResponse,
     PlatformCircuitResponse,
     QueueControlResponse,
@@ -47,8 +88,10 @@ from .short_links import ControlledShortLinkResolver
 from .toolchain import inspect_toolchain
 from .web import INDEX_HTML
 from .worker_repository import (
+    CircuitResetConflict,
     InvalidTransition,
     RediscoverConflict,
+    RetryConflict,
     WorkerRepository,
 )
 
@@ -120,6 +163,8 @@ _TOOLCHAIN_LOG_VERSION_FIELDS = (
     "ffmpeg_version",
     "ffprobe_version",
 )
+_AUXILIARY_STREAM_CHUNK_BYTES = 64 * 1024
+_AUXILIARY_SPOOL_MEMORY_BYTES = 1024 * 1024
 
 
 def _toolchain_log_fields(payload: dict[str, object]) -> dict[str, object]:
@@ -168,6 +213,41 @@ def _canonical_asset_id(value: object) -> str:
     if canonical != value:
         raise ValueError("asset id is invalid")
     return canonical
+
+
+def _public_auxiliary_artifact(record: object) -> dict[str, str | None] | None:
+    """Fail closed per sidecar so one legacy row cannot hide valid originals."""
+
+    if not isinstance(record, dict):
+        return None
+    try:
+        artifact_id = _canonical_asset_id(record.get("artifact_id"))
+    except ValueError:
+        return None
+    kind = record.get("kind")
+    mime_type = record.get("mime_type")
+    language = record.get("language")
+    sha256 = record.get("sha256")
+    if kind == "thumbnail":
+        if mime_type not in THUMBNAIL_MIME_TYPES.values() or language is not None:
+            return None
+    elif kind == "caption":
+        if mime_type not in CAPTION_MIME_TYPES.values() or not isinstance(language, str):
+            return None
+        if re.fullmatch(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*", language) is None:
+            return None
+    else:
+        return None
+    if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "kind": kind,
+        "mime_type": mime_type,
+        "language": language,
+        "sha256": sha256,
+        "download_url": f"/api/v1/artifacts/{artifact_id}/download",
+    }
 
 
 def _registered_original_file(
@@ -224,11 +304,204 @@ def _registered_original_file(
     return resolved, final_info
 
 
+def _registered_auxiliary_payload(
+    data_root: Path,
+    *,
+    asset_id: object,
+    kind: object,
+    relative_path: object,
+    mime_type: object,
+    language: object,
+    expected_sha256: object,
+) -> tuple[BinaryIO, int, str, str]:
+    """Verify one sidecar into a bounded spool before any bytes are served."""
+
+    canonical_asset_id = _canonical_asset_id(asset_id)
+    if kind == "thumbnail":
+        directory = "thumbnails"
+        mime_types = THUMBNAIL_MIME_TYPES
+    elif kind == "caption":
+        directory = "captions"
+        mime_types = CAPTION_MIME_TYPES
+    else:
+        raise ValueError("registered artifact kind is invalid")
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or len(relative_path) > 4096
+        or "\\" in relative_path
+        or "\x00" in relative_path
+    ):
+        raise ValueError("registered artifact path is invalid")
+    stored = PurePosixPath(relative_path)
+    if (
+        stored.is_absolute()
+        or stored.as_posix() != relative_path
+        or len(stored.parts) != 4
+        or stored.parts[:3] != ("assets", canonical_asset_id, directory)
+        or any(part in {"", ".", ".."} for part in stored.parts)
+    ):
+        raise ValueError("registered artifact path is invalid")
+
+    suffix = Path(stored.name).suffix.lower()
+    expected_mime = mime_types.get(suffix)
+    if (
+        expected_mime is None
+        or not isinstance(mime_type, str)
+        or mime_type != expected_mime
+    ):
+        raise ValueError("registered artifact MIME is invalid")
+    stem = stored.name[: -len(suffix)]
+    if kind == "thumbnail":
+        match = re.fullmatch(r"thumbnail-([0-9]{4,})", stem)
+        if language is not None:
+            raise ValueError("registered thumbnail language is invalid")
+    else:
+        match = re.fullmatch(
+            r"caption-([0-9]{4,})-([A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*)",
+            stem,
+        )
+        if (
+            match is None
+            or not isinstance(language, str)
+            or match.group(2) != language
+        ):
+            raise ValueError("registered caption language is invalid")
+    if match is None or f"{int(match.group(1)):04d}" != match.group(1):
+        raise ValueError("registered artifact ordinal is invalid")
+    if (
+        not isinstance(expected_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        raise ValueError("registered artifact hash is invalid")
+
+    root_info = data_root.lstat()
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    root_attributes = getattr(root_info, "st_file_attributes", 0)
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or stat.S_ISLNK(root_info.st_mode)
+        or (reparse and root_attributes & reparse)
+    ):
+        raise ValueError("asset root is not a plain directory")
+    root = data_root.resolve(strict=True)
+    current = root
+    final_info: os.stat_result | None = None
+    for index, component in enumerate(stored.parts):
+        current /= component
+        info = current.lstat()
+        attributes = getattr(info, "st_file_attributes", 0)
+        if stat.S_ISLNK(info.st_mode) or (reparse and attributes & reparse):
+            raise ValueError("registered artifact path contains a link")
+        if index < len(stored.parts) - 1:
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("registered artifact parent is not a directory")
+        else:
+            final_info = info
+
+    assert final_info is not None
+    if (
+        not stat.S_ISREG(final_info.st_mode)
+        or final_info.st_nlink != 1
+        or final_info.st_size < 1
+        or final_info.st_size > DEFAULT_MAX_AUXILIARY_FILE_BYTES
+    ):
+        raise ValueError("registered artifact is not a bounded single-link file")
+    resolved = current.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise ValueError("registered artifact is outside the asset root")
+    spool: BinaryIO = tempfile.SpooledTemporaryFile(
+        max_size=_AUXILIARY_SPOOL_MEMORY_BYTES,
+        mode="w+b",
+    )
+    try:
+        digest = hashlib.sha256()
+        total_bytes = 0
+        with resolved.open("rb") as handle:
+            opened_info = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened_info.st_mode)
+                or opened_info.st_nlink != 1
+                or opened_info.st_dev != final_info.st_dev
+                or opened_info.st_ino != final_info.st_ino
+                or opened_info.st_size != final_info.st_size
+            ):
+                raise ValueError("registered artifact changed before reading")
+            while chunk := handle.read(_AUXILIARY_STREAM_CHUNK_BYTES):
+                total_bytes += len(chunk)
+                if total_bytes > DEFAULT_MAX_AUXILIARY_FILE_BYTES:
+                    raise ValueError("registered artifact content is invalid")
+                digest.update(chunk)
+                spool.write(chunk)
+            final_opened_info = os.fstat(handle.fileno())
+        if (
+            total_bytes != opened_info.st_size
+            or final_opened_info.st_dev != opened_info.st_dev
+            or final_opened_info.st_ino != opened_info.st_ino
+            or final_opened_info.st_size != opened_info.st_size
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise ValueError("registered artifact content is invalid")
+        spool.seek(0)
+        return spool, total_bytes, expected_mime, suffix
+    except BaseException:
+        spool.close()
+        raise
+
+
+def _stream_auxiliary_payload(handle: BinaryIO) -> Iterator[bytes]:
+    """Stream verified bytes and always release a rolled temporary file."""
+
+    try:
+        while chunk := handle.read(_AUXILIARY_STREAM_CHUNK_BYTES):
+            yield chunk
+    finally:
+        handle.close()
+
+
+class _VerifiedAuxiliaryStreamingResponse(StreamingResponse):
+    """Own the verified spool through every ASGI completion path."""
+
+    def __init__(
+        self,
+        handle: BinaryIO,
+        *,
+        size_bytes: int,
+        media_type: str,
+        filename: str,
+    ) -> None:
+        self._verified_handle = handle
+        try:
+            super().__init__(
+                _stream_auxiliary_payload(handle),
+                media_type=media_type,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Length": str(size_bytes),
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+        except BaseException:
+            handle.close()
+            raise
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._verified_handle.close()
+
+
 def _configured_short_link_resolver(
     settings: Settings,
 ) -> ControlledShortLinkResolver | None:
     if not settings.short_link_resolution_enabled:
         return None
+    if settings.local_direct_short_links:
+        return ControlledShortLinkResolver(
+            transport=LocalDirectShortLinkTransport(acknowledged=True),
+        )
     socket_path = settings.short_link_transport_socket
     key_path = settings.short_link_attestation_key_file
     if socket_path is None or key_path is None:
@@ -258,9 +531,13 @@ def create_app(
     *,
     short_link_resolver: ShortLinkResolver | None = None,
     runtime_logger: RuntimeLogger | None = None,
+    credential_defaults: CredentialDefaults | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
     resolved_settings.validate_startup_security()
+    owns_local_short_link_transport = (
+        short_link_resolver is None and resolved_settings.local_direct_short_links
+    )
     active_logger = runtime_logger or RuntimeLogger(
         component="control",
         config=RuntimeLogConfig(
@@ -278,6 +555,13 @@ def create_app(
         short_link_resolution_enabled=(resolved_settings.short_link_resolution_enabled),
     )
     try:
+        if credential_defaults is not None:
+            if (
+                not isinstance(credential_defaults, CredentialDefaults)
+                or credential_defaults.run_id != active_logger.run_id
+            ):
+                raise ValueError("configured credential defaults belong to another run")
+            revalidate_credential_defaults(credential_defaults)
         if (
             short_link_resolver is not None
             and not resolved_settings.short_link_resolution_enabled
@@ -321,8 +605,10 @@ def create_app(
         route_policy_version=resolved_settings.route_policy_version,
         x_graph_v2_enabled=resolved_settings.x_graph_v2_enabled,
         short_link_resolver=short_link_resolver,
+        credential_defaults=credential_defaults,
     )
     worker_repository = WorkerRepository(database)
+    capability_repository = CapabilityEvidenceRepository(database)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -335,6 +621,9 @@ def create_app(
         try:
             yield
         finally:
+            if owns_local_short_link_transport:
+                assert isinstance(short_link_resolver, ControlledShortLinkResolver)
+                short_link_resolver.transport.close()
             active_logger.emit("control.stopped")
 
     app = FastAPI(
@@ -352,6 +641,14 @@ def create_app(
     app.state.runtime_logger = active_logger
     app.state.toolchain_status = cached_toolchain_status
     app.state.download_capabilities = DEFAULT_DOWNLOAD_CAPABILITIES
+    app.state.capability_evidence_repository = capability_repository
+
+    @app.exception_handler(CredentialDefaultsError)
+    async def credential_defaults_error(_request: Request, _exc: CredentialDefaultsError):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "默认 Cookie 配置已失效；请检查本地配置并重启，或明确选择匿名下载"},
+        )
 
     @app.middleware("http")
     async def runtime_log_middleware(request: Request, call_next):
@@ -386,9 +683,15 @@ def create_app(
         elif route in {
             "/health/live",
             "/api/v1/operations/logs",
+            "/api/v1/credential-defaults",
             "/api/v1/operations/queue",
             "/api/v1/operations/tools",
             "/api/v1/download-capabilities",
+            "/api/v1/capability-implementations",
+            "/api/v1/capability-evidence",
+            "/api/v1/capability-decisions",
+            "/api/v1/capability-decisions/{identity_key}/history",
+            "/api/v1/capability-snapshot",
             "/api/v1/platform-circuits",
         }:
             level = "DEBUG"
@@ -406,7 +709,7 @@ def create_app(
         return response
 
     def health_payload() -> tuple[HealthResponse, bool]:
-        database_ok, detail = database.readiness()
+        database_ok, detail = database.cached_readiness()
         queue_paused = False
         queue_reason: object | None = None
         if database_ok:
@@ -469,6 +772,26 @@ def create_app(
             raise HTTPException(status_code=503, detail=payload.model_dump())
         return payload
 
+    @app.get("/api/v1/credential-defaults", response_model=CredentialDefaultsResponse)
+    def get_credential_defaults() -> CredentialDefaultsResponse:
+        if credential_defaults is None:
+            return CredentialDefaultsResponse(platforms=[], available=True)
+        available = True
+        try:
+            revalidate_credential_defaults(credential_defaults)
+            with database.connect() as connection:
+                connection.execute("BEGIN")
+                for platform in credential_defaults.platforms:
+                    resolve_default_profile_locked(
+                        connection, defaults=credential_defaults,
+                        platform=platform, now=datetime.now(UTC),
+                    )
+        except CredentialDefaultsError:
+            available = False
+        return CredentialDefaultsResponse(
+            platforms=list(credential_defaults.platforms), available=available,
+        )
+
     @app.post(
         "/api/v1/batches",
         response_model=BatchResponse,
@@ -478,6 +801,7 @@ def create_app(
         created = service.create_batch(
             name=payload.name,
             raw_inputs=payload.inputs,
+            credential_mode=payload.credential_mode,
         )
         active_logger.emit(
             "batch.created",
@@ -499,6 +823,7 @@ def create_app(
         request: Request,
         filename: str = Query(min_length=1, max_length=255),
         name: str | None = Query(default=None, max_length=200),
+        credential_mode: CredentialMode = Query(default="use_default"),
     ) -> BatchResponse:
         content_type = request.headers.get("content-type", "").split(";", 1)[0]
         if content_type not in {
@@ -517,9 +842,11 @@ def create_app(
             if len(body) > MAX_IMPORT_BYTES:
                 raise HTTPException(status_code=413, detail="导入文件过大")
         raw_inputs = parse_batch_file(bytes(body), filename=filename)
-        created = service.create_batch(
+        created = await run_in_threadpool(
+            service.create_batch,
             name=name,
             raw_inputs=raw_inputs,
+            credential_mode=credential_mode,
         )
         active_logger.emit(
             "batch.imported",
@@ -550,6 +877,11 @@ def create_app(
         response: list[BatchAssetResponse] = []
         for record in records:
             asset_id = _canonical_asset_id(record["asset_id"])
+            public_artifacts = [
+                public
+                for artifact in record["artifacts"]
+                if (public := _public_auxiliary_artifact(artifact)) is not None
+            ]
             response.append(
                 BatchAssetResponse.model_validate(
                     {
@@ -567,6 +899,7 @@ def create_app(
                             "sha256": record["sha256"],
                         },
                         "download_url": f"/api/v1/assets/{asset_id}/download",
+                        "artifacts": public_artifacts,
                     }
                 )
             )
@@ -605,6 +938,34 @@ def create_app(
                 "X-Content-Type-Options": "nosniff",
             },
             stat_result=file_info,
+        )
+
+    @app.get("/api/v1/artifacts/{artifact_id}/download")
+    def download_auxiliary_artifact(artifact_id: str) -> StreamingResponse:
+        try:
+            canonical_id = _canonical_asset_id(artifact_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="辅助产物不存在") from None
+        registered = service.get_ready_auxiliary_artifact(canonical_id)
+        if registered is None:
+            raise HTTPException(status_code=404, detail="辅助产物不存在")
+        try:
+            payload, size_bytes, mime_type, suffix = _registered_auxiliary_payload(
+                resolved_settings.data_root,
+                asset_id=registered["asset_id"],
+                kind=registered["kind"],
+                relative_path=registered["artifact_path"],
+                mime_type=registered["mime_type"],
+                language=registered["language"],
+                expected_sha256=registered["sha256"],
+            )
+        except (OSError, ValueError):
+            raise HTTPException(status_code=409, detail="辅助产物文件不可用") from None
+        return _VerifiedAuxiliaryStreamingResponse(
+            payload,
+            size_bytes=size_bytes,
+            media_type=mime_type,
+            filename=f"artifact-{canonical_id}{suffix}",
         )
 
     @app.get("/api/v1/batches", response_model=list[BatchSummaryResponse])
@@ -663,6 +1024,103 @@ def create_app(
             for item in DEFAULT_DOWNLOAD_CAPABILITIES.list(adapter="yt_dlp")
         ]
 
+    @app.get(
+        "/api/v1/capability-implementations",
+        response_model=list[CapabilityImplementationResponse],
+    )
+    def capability_implementations() -> list[CapabilityImplementationResponse]:
+        return [
+            CapabilityImplementationResponse.model_validate(item)
+            for item in list_registered_implementations()
+        ]
+
+    @app.get(
+        "/api/v1/capability-evidence",
+        response_model=list[CapabilityEvidenceResponse],
+    )
+    def capability_evidence(
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> list[CapabilityEvidenceResponse]:
+        ready, _ = database.readiness()
+        if not ready:
+            raise HTTPException(status_code=503, detail="capability_store_unavailable")
+        return [
+            CapabilityEvidenceResponse.model_validate(item)
+            for item in capability_repository.list_evidence(limit=limit)
+        ]
+
+    @app.get(
+        "/api/v1/capability-decisions",
+        response_model=list[CapabilityDecisionResponse],
+    )
+    def capability_decisions(
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> list[CapabilityDecisionResponse]:
+        ready, _ = database.readiness()
+        if not ready:
+            raise HTTPException(status_code=503, detail="capability_store_unavailable")
+        return [
+            CapabilityDecisionResponse.model_validate(item)
+            for item in capability_repository.list_current_decisions(limit=limit)
+        ]
+
+    @app.get(
+        "/api/v1/capability-decisions/{identity_key}/history",
+        response_model=list[CapabilityDecisionResponse],
+    )
+    def capability_decision_history(
+        identity_key: str,
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> list[CapabilityDecisionResponse]:
+        ready, _ = database.readiness()
+        if not ready:
+            raise HTTPException(status_code=503, detail="capability_store_unavailable")
+        try:
+            records = capability_repository.history(
+                identity_key=identity_key,
+                limit=limit,
+            )
+        except CapabilityGovernanceError as exc:
+            if exc.exit_code == 4:
+                raise HTTPException(status_code=404, detail=exc.error_code) from None
+            if exc.exit_code == 2:
+                raise HTTPException(status_code=422, detail=exc.error_code) from None
+            raise HTTPException(
+                status_code=503, detail="capability_store_unavailable"
+            ) from None
+        return [
+            CapabilityDecisionResponse.model_validate(item) for item in records
+        ]
+
+    @app.get(
+        "/api/v1/capability-snapshot",
+        response_model=CapabilitySnapshotResponse,
+    )
+    def capability_snapshot(
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> CapabilitySnapshotResponse:
+        ready, _ = database.readiness()
+        if not ready:
+            raise HTTPException(status_code=503, detail="capability_store_unavailable")
+        snapshot = capability_repository.snapshot(limit=limit)
+        try:
+            product_identity = current_product_identity()
+        except ProductBuildDriftError:
+            raise HTTPException(
+                status_code=503, detail="product_build_drift"
+            ) from None
+        except ProductBuildUnavailableError:
+            raise HTTPException(
+                status_code=503, detail="product_build_unavailable"
+            ) from None
+        return CapabilitySnapshotResponse.model_validate(
+            {
+                "current_product_identity": product_identity,
+                "implementations": list_registered_implementations(),
+                **snapshot,
+            }
+        )
+
     @app.post(
         "/api/v1/operations/queue/resume",
         response_model=QueueControlResponse,
@@ -699,15 +1157,58 @@ def create_app(
     def reset_platform_circuit(
         platform: Platform, request: Request
     ) -> PlatformCircuitResponse:
-        reset = worker_repository.reset_platform_circuit(
-            platform=platform, now=datetime.now(UTC)
-        )
+        try:
+            reset = worker_repository.reset_platform_circuit(
+                platform=platform, now=datetime.now(UTC)
+            )
+        except CircuitResetConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if reset is None:
+            raise HTTPException(status_code=404, detail="平台熔断记录不存在")
         active_logger.emit(
             "circuit.reset",
             request_id=request.state.runtime_request_id,
             platform=platform.value,
         )
         return PlatformCircuitResponse.model_validate(reset)
+
+    @app.post(
+        "/api/v1/jobs/{job_id}/retry",
+        response_model=JobRetryResponse,
+    )
+    def retry_job(
+        job_id: str, request: Request, payload: JobRetryRequest | None = None,
+    ) -> JobRetryResponse:
+        try:
+            retried = worker_repository.request_retry(
+                job_id,
+                now=datetime.now(UTC),
+                credential_mode=payload.credential_mode if payload is not None else None,
+                credential_defaults=credential_defaults,
+            )
+        except (InvalidTransition, RetryConflict) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if retried is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        retry_log_fields: dict[str, object] = {
+            "request_id": request.state.runtime_request_id,
+            "job_id": job_id,
+            "result_status": str(retried["status"]),
+            "run_generation": int(retried["run_generation"]),
+            "platform": str(retried["platform"]),
+        }
+        previous_error_code = retried["previous_error_code"]
+        if isinstance(previous_error_code, str):
+            try:
+                retry_log_fields["error_code"] = ErrorCode(previous_error_code).value
+            except ValueError:
+                pass
+        active_logger.emit("job.retry_requested", **retry_log_fields)
+        return JobRetryResponse(
+            job_id=job_id,
+            status="queued",
+            run_generation=int(retried["run_generation"]),
+        )
 
     @app.post(
         "/api/v1/jobs/{job_id}/cancel",

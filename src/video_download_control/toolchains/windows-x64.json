@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "bundle_id": "windows-x64-yt-dlp-2026.08.19-ffmpeg-9.0.1-20260820",
+  "bundle_id": "windows-x64-yt-dlp-2026.08.19-ffmpeg-9.0.1-20260831",
   "target": {
     "system": "Windows",
     "machines": [
@@ -48,10 +48,10 @@
     }
   },
   "ffmpeg": {
-    "version": "n9.0.1-6-g9d4ca21220-20260820",
-    "archive_root": "ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-shared-9.0",
+    "version": "n9.0.1-11-ge47273f4d9-20260831",
+    "archive_root": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-shared-9.0",
     "license_expression": "LGPL-3.0-or-later",
-    "configuration_sha256": "c216644f4c95559096e92778b637deb459a9f23830838f8923eca4376a0e5899",
+    "configuration_sha256": "1789f7f5ee156a7ffd715d54dcbd6c3e8f15ac2bcac580809d712e7d0b5b0d56",
     "required_configuration_flags": [
       "--enable-version3",
       "--enable-shared",
@@ -65,9 +65,9 @@
     ],
     "artifact": {
       "cache_name": "ffmpeg.zip",
-      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-20-13-45/ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-shared-9.0.zip",
-      "size": 67200662,
-      "sha256": "138fe84aa6e4836920f615704115d7ecf4cfbfc20f9a3d5c60f27c1e604fc12b"
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-shared-9.0.zip",
+      "size": 67201333,
+      "sha256": "83a824f0729a69d143c9865125bb86988a11dd388325f0033711045522068aa0"
     },
     "source_project_url": "https://github.com/FFmpeg/FFmpeg",
     "build_project_url": "https://github.com/BtbN/FFmpeg-Builds",
@@ -76,55 +76,55 @@
         "archive_path": "bin/avcodec-63.dll",
         "install_path": "ffmpeg/bin/avcodec-63.dll",
         "size": 71069184,
-        "sha256": "40c288d969589ff7f2f00338857c1a5a756fe41283fed0cb31fc118f51837e68"
+        "sha256": "0fcba54e4a04fe363e91962266baf956a2219b872a0c3827c0743afeb407b9d8"
       },
       {
         "archive_path": "bin/avdevice-63.dll",
         "install_path": "ffmpeg/bin/avdevice-63.dll",
         "size": 3923968,
-        "sha256": "753001a5872614d0008fa7fa93a03c78fb6677315b5a574550628cb2053d8f68"
+        "sha256": "3acf3f263e79c16e2fd27a4044ffbffa0552ed6d4b8436d057ee0204bb3d8a70"
       },
       {
         "archive_path": "bin/avfilter-12.dll",
         "install_path": "ffmpeg/bin/avfilter-12.dll",
         "size": 30014976,
-        "sha256": "1f8566b1cecb54eae39dab87615043c915779252726ddda66e486cd95a55a22d"
+        "sha256": "64721ae7c4f57d1a3d60d9ab2c0d5abf245fc7061a5bc3a1684f6bbbd3a21aec"
       },
       {
         "archive_path": "bin/avformat-63.dll",
         "install_path": "ffmpeg/bin/avformat-63.dll",
         "size": 22153728,
-        "sha256": "6e5e274b89423fe52b772fc2b0c51a9d77a57a8a2663aac97ac88286e4509c58"
+        "sha256": "f37686ed82f1a47489632ea942991e0aed4aaad8df17c70300539b2fa82e195d"
       },
       {
         "archive_path": "bin/avutil-61.dll",
         "install_path": "ffmpeg/bin/avutil-61.dll",
         "size": 2939392,
-        "sha256": "532ea8e8b5864bfc1714d6c37cccf483aa3633965f7e0b647c4141e5dc297538"
+        "sha256": "a3ab4a3df7288b8760467d898c99aae5bef2ad9da6b20fcae9feb274520aff0d"
       },
       {
         "archive_path": "bin/ffmpeg.exe",
         "install_path": "ffmpeg/bin/ffmpeg.exe",
         "size": 538112,
-        "sha256": "4c7f8a53bb415a2c6a22877b1bd2cd4567e8ce8d053ec702729230457bd37ed9"
+        "sha256": "00c485e687c534b2d21aeaa7f4220c3927854cf5bb7ae1a38f42f6631eed91ab"
       },
       {
         "archive_path": "bin/ffprobe.exe",
         "install_path": "ffmpeg/bin/ffprobe.exe",
         "size": 227328,
-        "sha256": "ad2da768b955a0012deb328be8ce37bd818508e96801835f148b285194e96519"
+        "sha256": "98b036a86389952aa40a016741507567d32f6e9ec718788521c1ad0ebdab06f8"
       },
       {
         "archive_path": "bin/swresample-7.dll",
         "install_path": "ffmpeg/bin/swresample-7.dll",
         "size": 722944,
-        "sha256": "847dfe44bd80e1fa8e469447858a47a4bd4a88a386ce456ba1ed246d6b58b0d0"
+        "sha256": "5b7d2df8a57f09b810c8311a13a08a59f84d66b34cb9b80f2e3782cc8ab7be76"
       },
       {
         "archive_path": "bin/swscale-10.dll",
         "install_path": "ffmpeg/bin/swscale-10.dll",
         "size": 2479616,
-        "sha256": "6e43504825fb3148d207f418714e1b2e090988e059e0bfdd9e2a7a20bb694938"
+        "sha256": "2e6e2b028616db997d93f006009804f694185a15a5bfe7702df139c90332b4c0"
       }
     ],
     "license": {

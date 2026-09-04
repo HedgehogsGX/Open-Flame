@@ -105,6 +105,120 @@ def test_resolver_rejects_writable_source_without_leaking_values(
     assert "sensitive-name" not in diagnostic
 
 
+@pytest.mark.parametrize(
+    ("content", "maximum"),
+    (
+        (b"", 32),
+        (b"oversized-cookie-secret", 8),
+    ),
+)
+def test_validate_sources_rejects_invalid_size_without_leaking_values(
+    tmp_path: Path,
+    content: bytes,
+    maximum: int,
+) -> None:
+    credential_ref = "private-size-profile"
+    source = make_read_only_cookie(
+        tmp_path / "private-size-source",
+        content,
+    )
+    resolver = AttemptCookieResolver(
+        (CookieSource(Platform.YOUTUBE, credential_ref, source),),
+        max_cookie_bytes=maximum,
+    )
+
+    try:
+        with pytest.raises(CookiePreparationError) as caught:
+            resolver.validate_sources()
+    finally:
+        restore_writable(source)
+
+    diagnostic = str(caught.value)
+    assert credential_ref not in diagnostic
+    assert Platform.YOUTUBE.value not in diagnostic
+    assert str(source) not in diagnostic
+    assert "private-size-source" not in diagnostic
+    if content:
+        assert content.decode("ascii") not in diagnostic
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_validate_sources_accepts_source_at_exact_byte_limit(tmp_path: Path) -> None:
+    content = b"exact-limit-cookie"
+    source = make_read_only_cookie(tmp_path, content)
+    resolver = AttemptCookieResolver(
+        (CookieSource(Platform.YOUTUBE, "exact-limit-profile", source),),
+        max_cookie_bytes=len(content),
+    )
+
+    try:
+        resolver.validate_sources()
+    finally:
+        restore_writable(source)
+
+
+def test_validate_sources_rejects_path_aliases_to_same_opened_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_content = b"shared-cross-platform-secret"
+    first_ref = "youtube-private-profile"
+    second_ref = "douyin-private-profile"
+    source = make_read_only_cookie(
+        tmp_path / "private-physical-source",
+        secret_content,
+    )
+    alias = (tmp_path / "private-filesystem-alias.txt").resolve()
+    real_source_lstat = AttemptCookieResolver._source_lstat
+    real_open_source = AttemptCookieResolver._open_source
+
+    def aliasing_lstat(path: Path):
+        return real_source_lstat(source if path == alias else path)
+
+    def aliasing_open(path: Path) -> int:
+        return real_open_source(source if path == alias else path)
+
+    monkeypatch.setattr(
+        AttemptCookieResolver,
+        "_source_lstat",
+        staticmethod(aliasing_lstat),
+    )
+    monkeypatch.setattr(
+        AttemptCookieResolver,
+        "_open_source",
+        staticmethod(aliasing_open),
+    )
+    resolver = AttemptCookieResolver(
+        (
+            CookieSource(Platform.YOUTUBE, first_ref, source),
+            CookieSource(Platform.DOUYIN, second_ref, alias),
+        )
+    )
+
+    try:
+        with pytest.raises(CookiePreparationError) as caught:
+            resolver.validate_sources()
+    finally:
+        restore_writable(source)
+
+    diagnostic = str(caught.value)
+    for private_value in (
+        first_ref,
+        second_ref,
+        Platform.YOUTUBE.value,
+        Platform.DOUYIN.value,
+        str(source),
+        str(alias),
+        source.parent.name,
+        alias.name,
+        secret_content.decode("ascii"),
+    ):
+        assert private_value not in diagnostic
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_public_cookie_error_discards_path_from_entire_exception_chain(
     tmp_path: Path,
 ) -> None:

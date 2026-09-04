@@ -153,6 +153,38 @@ def test_future_exact_active_intent_is_skipped(
     assert repository.get_job(lease.job_id)["status"] == "verifying"
 
 
+@pytest.mark.parametrize("supply_cleanup", [False, True])
+def test_refill_leaves_live_canceled_intent_for_its_execution_owner(
+    service, settings, database, supply_cleanup: bool
+) -> None:
+    _, repository, store, lease, attempt = verifying_attempt(
+        service, settings, database, "intent-live-cancel"
+    )
+    staged = stage_asset(store, lease, attempt)
+    repository.record_asset_commit_intent(lease, asset=staged, now=NOW)
+    repository.request_cancel(lease.job_id, now=NOW)
+    batch = service.create_batch(
+        name="other platform refill",
+        raw_inputs=["https://x.com/example/status/900008"],
+    )
+
+    refilled = repository.claim_next(
+        worker_id="intent-worker",
+        adapter="fake",
+        adapter_version="1",
+        now=NOW + timedelta(seconds=1),
+        remove_pending_asset=store.remove_pending_asset if supply_cleanup else None,
+        perform_recovery=False,
+        excluded_job_ids=frozenset({lease.job_id}),
+    )
+
+    assert refilled is not None and refilled.job_id == batch["jobs"][0]["id"]
+    assert repository.get_job(lease.job_id)["status"] == "verifying"
+    assert repository.attempts_for(lease.job_id)[0]["status"] == "running"
+    assert staged.staged_directory.is_dir()
+    assert intent_count(database) == 1
+
+
 def test_expired_published_orphan_is_recycled_then_removed(
     service, settings, database
 ) -> None:

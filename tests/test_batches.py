@@ -96,11 +96,16 @@ def test_short_links_are_preserved_but_not_queued_before_safe_expansion(
 ) -> None:
     batch = service.create_batch(
         name="分享文本",
-        raw_inputs=["A https://v.douyin.com/AbCdEf/ B https://b23.tv/xyz123"],
+        raw_inputs=[
+            (
+                "A https://v.douyin.com/AbCdEf/ B https://b23.tv/xyz123 "
+                "C https://vm.tiktok.com/ZShort123/"
+            )
+        ],
     )
-    assert batch["total_count"] == 2
+    assert batch["total_count"] == 3
     assert batch["queued_count"] == 0
-    assert batch["failed_count"] == 2
+    assert batch["failed_count"] == 3
     assert len(batch["jobs"]) == 0
     assert {item["error_code"] for item in batch["inputs"]} == {
         "short_link_resolution_required"
@@ -172,6 +177,55 @@ def test_short_link_resolution_failure_is_fixed_and_does_not_persist_location(
     )
     assert "must-not-persist" not in repr(batch)
     assert repository.count_rows("download_jobs") == 0
+
+
+def test_attested_tiktok_short_link_queues_canonical_video_route(
+    repository: BatchRepository,
+) -> None:
+    signed_location = (
+        "https://www.tiktok.com/@Example.User/video/7461234567890123456"
+        "?signature=must-not-persist"
+    )
+    resolver = _ShortLinkResolver(
+        ShortLinkResolution(
+            normalized=NormalizedURL(
+                submitted_url=signed_location,
+                canonical_url=(
+                    "https://www.tiktok.com/@example.user/video/7461234567890123456"
+                ),
+                platform=Platform.TIKTOK,
+                source_type=SourceType.TIKTOK_VIDEO,
+                source_id="7461234567890123456",
+            ),
+            platform=Platform.TIKTOK,
+            redirect_count=1,
+            policy_hosts=("vm.tiktok.com", "www.tiktok.com"),
+        )
+    )
+    service = BatchService(
+        repository=repository,
+        max_batch_urls=50,
+        route_policy_version="tiktok-short-link-test",
+        short_link_resolver=resolver,
+    )
+
+    batch = service.create_batch(
+        name="tiktok attested",
+        raw_inputs=["https://vm.tiktok.com/ZShort123/?tracking=drop"],
+    )
+
+    assert resolver.calls == ["https://vm.tiktok.com/ZShort123"]
+    assert batch["queued_count"] == 1
+    assert batch["inputs"][0]["submitted_url"] == (
+        "https://vm.tiktok.com/ZShort123/?tracking=drop"
+    )
+    assert batch["inputs"][0]["canonical_url"] == (
+        "https://www.tiktok.com/@example.user/video/7461234567890123456"
+    )
+    assert batch["jobs"][0]["platform"] == "tiktok"
+    assert batch["jobs"][0]["source_type"] == "tiktok_video"
+    assert "must-not-persist" not in repr(batch)
+    assert repository.count_rows("download_jobs") == 1
 
 
 @pytest.mark.parametrize(

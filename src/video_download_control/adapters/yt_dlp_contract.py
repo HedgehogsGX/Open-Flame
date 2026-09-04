@@ -23,6 +23,19 @@ FORBIDDEN_YT_DLP_OPTIONS = frozenset(
     }
 )
 
+_DOWNLOAD_PROGRESS_TEMPLATE = (
+    # Emit only constant presence bits for the yt-dlp info fields.  Main media
+    # transfers inherit both ``id`` and ``format_id``; subtitle downloader
+    # dictionaries inherit neither.  The actual identifiers never cross the
+    # control-line boundary.
+    "download:VDC_PROGRESS|%(info.id&1|0)s|"
+    "%(info.format_id&1|0)s|%(progress.status)j|"
+    "%(progress.downloaded_bytes)j|%(progress.total_bytes)j|"
+    "%(progress.total_bytes_estimate)j|%(progress.progress_idx)j|"
+    "%(progress.max_progress)j"
+)
+_POSTPROCESS_PROGRESS_TEMPLATE = "postprocess:VDC_PHASE|postprocessing"
+
 
 class YtDlpContractError(ValueError):
     pass
@@ -280,6 +293,11 @@ class YtDlpCommandFactory:
             "subtitle:%(id)s.caption.%(language)s.%(ext)s",
             "--no-overwrites",
             "--write-thumbnail",
+            # TikTok can name a valid JPEG thumbnail with the ambiguous
+            # .image extension. Normalize only that case through the pinned
+            # lossless PNG converter; ordinary thumbnails and media stay as-is.
+            "--convert-thumbnails",
+            "image>png",
             "--write-subs",
             "--write-auto-subs",
             "--sub-langs",
@@ -291,7 +309,14 @@ class YtDlpCommandFactory:
             "--print-to-file",
             "after_move:%(.{id,filepath})j",
             self._output_template_literal(mapping_path),
+            "--progress",
             "--newline",
+            "--progress-delta",
+            "0.5",
+            "--progress-template",
+            _DOWNLOAD_PROGRESS_TEMPLATE,
+            "--progress-template",
+            _POSTPROCESS_PROGRESS_TEMPLATE,
             "--",
             request.canonical_url,
         ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 import video_download_control.api as api_module
 from video_download_control.api import create_app
 from video_download_control.config import Settings
+from video_download_control.domain import ErrorCode
 from video_download_control.runtime_logging import RuntimeLogConfig, RuntimeLogger
 from video_download_control.toolchain import ToolchainStatus
 
@@ -167,6 +169,105 @@ def test_api_generates_its_own_request_id_and_logs_the_route_template(
     raw = logger.path.read_text(encoding="utf-8")
     assert inbound_sentinel not in raw
     assert "missing-batch-marker" not in raw
+
+
+def test_explicit_retry_logs_only_template_and_bounded_control_fields(
+    tmp_path: Path,
+) -> None:
+    url_marker = "retry-private-url-marker"
+    diagnostic_marker = "SENTINEL-PRIVATE-RETRY-DIAGNOSTIC"
+    logger = _logger(tmp_path, run_id="api-retry-run")
+    app = create_app(_settings(tmp_path), runtime_logger=logger)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": [f"https://youtu.be/{url_marker}"]},
+        ).json()
+        job_id = created["jobs"][0]["id"]
+        claim_time = datetime.fromisoformat(created["created_at"]) + timedelta(
+            seconds=1
+        )
+        lease = app.state.worker_repository.claim_next(
+            worker_id="retry-log-worker",
+            adapter="fake",
+            adapter_version="1",
+            now=claim_time,
+        )
+        assert lease is not None
+        app.state.worker_repository.finish_failure(
+            lease,
+            error_code=ErrorCode.NETWORK_ERROR,
+            diagnostic=diagnostic_marker,
+            now=claim_time,
+        )
+
+        response = client.post(f"/api/v1/jobs/{job_id}/retry")
+
+    assert response.status_code == 200
+    retry_events = _events(logger, "job.retry_requested")
+    assert len(retry_events) == 1
+    event = retry_events[0]
+    assert event["request_id"] == response.headers["X-Request-ID"]
+    assert event["job_id"] == job_id
+    assert event["result_status"] == "queued"
+    assert event["run_generation"] == 2
+    assert event["platform"] == "youtube"
+    assert event["error_code"] == "network_error"
+    request_events = [
+        item
+        for item in _events(logger, "http.request_completed")
+        if item.get("request_id") == response.headers["X-Request-ID"]
+    ]
+    assert len(request_events) == 1
+    assert request_events[0]["route"] == "/api/v1/jobs/{job_id}/retry"
+    assert logger.status()["rejected_events"] == 0
+    raw = logger.path.read_text(encoding="utf-8")
+    assert diagnostic_marker not in raw
+    assert url_marker not in raw
+
+
+@pytest.mark.parametrize("legacy_error_code", (None, "legacy-invalid-code"))
+def test_explicit_retry_omits_invalid_legacy_error_code_from_log(
+    tmp_path: Path,
+    legacy_error_code: str | None,
+) -> None:
+    logger = _logger(tmp_path, run_id="api-retry-legacy-run")
+    app = create_app(_settings(tmp_path), runtime_logger=logger)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/retry-legacy-error"]},
+        ).json()
+        job_id = created["jobs"][0]["id"]
+        claim_time = datetime.fromisoformat(created["created_at"]) + timedelta(
+            seconds=1
+        )
+        lease = app.state.worker_repository.claim_next(
+            worker_id="retry-legacy-worker",
+            adapter="fake",
+            adapter_version="1",
+            now=claim_time,
+        )
+        assert lease is not None
+        app.state.worker_repository.finish_failure(
+            lease,
+            error_code=ErrorCode.NETWORK_ERROR,
+            diagnostic="legacy diagnostic",
+            now=claim_time,
+        )
+        with app.state.database.connect() as connection:
+            connection.execute(
+                "UPDATE download_jobs SET final_error_code = ? WHERE id = ?",
+                (legacy_error_code, job_id),
+            )
+
+        response = client.post(f"/api/v1/jobs/{job_id}/retry")
+
+    assert response.status_code == 200
+    retry_events = _events(logger, "job.retry_requested")
+    assert len(retry_events) == 1
+    assert "error_code" not in retry_events[0]
+    assert logger.status()["rejected_events"] == 0
 
 
 def test_api_logs_404_and_422_without_paths_or_request_bodies(

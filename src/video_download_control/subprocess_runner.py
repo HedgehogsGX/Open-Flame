@@ -24,6 +24,10 @@ class SubprocessExecutionError(RuntimeError):
     pass
 
 
+class CommandProcessError(SubprocessExecutionError):
+    """The runner could not spawn or control its child process."""
+
+
 class CommandTimedOut(SubprocessExecutionError):
     pass
 
@@ -45,6 +49,19 @@ class CommandSpec:
     timeout_seconds: float = 300.0
     stdout_limit_bytes: int = 1024 * 1024
     stderr_limit_bytes: int = 1024 * 1024
+    # Observers receive complete lines without their CR/LF terminator. They run
+    # on the caller thread and only see bytes already admitted by the bounded
+    # output buffer. Their identity is deliberately absent from repr/equality.
+    stdout_line_observer: Callable[[bytes], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    stderr_line_observer: Callable[[bytes], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,17 +78,77 @@ class _BoundedReader:
         self.limit = limit
         self.buffer = bytearray()
         self.exceeded = threading.Event()
+        self._lock = threading.Lock()
 
     def run(self) -> None:
+        read = getattr(self.stream, "read1", self.stream.read)
         try:
-            while chunk := self.stream.read(64 * 1024):
-                remaining = self.limit - len(self.buffer)
-                if remaining > 0:
-                    self.buffer.extend(chunk[:remaining])
-                if len(chunk) > remaining:
+            while chunk := read(64 * 1024):
+                with self._lock:
+                    remaining = self.limit - len(self.buffer)
+                    if remaining > 0:
+                        self.buffer.extend(chunk[:remaining])
+                    exceeded = len(chunk) > remaining
+                if exceeded:
                     self.exceeded.set()
         finally:
             self.stream.close()
+
+    def read_from(self, offset: int) -> tuple[bytes, int]:
+        with self._lock:
+            end = len(self.buffer)
+            return bytes(self.buffer[offset:end]), end
+
+    def result(self) -> bytes:
+        with self._lock:
+            return bytes(self.buffer)
+
+
+class _LineObserverCursor:
+    """Incrementally split one bounded byte stream into universal-newline lines."""
+
+    def __init__(
+        self,
+        reader: _BoundedReader,
+        observer: Callable[[bytes], None] | None,
+    ) -> None:
+        self.reader = reader
+        self.observer = observer
+        self.offset = 0
+        self.pending = bytearray()
+
+    def drain(self, *, final: bool = False) -> None:
+        if self.observer is None:
+            return
+        chunk, self.offset = self.reader.read_from(self.offset)
+        self.pending.extend(chunk)
+        lines: list[bytes] = []
+        start = 0
+        index = 0
+        while index < len(self.pending):
+            current = self.pending[index]
+            if current == 10:  # LF
+                lines.append(bytes(self.pending[start:index]))
+                index += 1
+                start = index
+                continue
+            if current == 13:  # CR or CRLF
+                if index + 1 == len(self.pending) and not final:
+                    break
+                lines.append(bytes(self.pending[start:index]))
+                index += 1
+                if index < len(self.pending) and self.pending[index] == 10:
+                    index += 1
+                start = index
+                continue
+            index += 1
+        if start:
+            del self.pending[:start]
+        if final and self.pending:
+            lines.append(bytes(self.pending))
+            self.pending.clear()
+        for line in lines:
+            self.observer(line)
 
 
 class SecureSubprocessRunner:
@@ -116,6 +193,7 @@ class SecureSubprocessRunner:
         allowed_environment_keys: frozenset[str] = frozenset(),
         poll_interval_seconds: float = 0.02,
         runtime_logger: RuntimeLogger | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         if (
             isinstance(poll_interval_seconds, bool)
@@ -134,6 +212,10 @@ class SecureSubprocessRunner:
         )
         self.poll_interval_seconds = poll_interval_seconds
         self.runtime_logger = runtime_logger
+        # One event can cover every command belonging to a concurrent Worker,
+        # including probes and verifiers that have no per-job callback. It is a
+        # one-way stop signal; this runner never resets another caller's stop.
+        self.stop_event = stop_event if stop_event is not None else threading.Event()
 
     def run(
         self,
@@ -147,9 +229,23 @@ class SecureSubprocessRunner:
             executable = self._validate_executable(spec.executable)
             cwd = self._validate_cwd(spec.cwd)
             self._validate_limits(spec)
+            self._validate_observers(spec)
             arguments = self._validate_arguments(spec.arguments)
             environment = self._build_environment(executable, spec.environment)
-        except (OSError, TypeError, ValueError) as exc:
+        except OSError as exc:
+            failure = SubprocessPolicyError(
+                "subprocess policy could not be validated"
+            )
+            self._emit(
+                "subprocess.failed",
+                level="ERROR",
+                subprocess_id=subprocess_id,
+                duration_ms=(time.monotonic() - started) * 1000,
+                exception_type=safe_exception_type(failure),
+                failure_site="policy_validation",
+            )
+            raise failure from exc
+        except (TypeError, ValueError) as exc:
             self._emit(
                 "subprocess.failed",
                 level="ERROR",
@@ -161,6 +257,19 @@ class SecureSubprocessRunner:
             raise
 
         executable_name = executable.name.lower()
+        if self.stop_event.is_set():
+            failure = CommandCancelled("subprocess was cancelled before launch")
+            self._emit(
+                "subprocess.failed",
+                level="WARNING",
+                subprocess_id=subprocess_id,
+                executable=executable_name,
+                argument_count=len(arguments),
+                duration_ms=(time.monotonic() - started) * 1000,
+                exception_type=safe_exception_type(failure),
+                failure_site="process_spawn",
+            )
+            raise failure
         self._emit(
             "subprocess.started",
             subprocess_id=subprocess_id,
@@ -187,6 +296,21 @@ class SecureSubprocessRunner:
 
         try:
             process = subprocess.Popen([str(executable), *arguments], **popen_options)
+        except Exception as exc:
+            failure = CommandProcessError(
+                "subprocess could not be spawned under policy"
+            )
+            self._emit(
+                "subprocess.failed",
+                level="ERROR",
+                subprocess_id=subprocess_id,
+                executable=executable_name,
+                argument_count=len(arguments),
+                duration_ms=(time.monotonic() - started) * 1000,
+                exception_type=safe_exception_type(failure),
+                failure_site="process_spawn",
+            )
+            raise failure from exc
         except BaseException as exc:
             self._emit(
                 "subprocess.failed",
@@ -199,51 +323,133 @@ class SecureSubprocessRunner:
                 failure_site="process_spawn",
             )
             raise
-        assert process.stdout is not None
-        assert process.stderr is not None
-        stdout_reader = _BoundedReader(process.stdout, spec.stdout_limit_bytes)
-        stderr_reader = _BoundedReader(process.stderr, spec.stderr_limit_bytes)
-        stdout_thread = threading.Thread(target=stdout_reader.run, daemon=True)
-        stderr_thread = threading.Thread(target=stderr_reader.run, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-
-        failure: SubprocessExecutionError | None = None
+        reader_threads: list[threading.Thread] = []
         try:
-            while process.poll() is None:
-                if stdout_reader.exceeded.is_set() or stderr_reader.exceeded.is_set():
-                    failure = CommandOutputLimitExceeded(
-                        "subprocess output exceeded configured byte limit"
-                    )
-                    break
-                if is_cancelled is not None and is_cancelled():
-                    failure = CommandCancelled("subprocess was cancelled")
-                    break
-                if time.monotonic() - started >= spec.timeout_seconds:
-                    failure = CommandTimedOut("subprocess deadline exceeded")
-                    break
-                time.sleep(self.poll_interval_seconds)
+            assert process.stdout is not None
+            assert process.stderr is not None
+            stdout_reader = _BoundedReader(process.stdout, spec.stdout_limit_bytes)
+            stderr_reader = _BoundedReader(process.stderr, spec.stderr_limit_bytes)
+            stdout_thread = threading.Thread(target=stdout_reader.run, daemon=True)
+            reader_threads.append(stdout_thread)
+            stderr_thread = threading.Thread(target=stderr_reader.run, daemon=True)
+            reader_threads.append(stderr_thread)
+            stdout_thread.start()
+            stderr_thread.start()
+            stdout_observer = _LineObserverCursor(
+                stdout_reader,
+                spec.stdout_line_observer,
+            )
+            stderr_observer = _LineObserverCursor(
+                stderr_reader,
+                spec.stderr_line_observer,
+            )
         except BaseException as exc:
-            self._terminate_tree(process)
-            process.wait()
-            stdout_thread.join()
-            stderr_thread.join()
+            # Popen already owns a live process even if a reader cannot start.
+            # Termination precedes joining so a reader blocked on EOF wakes up;
+            # the never-started reader's stream must also be closed explicitly.
+            self._best_effort_shutdown(process)
+            self._best_effort_join(
+                *(thread for thread in reader_threads if thread.ident is not None)
+            )
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        pass
+            setup_failure = (
+                CommandProcessError("subprocess output readers could not be started")
+                if isinstance(exc, Exception)
+                else exc
+            )
+            return_code = (
+                {"return_code": process.returncode}
+                if isinstance(process.returncode, int)
+                else {}
+            )
             self._emit(
                 "subprocess.failed",
                 level="ERROR",
                 subprocess_id=subprocess_id,
                 executable=executable_name,
                 argument_count=len(arguments),
-                return_code=process.returncode,
+                duration_ms=(time.monotonic() - started) * 1000,
+                exception_type=safe_exception_type(setup_failure),
+                failure_site="process_spawn",
+                **return_code,
+            )
+            if setup_failure is exc:
+                raise
+            raise setup_failure from exc
+
+        failure: SubprocessExecutionError | None = None
+        failure_site = "process_wait"
+        try:
+            while self._poll_process(process) is None:
+                failure_site = "process_wait"
+                if stdout_reader.exceeded.is_set() or stderr_reader.exceeded.is_set():
+                    failure = CommandOutputLimitExceeded(
+                        "subprocess output exceeded configured byte limit"
+                    )
+                    break
+                if self.stop_event.is_set() or (
+                    is_cancelled is not None and is_cancelled()
+                ):
+                    failure = CommandCancelled("subprocess was cancelled")
+                    break
+                if time.monotonic() - started >= spec.timeout_seconds:
+                    failure = CommandTimedOut("subprocess deadline exceeded")
+                    break
+                failure_site = "output_observer"
+                stdout_observer.drain()
+                stderr_observer.drain()
+                failure_site = "process_wait"
+                time.sleep(self.poll_interval_seconds)
+        except BaseException as exc:
+            self._best_effort_shutdown(process)
+            self._best_effort_join(stdout_thread, stderr_thread)
+            return_code = (
+                {"return_code": process.returncode}
+                if isinstance(process.returncode, int)
+                else {}
+            )
+            self._emit(
+                "subprocess.failed",
+                level="ERROR",
+                subprocess_id=subprocess_id,
+                executable=executable_name,
+                argument_count=len(arguments),
                 duration_ms=(time.monotonic() - started) * 1000,
                 exception_type=safe_exception_type(exc),
-                failure_site="process_wait",
+                failure_site=failure_site,
+                **return_code,
             )
             raise
 
-        if failure is not None:
-            self._terminate_tree(process)
-        process.wait()
+        try:
+            if failure is not None:
+                self._terminate_process_tree(process)
+            self._wait_for_process(process)
+        except CommandProcessError as exc:
+            self._best_effort_shutdown(process)
+            self._best_effort_join(stdout_thread, stderr_thread)
+            return_code = (
+                {"return_code": process.returncode}
+                if isinstance(process.returncode, int)
+                else {}
+            )
+            self._emit(
+                "subprocess.failed",
+                level="ERROR",
+                subprocess_id=subprocess_id,
+                executable=executable_name,
+                argument_count=len(arguments),
+                duration_ms=(time.monotonic() - started) * 1000,
+                exception_type=safe_exception_type(exc),
+                failure_site="process_wait",
+                **return_code,
+            )
+            raise
         stdout_thread.join()
         stderr_thread.join()
         if failure is None and (
@@ -252,6 +458,23 @@ class SecureSubprocessRunner:
             failure = CommandOutputLimitExceeded(
                 "subprocess output exceeded configured byte limit"
             )
+        if failure is None:
+            try:
+                stdout_observer.drain(final=True)
+                stderr_observer.drain(final=True)
+            except BaseException as exc:
+                self._emit(
+                    "subprocess.failed",
+                    level="ERROR",
+                    subprocess_id=subprocess_id,
+                    executable=executable_name,
+                    argument_count=len(arguments),
+                    return_code=process.returncode,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    exception_type=safe_exception_type(exc),
+                    failure_site="output_observer",
+                )
+                raise
         if failure is not None:
             self._emit(
                 "subprocess.failed",
@@ -267,8 +490,8 @@ class SecureSubprocessRunner:
             raise failure
         result = CommandResult(
             returncode=process.returncode,
-            stdout=bytes(stdout_reader.buffer),
-            stderr=bytes(stderr_reader.buffer),
+            stdout=stdout_reader.result(),
+            stderr=stderr_reader.result(),
             duration_seconds=time.monotonic() - started,
         )
         self._emit(
@@ -342,6 +565,17 @@ class SecureSubprocessRunner:
             raise SubprocessPolicyError("output limits must be non-negative integers")
 
     @staticmethod
+    def _validate_observers(spec: CommandSpec) -> None:
+        if any(
+            observer is not None and not callable(observer)
+            for observer in (
+                spec.stdout_line_observer,
+                spec.stderr_line_observer,
+            )
+        ):
+            raise SubprocessPolicyError("output observers must be callable")
+
+    @staticmethod
     def _validate_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
         accepted: list[str] = []
         for argument in arguments:
@@ -386,6 +620,52 @@ class SecureSubprocessRunner:
                 raise SubprocessPolicyError("invalid subprocess environment entry")
             environment[key] = value
         return environment
+
+    @staticmethod
+    def _poll_process(process: subprocess.Popen[bytes]) -> int | None:
+        try:
+            return process.poll()
+        except Exception as exc:
+            raise CommandProcessError(
+                "subprocess status could not be inspected"
+            ) from exc
+
+    @classmethod
+    def _terminate_process_tree(cls, process: subprocess.Popen[bytes]) -> None:
+        try:
+            cls._terminate_tree(process)
+        except Exception as exc:
+            raise CommandProcessError(
+                "subprocess tree could not be terminated"
+            ) from exc
+
+    @staticmethod
+    def _wait_for_process(process: subprocess.Popen[bytes]) -> None:
+        try:
+            process.wait()
+        except Exception as exc:
+            raise CommandProcessError(
+                "subprocess completion could not be observed"
+            ) from exc
+
+    @classmethod
+    def _best_effort_shutdown(cls, process: subprocess.Popen[bytes]) -> None:
+        try:
+            cls._terminate_tree(process)
+        except BaseException:
+            pass
+        try:
+            process.wait()
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _best_effort_join(*threads: threading.Thread) -> None:
+        for thread in threads:
+            try:
+                thread.join()
+            except BaseException:
+                pass
 
     @staticmethod
     def _terminate_tree(process: subprocess.Popen[bytes]) -> None:

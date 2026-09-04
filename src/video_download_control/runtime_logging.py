@@ -31,9 +31,11 @@ MAX_RUNTIME_LOG_LINE_BYTES: Final = 8192
 MAX_RUNTIME_LOG_READ_EVENTS: Final = 500
 RUNTIME_LOG_COMPONENTS: Final = (
     "control",
+    "local-app",
     "offline-worker",
     "candidate-worker",
     "local-worker",
+    "launch-diagnostics",
 )
 
 _LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
@@ -59,10 +61,19 @@ _ROUTES = frozenset(
         "/api/v1/batches/import",
         "/api/v1/batches/{batch_id}",
         "/api/v1/batches/{batch_id}/assets",
+        "/api/v1/capability-decisions",
+        "/api/v1/capability-decisions/{identity_key}/history",
+        "/api/v1/capability-evidence",
+        "/api/v1/capability-implementations",
+        "/api/v1/capability-snapshot",
+        "/api/v1/download-capabilities",
+        "/api/v1/credential-defaults",
         "/api/v1/assets/{asset_id}/download",
+        "/api/v1/artifacts/{artifact_id}/download",
         "/api/v1/inputs/{input_id}/cancel",
         "/api/v1/inputs/{input_id}/rediscover",
         "/api/v1/jobs/{job_id}/cancel",
+        "/api/v1/jobs/{job_id}/retry",
         "/api/v1/metrics",
         "/api/v1/operations/logs",
         "/api/v1/operations/queue",
@@ -93,6 +104,19 @@ _ALLOWED_EVENTS = frozenset(
         "input.cancel_requested",
         "input.rediscover_requested",
         "job.cancel_requested",
+        "job.retry_requested",
+        "local_app.browser_open_failed",
+        "local_app.claim_gate_activated",
+        "local_app.claim_gate_prepared",
+        "local_app.claim_gate_stopped",
+        "local_app.child_exited",
+        "local_app.child_ready",
+        "local_app.forced_shutdown",
+        "local_app.failure_reported",
+        "local_app.initializing",
+        "local_app.ready",
+        "local_app.shutdown_requested",
+        "local_app.stopped",
         "queue.resumed",
         "runtime_log.event_rejected",
         "subprocess.completed",
@@ -106,6 +130,9 @@ _ALLOWED_EVENTS = frozenset(
         "worker.job_finished",
         "worker.job_phase",
         "worker.queue_paused",
+        "worker.preflight_failed",
+        "worker.preflight_started",
+        "worker.preflight_succeeded",
         "worker.retry_decided",
         "worker.initializing",
         "worker.started",
@@ -142,16 +169,51 @@ _REASONS = frozenset(
         "invalid_level",
         "invalid_record",
         "keyboard_interrupt",
+        "check_complete",
+        "child_failed",
+        "forced_shutdown",
+        "normal",
         "queue_paused",
         "runtime_error",
         "single_run_complete",
+        "startup_failed",
+        "supervisor_shutdown",
     }
 )
+_CHILD_ROLES = frozenset({"control", "worker"})
+_LOCAL_APP_PHASES = frozenset(
+    {"control_ready", "worker_preflight_ready", "worker_ready"}
+)
+_EXIT_CATEGORIES = frozenset({"clean", "error", "terminated", "unknown"})
+_CLAIM_GATE_STATES = frozenset(
+    {
+        "activate_failed",
+        "active",
+        "fenced",
+        "prepare_failed",
+        "prepared",
+        "stop_failed",
+        "stopped",
+    }
+)
+_CLAIM_GATE_EVENT_STATES: Final[dict[str, frozenset[str]]] = {
+    "local_app.claim_gate_activated": frozenset({"activate_failed", "active"}),
+    "local_app.claim_gate_prepared": frozenset({"prepare_failed", "prepared"}),
+    "local_app.claim_gate_stopped": frozenset(
+        {"fenced", "stop_failed", "stopped"}
+    ),
+}
+_FORCED_SHUTDOWN_SITES: Final[dict[str, str]] = {
+    "child_timeout": "child_shutdown",
+    "gate_stop_failed": "claim_gate_stop",
+}
+_FORCED_SHUTDOWN_CAUSES = frozenset(_FORCED_SHUTDOWN_SITES)
 _PHASES = frozenset(
     {
         "committing",
         "discovery",
         "downloading",
+        "postprocessing",
         "preparing",
         "probing",
         "verifying",
@@ -169,6 +231,7 @@ _EXCEPTION_TYPES = frozenset(
         "CandidateStartupError",
         "CommandCancelled",
         "CommandOutputLimitExceeded",
+        "CommandProcessError",
         "CommandTimedOut",
         "CookiePreparationError",
         "DatabaseError",
@@ -188,7 +251,10 @@ _EXCEPTION_TYPES = frozenset(
 _FAILURE_SITES = frozenset(
     {
         "attempt_directory",
+        "child_shutdown",
+        "claim_gate_stop",
         "heartbeat",
+        "output_observer",
         "pending_asset",
         "policy_validation",
         "process_spawn",
@@ -197,11 +263,27 @@ _FAILURE_SITES = frozenset(
         "reconciliation",
     }
 )
+LOCAL_FAILURE_DIAGNOSTIC_CONTEXT: Final[dict[str, tuple[str, str]]] = {
+    "invalid_arguments": ("argument_parsing", "not_started"),
+    "local_port_unavailable": ("port_reservation", "not_started"),
+    "local_toolchain_unavailable": ("toolchain_directory", "not_started"),
+    "local_cookie_config_invalid": ("cookie_config", "not_started"),
+    "local_dependencies_unavailable": ("dependency_import", "not_started"),
+    "local_app_failed": ("unknown", "unknown"),
+    "internal_error": ("unknown", "unknown"),
+    "setup_prerequisite_unavailable": ("setup_preflight", "not_started"),
+    "setup_environment_unavailable": ("setup_environment", "not_started"),
+    "setup_dependencies_failed": ("setup_dependencies", "not_started"),
+    "setup_toolchain_failed": ("setup_toolchain", "not_started"),
+    "setup_busy": ("setup_lock", "not_started"),
+    "setup_interrupted": ("setup_install", "not_started"),
+}
+_LOCAL_FAILURE_SITES = frozenset(site for site, _ in LOCAL_FAILURE_DIAGNOSTIC_CONTEXT.values())
 _CLEANUP_OPERATIONS = frozenset(
     {"attempt_directory", "pending_asset", "reconciliation"}
 )
 _LOG_FILENAME = re.compile(
-    r"^runtime-(?:control|offline-worker|candidate-worker|local-worker)"
+    r"^runtime-(?:control|local-app|offline-worker|candidate-worker|local-worker|launch-diagnostics)"
     r"(?:-[A-Za-z0-9][A-Za-z0-9._-]{0,63})?\.jsonl"
     r"(?:\.([1-9]|1[0-9]|20))?$"
 )
@@ -234,6 +316,8 @@ _NUMBER_FIELDS = frozenset({"duration_ms", "timeout_seconds"})
 _BOOLEAN_FIELDS = frozenset(
     {
         "direct_network_enabled",
+        "browser_enabled",
+        "check_only",
         "js_runtime_enabled",
         "queue_paused",
         "short_link_resolution_enabled",
@@ -270,7 +354,14 @@ _TOKEN_FIELDS = frozenset(
         "source_type",
         "subprocess_id",
         "cleanup_operation",
+        "cause",
+        "child_role",
+        "app_phase",
+        "exit_category",
+        "gate_state",
         "worker_id",
+        "diagnostic_code",
+        "log_status",
     }
 )
 _ALLOWED_FIELDS = (
@@ -350,6 +441,39 @@ _EVENT_FIELDS: Final[dict[str, frozenset[str]]] = {
         {"request_id", "input_id", "result_status", "run_generation"}
     ),
     "job.cancel_requested": frozenset({"request_id", "job_id", "result_status"}),
+    "job.retry_requested": frozenset(
+        {
+            "request_id",
+            "job_id",
+            "result_status",
+            "run_generation",
+            "platform",
+            "error_code",
+        }
+    ),
+    "local_app.browser_open_failed": frozenset({"exception_type"}),
+    "local_app.failure_reported": frozenset(
+        {"app_version", "diagnostic_code", "failure_site", "log_status"}
+    ),
+    "local_app.claim_gate_activated": frozenset({"worker_id", "gate_state"}),
+    "local_app.claim_gate_prepared": frozenset({"worker_id", "gate_state"}),
+    "local_app.claim_gate_stopped": frozenset({"worker_id", "gate_state"}),
+    "local_app.child_exited": frozenset({"child_role", "exit_category"}),
+    "local_app.child_ready": frozenset({"child_role", "app_phase"}),
+    "local_app.forced_shutdown": frozenset({"cause", "failure_site"}),
+    "local_app.initializing": frozenset(
+        {
+            "app_version",
+            "app_schema_version",
+            "port",
+            "direct_network_enabled",
+            "browser_enabled",
+            "check_only",
+        }
+    ),
+    "local_app.ready": frozenset({"port", "browser_enabled"}),
+    "local_app.shutdown_requested": frozenset({"reason"}),
+    "local_app.stopped": frozenset({"reason"}),
     "queue.resumed": frozenset({"request_id", "queue_paused"}),
     "runtime_log.event_rejected": frozenset({"reason", "rejected_field_count"}),
     "subprocess.started": frozenset(
@@ -461,6 +585,16 @@ _EVENT_FIELDS: Final[dict[str, frozenset[str]]] = {
             "failure_site",
         }
     ),
+    "worker.preflight_failed": frozenset({"worker_id", "exception_type"}),
+    "worker.preflight_started": frozenset(
+        {
+            "worker_id",
+            "adapter",
+            "direct_network_enabled",
+            "js_runtime_enabled",
+        }
+    ),
+    "worker.preflight_succeeded": frozenset({"worker_id"}),
     "worker.initializing": frozenset(
         {
             "worker_id",
@@ -632,6 +766,8 @@ class RuntimeLogger:
         unknown = set(fields) - _EVENT_FIELDS[event]
         if unknown:
             raise RuntimeLogRecordError("runtime event field is not allow-listed")
+        if not _event_fields_are_consistent(event, fields):
+            raise RuntimeLogRecordError("runtime event diagnostics are invalid")
         record = self._base_record(event, level)
         for key, value in fields.items():
             record[key] = _validated_field(key, value)
@@ -888,9 +1024,10 @@ def _validated_field(key: str, value: object) -> object:
         semantic_sets = {
             "adapter": _ADAPTERS,
             "cleanup_operation": _CLEANUP_OPERATIONS,
+            "cause": _FORCED_SHUTDOWN_CAUSES,
             "error_code": _ERROR_CODES,
             "executable": _EXECUTABLES,
-            "failure_site": _FAILURE_SITES,
+            "failure_site": _FAILURE_SITES | _LOCAL_FAILURE_SITES,
             "job_kind": _JOB_KINDS,
             "phase": _PHASES,
             "platform": _PLATFORMS,
@@ -898,12 +1035,49 @@ def _validated_field(key: str, value: object) -> object:
             "result_status": _RESULT_STATUSES,
             "retry_action": _RETRY_ACTIONS,
             "source_type": _SOURCE_TYPES,
+            "child_role": _CHILD_ROLES,
+            "app_phase": _LOCAL_APP_PHASES,
+            "exit_category": _EXIT_CATEGORIES,
+            "gate_state": _CLAIM_GATE_STATES,
+            "diagnostic_code": frozenset(LOCAL_FAILURE_DIAGNOSTIC_CONTEXT),
+            "log_status": frozenset({"not_started", "unknown"}),
         }
         accepted = semantic_sets.get(key)
         if accepted is not None and value not in accepted:
             raise RuntimeLogRecordError("runtime semantic token is invalid")
         return value
     raise RuntimeLogRecordError("runtime event field is not allow-listed")
+
+
+def _event_fields_are_consistent(
+    event: str,
+    fields: dict[str, object],
+) -> bool:
+    if event == "local_app.failure_reported":
+        code = fields.get("diagnostic_code")
+        return (
+            set(fields) == {"app_version", "diagnostic_code", "failure_site", "log_status"}
+            and isinstance(code, str)
+            and LOCAL_FAILURE_DIAGNOSTIC_CONTEXT.get(code)
+            == (fields["failure_site"], fields["log_status"])
+        )
+    if "failure_site" in fields and fields["failure_site"] not in _FAILURE_SITES:
+        return False
+    expected_gate_states = _CLAIM_GATE_EVENT_STATES.get(event)
+    if expected_gate_states is not None:
+        return (
+            set(fields) == {"worker_id", "gate_state"}
+            and isinstance(fields["gate_state"], str)
+            and fields["gate_state"] in expected_gate_states
+        )
+    if event == "local_app.forced_shutdown":
+        cause = fields.get("cause")
+        return (
+            set(fields) == {"cause", "failure_site"}
+            and isinstance(cause, str)
+            and _FORCED_SHUTDOWN_SITES.get(cause) == fields["failure_site"]
+        )
+    return True
 
 
 def _is_public_runtime_record(value: object) -> bool:
@@ -944,6 +1118,13 @@ def _is_public_runtime_record(value: object) -> bool:
     ):
         return False
     if set(value) - _BASE_FIELDS - _EVENT_FIELDS[value["event"]]:
+        return False
+    event_fields = {
+        key: value[key]
+        for key in _EVENT_FIELDS[value["event"]]
+        if key in value
+    }
+    if not _event_fields_are_consistent(value["event"], event_fields):
         return False
     if (
         not isinstance(value["component"], str)

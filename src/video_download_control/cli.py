@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import argparse
+from collections.abc import Sequence
+
 import uvicorn
 
 from .api import create_app
@@ -7,7 +10,18 @@ from .config import Settings
 from .runtime_logging import RuntimeLogConfig, RuntimeLogger, safe_exception_type
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="video-download-control",
+        description=(
+            "Run the loopback-only video download control plane. "
+            "Runtime configuration is read from VDC_* environment variables."
+        ),
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    build_parser().parse_args(argv)
     settings = Settings.from_env()
     runtime_logger = RuntimeLogger(
         component="control",

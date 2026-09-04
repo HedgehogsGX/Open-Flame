@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 import sqlite3
@@ -23,7 +25,9 @@ from video_download_control.backup import (
     create_backup,
     restore_backup,
 )
+from video_download_control.build_identity import current_product_identity
 from video_download_control.backup_cli import main as backup_cli_main
+from video_download_control.capability_evidence import CapabilityEvidenceRepository
 from video_download_control.database import SCHEMA_VERSION, Database
 from video_download_control.graph import XAttachmentProbeItem
 from video_download_control.service import BatchService
@@ -189,6 +193,81 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def populate_capability_decision(database: Database) -> tuple[str, str]:
+    manifest_rows = [
+        {
+            "sample_id": f"backup-positive-{index}",
+            "platform": "youtube",
+            "source_type": "youtube_video",
+            "job_kind": "download",
+            "url": f"https://www.youtube.com/watch?v=backup{index}",
+            "expected_outcome": "ready",
+            "expected_output_count": 1,
+            "requires_cookie": "false",
+            "region": "test-region",
+        }
+        for index in range(10)
+    ]
+    manifest_rows.append(
+        {
+            "sample_id": "backup-negative",
+            "platform": "youtube",
+            "source_type": "youtube_video",
+            "job_kind": "download",
+            "url": "https://www.youtube.com/watch?v=backup-unavailable",
+            "expected_outcome": "content_unavailable",
+            "expected_output_count": 0,
+            "requires_cookie": "false",
+            "region": "test-region",
+        }
+    )
+    result_rows = [
+        {
+            "run_id": f"backup-run-{run}",
+            "sample_id": sample["sample_id"],
+            "job_kind": "download",
+            "observed_outcome": sample["expected_outcome"],
+            "observed_output_count": sample["expected_output_count"],
+            "completed_at": f"2026-09-0{run}T00:00:00Z",
+            "adapter": "yt_dlp",
+            "downloader_version": "test-1",
+            "environment": "test-environment",
+            "product_version": current_product_identity(),
+        }
+        for run in range(1, 4)
+        for sample in manifest_rows
+    ]
+
+    def encoded(fields: list[str], rows: list[dict[str, object]]) -> bytes:
+        buffer = io.StringIO(newline="")
+        writer = csv.DictWriter(buffer, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+        return buffer.getvalue().encode("utf-8")
+
+    manifest = encoded(list(manifest_rows[0]), manifest_rows)
+    results = encoded(list(result_rows[0]), result_rows)
+    repository = CapabilityEvidenceRepository(database)
+    imported = repository.import_csv_bundle(
+        manifest_content=manifest,
+        results_content=results,
+        environment="test-environment",
+    )
+    evidence_id = imported.evidence_ids[0]
+    approved = repository.approve(
+        evidence_id=evidence_id,
+        expected_revision=0,
+        reason_code="stage0-reviewed",
+    )
+    revoked = repository.revoke(
+        evidence_id=evidence_id,
+        expected_revision=1,
+        reason_code="regression",
+    )
+    assert revoked.revision == 2
+    return evidence_id, approved.identity_key
+
+
 def rewrite_manifest_and_hash(backup_root: Path, manifest: dict) -> None:
     manifest_path = backup_root / BACKUP_MANIFEST_NAME
     manifest_path.write_text(
@@ -224,6 +303,7 @@ def test_backup_and_restore_to_independent_root_drills_database_and_assets(
     source_hash = sha256(source_original)
     extra = settings.data_root / "operator-note.txt"
     extra.write_text("non-secret managed note", encoding="utf-8")
+    evidence_id, identity_key = populate_capability_decision(database)
     backup_root = tmp_path / "backup-001"
 
     backup = create_backup(
@@ -265,7 +345,24 @@ def test_backup_and_restore_to_independent_root_drills_database_and_assets(
         artifact = connection.execute(
             "SELECT path, sha256 FROM artifacts WHERE kind = 'original'"
         ).fetchone()
+        capability = connection.execute(
+            """
+            SELECT evidence_id, identity_key, job_kind, status, revision
+            FROM platform_capabilities
+            """
+        ).fetchone()
+        decision_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM capability_decisions"
+        ).fetchone()["count"]
     assert restored_batch["status"] == "ready"
+    assert dict(capability) == {
+        "evidence_id": evidence_id,
+        "identity_key": identity_key,
+        "job_kind": "download",
+        "status": "candidate",
+        "revision": 2,
+    }
+    assert decision_count == 2
     restored_original = restore_root.joinpath(
         *artifact["path"].split("/")
     )

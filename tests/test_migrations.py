@@ -50,6 +50,18 @@ def _create_legacy_database(path: Path, *, version: int) -> None:
         connection.close()
 
 
+def _create_schema_eight_database(path: Path) -> None:
+    _create_legacy_database(path, version=7)
+    Database(path)._migrate_to_8()
+
+
+def _create_schema_ten_database(path: Path) -> None:
+    _create_schema_eight_database(path)
+    database = Database(path)
+    database._migrate_to_9()
+    database._migrate_to_10()
+
+
 def _seed_schema_seven_graph_legacy(path: Path) -> None:
     _create_legacy_database(path, version=7)
     connection = sqlite3.connect(path)
@@ -293,12 +305,15 @@ def test_schema_one_database_migrates_to_current_without_losing_capability(
         columns = {
             row["name"]
             for row in migrated.execute(
-                "PRAGMA table_info(platform_capabilities)"
+                "PRAGMA table_info(capability_legacy_schema9)"
             ).fetchall()
         }
         capability = migrated.execute(
-            "SELECT * FROM platform_capabilities WHERE id = 'cap-1'"
+            "SELECT * FROM capability_legacy_schema9 WHERE id = 'cap-1'"
         ).fetchone()
+        current_capability_count = migrated.execute(
+            "SELECT COUNT(*) AS count FROM platform_capabilities"
+        ).fetchone()["count"]
         job_columns = {
             row["name"]
             for row in migrated.execute("PRAGMA table_info(download_jobs)").fetchall()
@@ -322,12 +337,14 @@ def test_schema_one_database_migrates_to_current_without_losing_capability(
             "SELECT status, queued_count, duplicate_count FROM batches WHERE id = 'batch-1'"
         ).fetchone()
 
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8]
-    assert SCHEMA_VERSION == 8
-    assert {"adapter_version", "environment"} <= columns
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
+    assert SCHEMA_VERSION == 11
+    assert {"job_kind", "adapter_version", "environment"} <= columns
     assert capability["notes"] == "keep"
+    assert capability["job_kind"] == "download"
     assert capability["adapter_version"] == "unknown"
     assert capability["environment"] == "unknown"
+    assert current_capability_count == 0
     assert {
         "lease_token",
         "heartbeat_at",
@@ -385,7 +402,7 @@ def test_schema_three_database_migrates_explicitly_to_current(tmp_path: Path) ->
             ).fetchall()
         }
 
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
     assert columns == {
         "asset_id",
         "job_id",
@@ -402,15 +419,360 @@ def test_schema_three_database_migrates_explicitly_to_current(tmp_path: Path) ->
     assert database.readiness() == (True, "ok")
 
 
+def test_schema_ten_database_migrates_to_closed_claim_gate(tmp_path: Path) -> None:
+    path = tmp_path / "schema-ten.sqlite3"
+    _create_schema_ten_database(path)
+    database = Database(path)
+
+    database.initialize()
+
+    with database.connect() as connection:
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        gate = connection.execute(
+            """
+            SELECT id, run_id, worker_id, accepting_claims,
+                   activated_at, stop_requested_at
+            FROM worker_claim_gate
+            """
+        ).fetchone()
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
+    assert dict(gate) == {
+        "id": 1,
+        "run_id": None,
+        "worker_id": None,
+        "accepting_claims": 0,
+        "activated_at": None,
+        "stop_requested_at": None,
+    }
+    assert database.readiness() == (True, "ok")
+
+
+def test_schema_eleven_migration_failure_rolls_back_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "migration-eleven-rollback.sqlite3"
+    _create_schema_ten_database(path)
+    database = Database(path)
+    failing_migration = database_module.MIGRATION_11_SQL.replace(
+        "INSERT INTO schema_migrations(version, applied_at)",
+        "SELECT missing_column FROM missing_table;\n\n"
+        "INSERT INTO schema_migrations(version, applied_at)",
+    )
+    monkeypatch.setattr(database_module, "MIGRATION_11_SQL", failing_migration)
+
+    with pytest.raises(sqlite3.OperationalError, match="missing_table"):
+        database.initialize()
+
+    with database.connect() as connection:
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        gate_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'worker_claim_gate'
+            """
+        ).fetchone()
+    assert versions == list(range(1, 11))
+    assert gate_table is None
+
+
+def test_readiness_rejects_missing_worker_claim_gate_singleton(tmp_path: Path) -> None:
+    database = Database(tmp_path / "missing-claim-gate.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute("DELETE FROM worker_claim_gate WHERE id = 1")
+
+    assert database.readiness() == (
+        False,
+        "missing_worker_claim_gate_singleton",
+    )
+
+
+def test_readiness_rejects_malformed_worker_claim_gate_state(tmp_path: Path) -> None:
+    database = Database(tmp_path / "malformed-claim-gate-state.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE worker_claim_gate
+            SET run_id = ?, worker_id = ?, accepting_claims = 1,
+                activated_at = ''
+            WHERE id = 1
+            """,
+            ("a" * 32, "local-app-worker"),
+        )
+
+    assert database.readiness() == (
+        False,
+        "malformed_worker_claim_gate_state",
+    )
+
+
+def test_readiness_rejects_worker_claim_gate_without_schema_constraints(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "malformed-claim-gate-table.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute("DROP TABLE worker_claim_gate")
+        connection.execute(
+            """
+            CREATE TABLE worker_claim_gate (
+                id INTEGER PRIMARY KEY,
+                run_id TEXT,
+                worker_id TEXT,
+                accepting_claims INTEGER NOT NULL DEFAULT 0,
+                activated_at TEXT,
+                stop_requested_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO worker_claim_gate(
+                id, run_id, worker_id, accepting_claims,
+                activated_at, stop_requested_at, updated_at
+            ) VALUES (1, NULL, NULL, 0, NULL, NULL, '2026-09-03T00:00:00Z')
+            """
+        )
+
+    assert database.readiness() == (
+        False,
+        "malformed_table:worker_claim_gate",
+    )
+
+
+def test_readiness_rejects_any_worker_claim_gate_trigger(tmp_path: Path) -> None:
+    database = Database(tmp_path / "triggered-claim-gate.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reopen_gate_after_stop
+            AFTER UPDATE ON worker_claim_gate
+            WHEN NEW.accepting_claims = 0
+                 AND NEW.stop_requested_at IS NOT NULL
+            BEGIN
+                UPDATE worker_claim_gate
+                SET accepting_claims = 1,
+                    activated_at = NEW.stop_requested_at,
+                    stop_requested_at = NULL,
+                    updated_at = NEW.stop_requested_at
+                WHERE id = 1;
+            END
+            """
+        )
+
+    assert database.readiness() == (
+        False,
+        "forbidden_triggers:worker_claim_gate",
+    )
+
+
 def test_readiness_detects_missing_schema_index(tmp_path: Path) -> None:
     database = Database(tmp_path / "index.sqlite3")
     database.initialize()
     with database.connect() as connection:
-        connection.execute("DROP INDEX idx_capability_evidence_identity")
+        connection.execute("DROP INDEX idx_capability_evidence_digest")
 
     ready, detail = database.readiness()
     assert ready is False
-    assert detail == "missing_indexes:idx_capability_evidence_identity"
+    assert detail == "missing_indexes:idx_capability_evidence_digest"
+
+
+def test_schema_ten_capability_identity_includes_required_job_kind(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "capability-job-kind.sqlite3")
+    database.initialize()
+
+    with database.connect() as connection:
+        job_kind_column = next(
+            row
+            for row in connection.execute(
+                "PRAGMA table_info(capability_evidence)"
+            ).fetchall()
+            if row["name"] == "job_kind"
+        )
+        index = next(
+            row
+            for row in connection.execute(
+                "PRAGMA index_list(capability_evidence)"
+            ).fetchall()
+            if row["name"] == "idx_capability_evidence_id_identity"
+        )
+        index_columns = tuple(
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_info(idx_capability_evidence_id_identity)"
+            ).fetchall()
+        )
+        object_type = connection.execute(
+            """
+            SELECT type FROM sqlite_master WHERE name = 'platform_capabilities'
+            """
+        ).fetchone()["type"]
+
+    assert bool(job_kind_column["notnull"])
+    assert job_kind_column["dflt_value"] is None
+    assert bool(index["unique"])
+    assert index_columns == (
+        "evidence_id",
+        "identity_key",
+        "platform",
+        "source_type",
+        "job_kind",
+        "adapter",
+        "downloader_version",
+        "environment",
+        "product_version",
+    )
+    assert object_type == "view"
+    assert database.readiness() == (True, "ok")
+
+
+def test_schema_eight_capabilities_migrate_to_download_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "schema-eight-capabilities.sqlite3"
+    _create_schema_eight_database(path)
+    database = Database(path)
+    with database.connect() as connection:
+        connection.executemany(
+            """
+            INSERT INTO platform_capabilities(
+                id, platform, source_type, adapter, adapter_version,
+                environment, status, last_verified_at, tested_version,
+                sample_set_version, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    "legacy-candidate",
+                    "youtube",
+                    "youtube_video",
+                    "yt_dlp",
+                    "2026.08.19",
+                    "AU-SA-no-cookie",
+                    "candidate",
+                    None,
+                    "0.10.0",
+                    "samples-a",
+                    "candidate note",
+                ),
+                (
+                    "legacy-verified",
+                    "x",
+                    "x_post",
+                    "legacy-adapter",
+                    "1.2.3",
+                    "AU-SA-cookie",
+                    "verified",
+                    "2026-09-01T00:00:00Z",
+                    "0.9.0",
+                    "samples-b",
+                    "verified note",
+                ),
+            ),
+        )
+
+    database.initialize()
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM capability_legacy_schema9 ORDER BY id"
+        ).fetchall()
+        current_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM platform_capabilities"
+        ).fetchone()["count"]
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
+    assert [dict(row) for row in rows] == [
+        {
+            "id": "legacy-candidate",
+            "platform": "youtube",
+            "source_type": "youtube_video",
+            "job_kind": "download",
+            "adapter": "yt_dlp",
+            "adapter_version": "2026.08.19",
+            "environment": "AU-SA-no-cookie",
+            "status": "candidate",
+            "last_verified_at": None,
+            "tested_version": "0.10.0",
+            "sample_set_version": "samples-a",
+            "notes": "candidate note",
+        },
+        {
+            "id": "legacy-verified",
+            "platform": "x",
+            "source_type": "x_post",
+            "job_kind": "download",
+            "adapter": "legacy-adapter",
+            "adapter_version": "1.2.3",
+            "environment": "AU-SA-cookie",
+            "status": "verified",
+            "last_verified_at": "2026-09-01T00:00:00Z",
+            "tested_version": "0.9.0",
+            "sample_set_version": "samples-b",
+            "notes": "verified note",
+        },
+    ]
+    assert all(row["job_kind"] != "discover" for row in rows)
+    assert current_count == 0
+    assert database.readiness() == (True, "ok")
+
+
+def test_readiness_detects_malformed_capability_identity_index(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "capability-index-shape.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute("DROP INDEX idx_capability_evidence_id_identity")
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX idx_capability_evidence_id_identity
+            ON capability_evidence(
+                evidence_id, platform, source_type, job_kind, adapter,
+                downloader_version, environment, product_version
+            )
+            """
+        )
+
+    assert database.readiness() == (
+        False,
+        "malformed_index:idx_capability_evidence_id_identity",
+    )
+
+
+def test_readiness_detects_missing_capability_rate_trigger(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "capability-check-shape.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute("DROP TRIGGER trg_capability_evidence_validate_rates")
+
+    assert database.readiness() == (
+        False,
+        "missing_triggers:trg_capability_evidence_validate_rates",
+    )
 
 
 def test_schema_seven_adds_credential_disable_marker(tmp_path: Path) -> None:
@@ -541,7 +903,7 @@ def test_schema_eight_migrates_legacy_graph_and_preserves_flat_v1_rows(
             "PRAGMA foreign_key_check"
         ).fetchall()
 
-    assert versions == list(range(1, 9))
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
     assert dict(discovery) == {
         "id": expected_discovery_id,
         "parent_source_item_id": "source-parent",
@@ -1001,6 +1363,96 @@ def test_schema_seven_migration_failure_rolls_back_atomically(
     assert "disabled_at" not in columns
 
 
+def test_schema_nine_migration_failure_rolls_back_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "migration-nine-rollback.sqlite3"
+    _create_schema_eight_database(path)
+    database = Database(path)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_capabilities(
+                id, platform, source_type, adapter, adapter_version,
+                environment, status, last_verified_at, tested_version,
+                sample_set_version, notes
+            ) VALUES (
+                'cap-before-nine', 'youtube', 'youtube_video', 'yt_dlp',
+                'legacy-adapter', 'legacy-environment', 'verified',
+                '2026-09-01T00:00:00Z', 'legacy-tested',
+                'legacy-samples', 'must survive'
+            )
+            """
+        )
+
+    failing_migration = database_module.MIGRATION_9_SQL.replace(
+        "INSERT INTO schema_migrations(version, applied_at)",
+        "SELECT missing_column FROM missing_table;\n\n"
+        "INSERT INTO schema_migrations(version, applied_at)",
+    )
+    monkeypatch.setattr(
+        database_module,
+        "MIGRATION_9_SQL",
+        failing_migration,
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="missing_table"):
+        database.initialize()
+
+    with database.connect() as connection:
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(platform_capabilities)"
+            ).fetchall()
+        }
+        index_columns = tuple(
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_info(idx_capability_evidence_identity)"
+            ).fetchall()
+        )
+        capability = connection.execute(
+            "SELECT * FROM platform_capabilities WHERE id = 'cap-before-nine'"
+        ).fetchone()
+        temporary_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'platform_capabilities_v8'
+            """
+        ).fetchone()
+
+    assert versions == list(range(1, 9))
+    assert "job_kind" not in columns
+    assert index_columns == (
+        "platform",
+        "source_type",
+        "adapter",
+        "adapter_version",
+        "environment",
+    )
+    assert dict(capability) == {
+        "id": "cap-before-nine",
+        "platform": "youtube",
+        "source_type": "youtube_video",
+        "adapter": "yt_dlp",
+        "adapter_version": "legacy-adapter",
+        "environment": "legacy-environment",
+        "status": "verified",
+        "last_verified_at": "2026-09-01T00:00:00Z",
+        "tested_version": "legacy-tested",
+        "sample_set_version": "legacy-samples",
+        "notes": "must survive",
+    }
+    assert temporary_table is None
+
+
 def test_concurrent_initialize_of_new_database_is_serialized(tmp_path: Path) -> None:
     path = tmp_path / "concurrent.sqlite3"
     barrier = Barrier(8)
@@ -1075,6 +1527,8 @@ def test_concurrent_schema_seven_upgrade_is_safe_across_processes(
         relation_count = connection.execute(
             "SELECT COUNT(*) AS count FROM source_relations"
         ).fetchone()["count"]
-    assert [row["version"] for row in versions] == list(range(1, 9))
+    assert [row["version"] for row in versions] == list(
+        range(1, SCHEMA_VERSION + 1)
+    )
     assert discovery_count == 1
     assert relation_count == 2

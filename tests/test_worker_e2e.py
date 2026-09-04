@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from threading import Event
+
+import pytest
 
 from video_download_control.adapters import (
     AdapterFailure,
     DownloadResult,
+    ProgressUpdate,
     ProducedFile,
     ScriptedFakeAdapter,
 )
 from video_download_control.assets import AssetStore, NonEmptyTestVerifier
-from video_download_control.domain import ErrorCode
+from video_download_control.domain import ErrorCode, JobStatus
 from video_download_control.runtime_logging import RuntimeLogConfig, RuntimeLogger
+from video_download_control.retry_policy import RetryAction, RetryDecision
 from video_download_control.service import BatchService
 from video_download_control.worker import Worker
 from video_download_control.worker_repository import (
@@ -32,6 +37,15 @@ class MutableClock:
 
     def advance(self, seconds: float) -> None:
         self.value += timedelta(seconds=seconds)
+
+
+class TerminalRetryPolicy:
+    def decide(self, _error_code, _context) -> RetryDecision:
+        return RetryDecision(
+            action=RetryAction.TERMINAL,
+            delay_seconds=0.0,
+            reason="synthetic_terminal_policy",
+        )
 
 
 class BlockingProbeAdapter(ScriptedFakeAdapter):
@@ -138,6 +152,31 @@ class FailingCleanupAssetStore(AssetStore):
         raise PermissionError("cleanup-secret-marker")
 
 
+class PhasedProgressAdapter(ScriptedFakeAdapter):
+    def download(self, request, context, progress, cancellation):
+        progress(ProgressUpdate(phase="downloading", fraction=0.25))
+        progress(ProgressUpdate(phase="postprocessing", fraction=0.99))
+        # A later extractor event must not regress either phase or progress.
+        progress(ProgressUpdate(phase="downloading", fraction=0.4))
+        return super().download(request, context, progress, cancellation)
+
+
+class RecordingTransitionRepository(WorkerRepository):
+    def __init__(self, database) -> None:
+        super().__init__(database)
+        self.transitions: list[tuple[JobStatus, float]] = []
+
+    def transition(self, lease, *, status, progress, now, lease_seconds=60):
+        super().transition(
+            lease,
+            status=status,
+            progress=progress,
+            now=now,
+            lease_seconds=lease_seconds,
+        )
+        self.transitions.append((status, progress))
+
+
 class CancelDuringVerification(NonEmptyTestVerifier):
     def __init__(
         self,
@@ -161,6 +200,7 @@ def build_worker(
     clock: MutableClock,
     *,
     runtime_logger: RuntimeLogger | None = None,
+    claim_gate_run_id: str | None = None,
 ) -> Worker:
     return Worker(
         worker_id="offline-test-worker",
@@ -170,6 +210,7 @@ def build_worker(
         verifier=NonEmptyTestVerifier(),
         clock=clock,
         runtime_logger=runtime_logger,
+        claim_gate_run_id=claim_gate_run_id,
     )
 
 
@@ -179,6 +220,175 @@ def emitted_events(runtime_logger: RuntimeLogger) -> list[dict[str, object]]:
         for line in runtime_logger.path.read_text("utf-8").splitlines()
         if (event := json.loads(line))["run_id"] == runtime_logger.run_id
     ]
+
+
+def test_claim_execute_split_skips_refill_maintenance_and_preserves_run_once(
+    service: BatchService, settings, database
+) -> None:
+    class RecordingMaintenanceStore(AssetStore):
+        maintenance_calls = 0
+
+        def list_managed_attempt_ids(self, limit=64):
+            self.maintenance_calls += 1
+            return super().list_managed_attempt_ids(limit)
+
+    batch = service.create_batch(
+        name="split claim execution",
+        raw_inputs=[
+            "https://www.youtube.com/watch?v=split-first",
+            "https://x.com/example/status/900006",
+        ],
+    )
+    first_job, second_job = (job["id"] for job in batch["jobs"])
+    repository = WorkerRepository(database)
+    store = RecordingMaintenanceStore(settings.data_root)
+    runtime_logger = RuntimeLogger(
+        component="offline-worker",
+        config=RuntimeLogConfig(directory=settings.data_root / "logs"),
+        instance_id="split-worker",
+    )
+    worker = Worker(
+        worker_id="split-worker",
+        repository=repository,
+        adapter=ScriptedFakeAdapter(),
+        asset_store=store,
+        verifier=NonEmptyTestVerifier(),
+        clock=MutableClock(),
+        runtime_logger=runtime_logger,
+    )
+
+    claimed = worker.claim_once(
+        perform_recovery=False, excluded_job_ids=frozenset({first_job})
+    )
+    assert claimed is not None and claimed.lease.job_id == second_job
+    assert store.maintenance_calls == 0
+    assert repository.get_job(second_job)["status"] == "probing"
+    assert not store.temporary_root.exists()
+    assert "lease=" not in repr(claimed)
+    with pytest.raises(FrozenInstanceError):
+        claimed.cycle_started = 0.0
+
+    executed = worker.execute_claimed(claimed)
+    assert executed.job_id == second_job and executed.status == "ready"
+    legacy = worker.run_once()
+    assert legacy is not None and legacy.job_id == first_job
+    assert legacy.status == "ready"
+    assert store.maintenance_calls == 1
+    events = emitted_events(runtime_logger)
+    assert len([event for event in events if event["event"] == "worker.job_claimed"]) == 2
+    finished = [event for event in events if event["event"] == "worker.job_finished"]
+    assert len(finished) == 2
+    assert all(event["duration_ms"] >= 0 for event in finished)
+
+
+def test_worker_cannot_claim_after_its_supervisor_gate_is_stopped(
+    service: BatchService, settings, database
+) -> None:
+    run_id = "c" * 32
+    batch = service.create_batch(
+        name="stopped local run",
+        raw_inputs=["https://www.youtube.com/watch?v=worker-gate"],
+    )
+    job_id = batch["jobs"][0]["id"]
+    clock = MutableClock()
+    repository = WorkerRepository(database)
+    repository.prepare_claim_gate(
+        run_id=run_id,
+        worker_id="offline-test-worker",
+        now=clock(),
+    )
+    repository.activate_claim_gate(
+        run_id=run_id,
+        worker_id="offline-test-worker",
+        now=clock(),
+    )
+    repository.stop_claim_gate(run_id=run_id, now=clock())
+    worker = build_worker(
+        settings,
+        database,
+        ScriptedFakeAdapter(),
+        clock,
+        claim_gate_run_id=run_id,
+    )
+
+    assert worker.run_once() is None
+    assert repository.get_job(job_id)["status"] == "queued"
+    assert repository.attempts_for(job_id) == []
+
+
+def test_rate_limited_terminal_job_explicit_retry_waits_for_cooldown_then_recovers(
+    service: BatchService, settings, database
+) -> None:
+    batch = service.create_batch(
+        name="explicit retry cooldown",
+        raw_inputs=["https://www.youtube.com/watch?v=retry-cooldown"],
+    )
+    job_id = batch["jobs"][0]["id"]
+    clock = MutableClock()
+    runtime_logger = RuntimeLogger(
+        component="offline-worker",
+        config=RuntimeLogConfig(directory=settings.data_root / "logs"),
+        instance_id="offline-test-worker",
+    )
+    adapter = ScriptedFakeAdapter(
+        probe_failures=[
+            AdapterFailure(
+                ErrorCode.RATE_LIMITED,
+                "synthetic rate limit",
+            )
+        ]
+    )
+    repository = WorkerRepository(database)
+    worker = Worker(
+        worker_id="offline-test-worker",
+        repository=repository,
+        adapter=adapter,
+        asset_store=AssetStore(settings.data_root),
+        verifier=NonEmptyTestVerifier(),
+        retry_policy=TerminalRetryPolicy(),  # type: ignore[arg-type]
+        clock=clock,
+        runtime_logger=runtime_logger,
+    )
+
+    first = worker.run_once()
+    assert first is not None
+    assert first.status == "failed"
+    assert first.error_code == ErrorCode.RATE_LIMITED.value
+    circuit_before_retry = repository.list_platform_circuits()[0]
+    assert circuit_before_retry["state"] == "open"
+    assert circuit_before_retry["requires_manual_reset"] is False
+    assert circuit_before_retry["cooldown_until"] == (
+        clock().replace(microsecond=0) + timedelta(seconds=60)
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    clock.advance(1)
+    retried = repository.request_retry(job_id, now=clock())
+    assert retried is not None and retried["run_generation"] == 2
+    assert repository.list_platform_circuits()[0] == circuit_before_retry
+    assert worker.run_once() is None
+    assert repository.get_job(job_id)["status"] == "queued"
+    assert len(repository.attempts_for(job_id)) == 1
+
+    clock.advance(59)
+    recovered = worker.run_once()
+
+    assert recovered is not None and recovered.status == "ready"
+    job = repository.get_job(job_id)
+    assert job["status"] == "ready"
+    assert job["run_generation"] == 2
+    assert job["attempt_count"] == 2
+    attempts = repository.attempts_for(job_id)
+    assert [attempt["status"] for attempt in attempts] == ["failed", "succeeded"]
+    assert [attempt["run_generation"] for attempt in attempts] == [1, 2]
+    assert [attempt["generation_attempt_no"] for attempt in attempts] == [1, 1]
+    circuit_after_recovery = repository.list_platform_circuits()[0]
+    assert circuit_after_recovery["state"] == "closed"
+    assert circuit_after_recovery["consecutive_failures"] == 0
+    events = emitted_events(runtime_logger)
+    retry_events = [event for event in events if event["event"] == "worker.retry_decided"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["retry_action"] == "terminal"
+    assert runtime_logger.status()["rejected_events"] == 0
 
 
 def test_offline_fake_adapter_runs_probe_to_immutable_asset(
@@ -266,6 +476,69 @@ def test_offline_fake_adapter_runs_probe_to_immutable_asset(
     assert "https://" not in serialized_log
     assert "authorization" not in serialized_log
     assert "offline-e2e" not in serialized_log
+
+
+def test_worker_persists_monotonic_download_and_postprocessing_progress(
+    service: BatchService,
+    settings,
+    database,
+) -> None:
+    batch = service.create_batch(
+        name="phased progress",
+        raw_inputs=["https://www.youtube.com/watch?v=phased-progress"],
+    )
+    job_id = batch["jobs"][0]["id"]
+    repository = RecordingTransitionRepository(database)
+    runtime_logger = RuntimeLogger(
+        component="offline-worker",
+        config=RuntimeLogConfig(directory=settings.data_root / "logs"),
+        instance_id="offline-test-worker",
+    )
+    worker = Worker(
+        worker_id="offline-test-worker",
+        repository=repository,
+        adapter=PhasedProgressAdapter(),
+        asset_store=AssetStore(settings.data_root),
+        verifier=NonEmptyTestVerifier(),
+        runtime_logger=runtime_logger,
+    )
+
+    result = worker.run_once()
+
+    assert result is not None and result.status == "ready"
+    active = [
+        (status, progress)
+        for status, progress in repository.transitions
+        if status in {
+            JobStatus.DOWNLOADING,
+            JobStatus.POSTPROCESSING,
+            JobStatus.VERIFYING,
+        }
+    ]
+    progresses = [progress for _status, progress in active]
+    statuses = [status for status, _progress in active]
+    assert progresses == sorted(progresses)
+    distinct_active: list[tuple[JobStatus, float]] = []
+    for transition in active:
+        if not distinct_active or transition != distinct_active[-1]:
+            distinct_active.append(transition)
+    assert distinct_active == [
+        (JobStatus.DOWNLOADING, 0.05),
+        (JobStatus.DOWNLOADING, 0.2375),
+        (JobStatus.POSTPROCESSING, 0.7925),
+        (JobStatus.POSTPROCESSING, 0.8),
+        (JobStatus.VERIFYING, 0.85),
+    ]
+    assert JobStatus.POSTPROCESSING in statuses
+    postprocessing_index = statuses.index(JobStatus.POSTPROCESSING)
+    assert JobStatus.DOWNLOADING not in statuses[postprocessing_index:]
+    assert statuses[-1] is JobStatus.VERIFYING
+    assert WorkerRepository(database).get_job(job_id)["progress"] == 1
+    assert "postprocessing" in [
+        event["phase"]
+        for event in emitted_events(runtime_logger)
+        if event["event"] == "worker.job_phase"
+    ]
 
 
 def test_worker_propagates_configured_max_height_to_adapter_requests(
@@ -565,6 +838,42 @@ def test_storage_oserror_pauses_worker_before_claiming_another_platform(
     resumed = restarted_worker.run_once()
     assert resumed and resumed.job_id == remaining_job_id
     assert resumed.status == "ready"
+
+
+def test_failed_pause_persistence_latches_this_worker_before_another_claim(
+    service: BatchService, settings, database
+) -> None:
+    class FailingPauseRepository(WorkerRepository):
+        def pause_queue(self, *, reason, now):
+            raise OSError("synthetic pause write failed")
+
+    batch = service.create_batch(
+        name="failed pause persistence",
+        raw_inputs=[
+            "https://www.youtube.com/watch?v=pause-latch",
+            "https://x.com/example/status/900007",
+        ],
+    )
+    repository = FailingPauseRepository(database)
+    worker = Worker(
+        worker_id="pause-latch-worker",
+        repository=repository,
+        adapter=ScriptedFakeAdapter(),
+        asset_store=FailingPrepareAssetStore(settings.data_root),
+        verifier=NonEmptyTestVerifier(),
+        clock=MutableClock(),
+    )
+
+    failed = worker.run_once()
+    assert failed is not None and failed.error_code == ErrorCode.STORAGE_ERROR
+    assert repository.get_queue_control()["paused"] is False
+    assert worker.claim_once(perform_recovery=False) is None
+    assert worker.run_once() is None
+    assert worker.paused is True
+    assert worker.pause_error_code == ErrorCode.STORAGE_ERROR
+    other_job = next(job["id"] for job in batch["jobs"] if job["id"] != failed.job_id)
+    assert repository.get_job(other_job)["status"] == "queued"
+    assert repository.attempts_for(other_job) == []
 
 
 def test_missing_adapter_output_is_validation_failure_without_pausing_queue(

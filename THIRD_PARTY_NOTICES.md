@@ -65,13 +65,15 @@ in the project wheel/sdist and are not added to the system `PATH`.
 | Component | Exact local artifact | Declared license boundary | Evidence installed beside the tools |
 |---|---|---|---|
 | yt-dlp 2026.08.19 | Official platform-independent `yt-dlp` zipimport, SHA-256 `1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6` | `Unlicense AND MIT AND ISC`; this deliberately avoids the GPL-3.0-or-later PyInstaller Windows EXE | Exact source tarball, upstream `SHA2-256SUMS`, detached signature, and extracted yt-dlp `LICENSE` |
-| FFmpeg/ffprobe n9.0.1-6-g9d4ca21220-20260820 | BtbN Windows x64 LGPL shared build, archive SHA-256 `138fe84aa6e4836920f615704115d7ecf4cfbfc20f9a3d5c60f27c1e604fc12b` | Declared `LGPL-3.0-or-later`; exact configuration must contain `--enable-version3 --enable-shared --disable-static` and must not contain `--enable-gpl` or `--enable-nonfree` | Extracted LGPL v3 text plus a lock for every installed EXE/DLL size and SHA-256 |
+| FFmpeg/ffprobe n9.0.1-11-ge47273f4d9-20260831 | BtbN Windows x64 LGPL shared month-end build, archive SHA-256 `83a824f0729a69d143c9865125bb86988a11dd388325f0033711045522068aa0` | Declared `LGPL-3.0-or-later`; exact configuration must contain `--enable-version3 --enable-shared --disable-static` and must not contain `--enable-gpl` or `--enable-nonfree` | Extracted LGPL v3 text (unchanged from the previous pin) plus a lock for every installed EXE/DLL size and SHA-256 |
 
 yt-dlp is obtained from `https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19`.
 FFmpeg upstream publishes source rather than Windows binaries; its official
 download page links the third-party BtbN builds used here. The fixed build is
 obtained from
-`https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-20-13-45`.
+[BtbN month-end release](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-31-13-27).
+
+The previous 2026-08-20 daily artifact returned HTTP 404 during source-install validation. The current fixed month-end tag is subject to BtbN's two-year retention policy; the tag itself is not marked immutable, so the exact archive/member hashes remain mandatory. This is not a guarantee of permanent availability, and it does not authorize redistribution of the tool bundle. See the [upstream retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy).
 
 The bootstrap verifies the pinned checksum files but currently retains rather
 than cryptographically verifies the yt-dlp detached OpenPGP signature. More

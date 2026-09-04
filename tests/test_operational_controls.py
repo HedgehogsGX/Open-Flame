@@ -9,7 +9,10 @@ from fastapi.testclient import TestClient
 from video_download_control.api import create_app
 from video_download_control.config import Settings
 from video_download_control.domain import ErrorCode, JobStatus, Platform
-from video_download_control.worker_repository import WorkerRepository
+from video_download_control.worker_repository import (
+    CircuitResetConflict,
+    WorkerRepository,
+)
 
 
 NOW = datetime(2026, 9, 3, 2, 0, tzinfo=UTC)
@@ -112,6 +115,37 @@ def test_rate_limit_opens_cooldown_then_one_successful_probe_closes_it(
     assert closed["last_error_code"] is None
 
 
+def test_bilibili_rate_limit_opens_only_the_bilibili_cooldown(
+    service, database
+) -> None:
+    repository = WorkerRepository(database)
+    job_id = make_job(service, "https://www.bilibili.com/video/BV1Fb4111732/")
+    lease = claim(repository, "bilibili-worker", NOW)
+    assert lease and lease.job_id == job_id
+    assert lease.platform is Platform.BILIBILI
+
+    assert repository.finish_failure(
+        lease,
+        error_code=ErrorCode.RATE_LIMITED,
+        diagnostic="platform request throttling",
+        now=NOW,
+        retry_at=NOW + timedelta(seconds=60),
+    ) == JobStatus.QUEUED
+
+    assert repository.list_platform_circuits() == [
+        {
+            "platform": "bilibili",
+            "state": "open",
+            "consecutive_failures": 1,
+            "last_error_code": "rate_limited",
+            "opened_at": "2026-09-03T02:00:00.000Z",
+            "cooldown_until": "2026-09-03T02:01:00.000Z",
+            "requires_manual_reset": False,
+            "updated_at": "2026-09-03T02:00:00.000Z",
+        }
+    ]
+
+
 def test_repeated_extractor_breakage_requires_explicit_platform_reset(
     service, database
 ) -> None:
@@ -151,6 +185,59 @@ def test_repeated_extractor_breakage_requires_explicit_platform_reset(
     assert reset["state"] == "closed"
     third = claim(repository, "after-reset", NOW + timedelta(days=1, seconds=1))
     assert third and third.job_id == third_job
+
+
+def test_automatic_rate_limit_cooldown_cannot_be_manually_bypassed(
+    service, database
+) -> None:
+    repository = WorkerRepository(database)
+    make_job(service, "https://www.youtube.com/watch?v=cooldown-no-reset")
+    lease = claim(repository, "limited", NOW)
+    assert lease is not None
+    repository.finish_failure(
+        lease,
+        error_code=ErrorCode.RATE_LIMITED,
+        diagnostic="limited",
+        now=NOW,
+    )
+
+    with pytest.raises(CircuitResetConflict, match="manual reset"):
+        repository.reset_platform_circuit(
+            platform=Platform.YOUTUBE,
+            now=NOW + timedelta(seconds=1),
+        )
+
+    circuit = repository.list_platform_circuits()[0]
+    assert circuit["state"] == "open"
+    assert circuit["requires_manual_reset"] is False
+
+
+def test_platform_circuit_reset_api_rejects_automatic_cooldown_and_missing(
+    settings,
+) -> None:
+    app = create_app(settings)
+    with app.state.database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_circuits(
+                platform, state, consecutive_failures, last_error_code,
+                opened_at, cooldown_until, requires_manual_reset,
+                probe_job_id, probe_lease_token, updated_at
+            ) VALUES (
+                'youtube', 'open', 1, 'rate_limited',
+                '2026-09-03T02:00:00.000Z',
+                '2026-09-03T02:01:00.000Z', 0,
+                NULL, NULL, '2026-09-03T02:00:00.000Z'
+            )
+            """
+        )
+
+    with TestClient(app) as client:
+        automatic = client.post("/api/v1/platform-circuits/youtube/reset")
+        missing = client.post("/api/v1/platform-circuits/instagram/reset")
+
+    assert automatic.status_code == 409
+    assert missing.status_code == 404
 
 
 def test_expired_half_open_probe_is_recovered_without_sticking_circuit(

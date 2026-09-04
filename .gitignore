@@ -17,6 +17,7 @@ dist/
 build/
 *.egg-info/
 runtime-tools/
+.open-flame-setup.lock
 
 # Runtime state, diagnostics, downloaded media, and credentials must stay local.
 *.db

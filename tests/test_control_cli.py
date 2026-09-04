@@ -31,10 +31,28 @@ def test_control_cli_disables_unstructured_uvicorn_access_log(
     )
     monkeypatch.setattr(cli_module.uvicorn, "run", fake_run)
 
-    cli_module.main()
+    cli_module.main([])
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8765
     assert captured["reload"] is False
     assert captured["access_log"] is False
     assert captured["app"].state.runtime_logger.component == "control"
+
+
+def test_control_cli_help_has_no_runtime_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_from_env(cls) -> Settings:
+        raise AssertionError("help must not load runtime settings")
+
+    monkeypatch.setattr(
+        cli_module.Settings,
+        "from_env",
+        classmethod(fail_from_env),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        cli_module.main(["--help"])
+
+    assert raised.value.code == 0

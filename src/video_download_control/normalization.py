@@ -66,6 +66,21 @@ def _clean_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
+def _canonical_decimal_id(
+    value: str,
+    *,
+    platform_name: str,
+    minimum_digits: int = 1,
+) -> str:
+    canonical = value.lstrip("0")
+    if not canonical or len(canonical) < minimum_digits:
+        raise URLNormalizationError(
+            ErrorCode.INVALID_URL,
+            f"{platform_name} 标识必须是正十进制整数",
+        )
+    return canonical
+
+
 def normalize_url(url: str) -> NormalizedURL:
     submitted = url.strip()
     try:
@@ -76,13 +91,17 @@ def normalize_url(url: str) -> NormalizedURL:
     path = _clean_path(parts.path)
 
     if host in {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
-        match = re.fullmatch(r"/([^/]+)/status/(\d+)(?:/[^/]*)?", path)
+        match = re.fullmatch(
+            r"/([^/]+)/status/([0-9]{1,32})(?:/[^/]*)?", path
+        )
         if not match:
             raise URLNormalizationError(
                 ErrorCode.UNSUPPORTED_LINK_TYPE,
                 "MVP 仅接受 X 单条帖子 status 链接",
             )
-        source_id = match.group(2)
+        source_id = _canonical_decimal_id(
+            match.group(2), platform_name="X"
+        )
         # X usernames can change and aliases can point to the same post. The
         # stable /i/status form keeps canonical identity tied to the post ID.
         canonical = f"https://x.com/i/status/{source_id}"
@@ -145,7 +164,11 @@ def normalize_url(url: str) -> NormalizedURL:
         )
 
     if host in {"bilibili.com", "www.bilibili.com", "m.bilibili.com"}:
-        match = re.fullmatch(r"/video/((?:BV[0-9A-Za-z]+)|(?:av\d+))", path, re.IGNORECASE)
+        match = re.fullmatch(
+            r"/video/((?:BV[0-9A-Za-z]+)|(?:av[0-9]{1,32}))",
+            path,
+            re.IGNORECASE,
+        )
         if not match:
             raise URLNormalizationError(
                 ErrorCode.UNSUPPORTED_LINK_TYPE,
@@ -165,7 +188,9 @@ def normalize_url(url: str) -> NormalizedURL:
         if source_id.lower().startswith("bv"):
             source_id = "BV" + source_id[2:]
         else:
-            source_id = "av" + source_id[2:]
+            source_id = "av" + _canonical_decimal_id(
+                source_id[2:], platform_name="Bilibili av"
+            )
         canonical = f"https://www.bilibili.com/video/{source_id}"
         return NormalizedURL(
             submitted,
@@ -188,13 +213,15 @@ def normalize_url(url: str) -> NormalizedURL:
         )
 
     if host in {"douyin.com", "www.douyin.com"}:
-        match = re.fullmatch(r"/video/(\d+)", path)
+        match = re.fullmatch(r"/video/([0-9]{1,32})", path)
         if not match:
             raise URLNormalizationError(
                 ErrorCode.UNSUPPORTED_LINK_TYPE,
                 "MVP 仅接受抖音单作品 video 链接",
             )
-        source_id = match.group(1)
+        source_id = _canonical_decimal_id(
+            match.group(1), platform_name="Douyin"
+        )
         canonical = f"https://www.douyin.com/video/{source_id}"
         return NormalizedURL(
             submitted,
@@ -217,14 +244,20 @@ def normalize_url(url: str) -> NormalizedURL:
         )
 
     if host in {"vm.tiktok.com", "vt.tiktok.com"}:
-        raise URLNormalizationError(
-            ErrorCode.UNSUPPORTED_LINK_TYPE,
-            "TikTok 短链已识别，但当前版本尚未接入短链展开",
+        if path == "/":
+            raise URLNormalizationError(ErrorCode.INVALID_URL, "TikTok 短链缺少标识")
+        canonical = urlunsplit(("https", host, path, "", ""))
+        return NormalizedURL(
+            submitted,
+            canonical,
+            Platform.TIKTOK,
+            SourceType.SHORT_LINK,
+            None,
         )
 
     if host in {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}:
         match = re.fullmatch(
-            r"/@([A-Za-z0-9._]{1,32})/video/(\d{5,32})",
+            r"/@([A-Za-z0-9._]{1,32})/video/([0-9]{5,32})",
             path,
         )
         if not match:
@@ -233,7 +266,11 @@ def normalize_url(url: str) -> NormalizedURL:
                 "当前仅接受 TikTok 单视频 /@handle/video/{id} 链接",
             )
         handle = match.group(1).lower()
-        source_id = match.group(2)
+        source_id = _canonical_decimal_id(
+            match.group(2),
+            platform_name="TikTok",
+            minimum_digits=5,
+        )
         canonical = f"https://www.tiktok.com/@{handle}/video/{source_id}"
         return NormalizedURL(
             submitted,

@@ -1,4 +1,4 @@
-"""Attempt-private cookie preparation for the candidate real Worker.
+"""Attempt-private Cookie preparation shared by supported real Workers.
 
 The configured files are deployment-owned, read-only inputs.  A downloader
 never receives those paths directly: every resolver call copies one source
@@ -54,7 +54,7 @@ class CookieSource:
 class AttemptCookieResolver:
     """Copy configured cookies into a fresh file for each adapter operation.
 
-    Only one credential profile per platform is accepted in this candidate.
+    Only one credential profile per platform is accepted by each Worker process.
     The Worker passes only the claim-validated opaque ``secret_ref`` as
     ``credential_ref``; database IDs, mounted paths and cookie contents never
     cross the adapter request boundary.
@@ -106,6 +106,7 @@ class AttemptCookieResolver:
             raise CookiePreparationError(_GENERIC_PREPARATION_ERROR)
 
     def _validate_sources(self) -> None:
+        opened_identities: set[tuple[int, int]] = set()
         for source in self._sources.values():
             descriptor = -1
             try:
@@ -114,8 +115,14 @@ class AttemptCookieResolver:
                 opened = os.fstat(descriptor)
                 self._validate_source_info(opened)
                 self._require_same_identity(before, opened)
+                if opened.st_size <= 0 or opened.st_size > self.max_cookie_bytes:
+                    raise CookiePreparationError(_GENERIC_PREPARATION_ERROR)
                 after = self._source_lstat(source.path)
                 self._require_stable_source(before, opened, after)
+                opened_identity = (opened.st_dev, opened.st_ino)
+                if opened_identity in opened_identities:
+                    raise CookiePreparationError(_GENERIC_PREPARATION_ERROR)
+                opened_identities.add(opened_identity)
             except CookiePreparationError:
                 raise
             except (OSError, ValueError, TypeError) as exc:

@@ -53,6 +53,7 @@ def test_probe_is_skip_download_single_json_and_forces_proxy(tmp_path: Path) -> 
     assert command.arguments.count("--encoding") == 1
     assert command.arguments[command.arguments.index("--encoding") + 1] == "utf-8"
     assert "--skip-download" in command.arguments
+    assert "--convert-thumbnails" not in command.arguments
     assert "--dump-single-json" in command.arguments
     assert command.arguments[command.arguments.index("--proxy") + 1] == (
         "http://127.0.0.1:8080"
@@ -271,11 +272,42 @@ def test_download_output_and_options_are_fixed_inside_attempt(tmp_path: Path) ->
     assert command.arguments[command.arguments.index("--encoding") + 1] == "utf-8"
     assert "--no-write-playlist-metafiles" in command.arguments
     assert "--no-write-info-json" in command.arguments
+    assert command.arguments.count("--convert-thumbnails") == 1
+    assert command.arguments[command.arguments.index("--convert-thumbnails") + 1] == (
+        "image>png"
+    )
     assert command.arguments[command.arguments.index("--sub-langs") + 1] == (
         "en,zh,zh-Hans,zh-Hant"
     )
+    assert command.arguments.count("--progress") == 1
+    assert command.arguments.count("--newline") == 1
+    assert command.arguments[command.arguments.index("--progress-delta") + 1] == (
+        "0.5"
+    )
+    progress_templates = [
+        command.arguments[index + 1]
+        for index, argument in enumerate(command.arguments)
+        if argument == "--progress-template"
+    ]
+    assert progress_templates == [
+        "download:VDC_PROGRESS|%(info.id&1|0)s|"
+        "%(info.format_id&1|0)s|%(progress.status)j|"
+        "%(progress.downloaded_bytes)j|%(progress.total_bytes)j|"
+        "%(progress.total_bytes_estimate)j|%(progress.progress_idx)j|"
+        "%(progress.max_progress)j",
+        "postprocess:VDC_PHASE|postprocessing",
+    ]
     assert "--external-downloader" not in command.arguments
     assert "--exec" not in command.arguments
+
+    probe = factory(tmp_path).probe_command(probe_request(), temporary_root=attempt)
+    for progress_option in (
+        "--progress",
+        "--progress-delta",
+        "--progress-template",
+        "--newline",
+    ):
+        assert progress_option not in probe.arguments
 
 
 def test_explicit_js_runtime_clears_defaults_then_enables_only_that_runtime(

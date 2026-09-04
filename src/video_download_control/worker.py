@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 from time import perf_counter
 
 from . import __version__
@@ -49,6 +49,14 @@ def _safe_log_token(value: object, *, fallback: str) -> str:
 
 def _elapsed_ms(started: float) -> float:
     return min(max((perf_counter() - started) * 1000.0, 0.0), 86_400_000.0)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerClaim:
+    """A claimed attempt for immediate execution in an available worker slot."""
+
+    lease: JobLease = field(repr=False)
+    cycle_started: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +178,8 @@ class Worker:
         skip_unsupported_graph_jobs: bool = False,
         network_guard: NetworkExecutionGuard | None = None,
         runtime_logger: RuntimeLogger | None = None,
+        claim_gate_run_id: str | None = None,
+        stop_event: Event | None = None,
     ) -> None:
         if lease_seconds < 10:
             raise ValueError("lease_seconds must be at least 10")
@@ -227,21 +237,69 @@ class Worker:
         self.network_mode = network_mode
         self.network_guard = network_guard
         self.runtime_logger = runtime_logger
+        self.claim_gate_run_id = claim_gate_run_id
+        self.stop_event = stop_event if stop_event is not None else Event()
         self._log_worker_id = _safe_log_token(
             worker_id, fallback="worker-id-unavailable"
         )
         self._paused = False
         self._pause_error_code: ErrorCode | None = None
+        self._pause_persistence_failed = False
+        self._state_lock = RLock()
 
     @property
     def paused(self) -> bool:
-        return self._paused
+        with self._state_lock:
+            return self._paused
 
     @property
     def pause_error_code(self) -> ErrorCode | None:
-        return self._pause_error_code
+        with self._state_lock:
+            return self._pause_error_code
 
     def run_once(self) -> WorkerRunResult | None:
+        """Compatibility entry point for a single synchronous attempt."""
+        claim = self.claim_once()
+        return None if claim is None else self.execute_claimed(claim)
+
+    def request_stop(self) -> None:
+        """Latch interruption for this instance and its owned subprocesses."""
+        self.stop_event.set()
+
+    def _check_stopping(self) -> None:
+        if self.stop_event.is_set():
+            raise AdapterFailure(ErrorCode.WORKER_LOST, "worker execution was interrupted")
+
+    def claim_once(
+        self,
+        *,
+        perform_recovery: bool = True,
+        excluded_job_ids: frozenset[str] = frozenset(),
+    ) -> WorkerClaim | None:
+        """Claim one attempt; maintenance is allowed only at local quiescence.
+
+        A concurrent coordinator must disable recovery while any of its attempts
+        are executing or cleaning up, and exclude those live job identities.
+        The returned claim must be dispatched immediately, never queued behind
+        another attempt without a heartbeat.
+        """
+        # Linearize the queue-state read and claim against an executing attempt
+        # pausing this Worker. In particular, a stale unpaused DB read must not
+        # overwrite a failed-persistence latch set by another execution thread.
+        with self._state_lock:
+            if self._pause_persistence_failed or self.stop_event.is_set():
+                return None
+            return self._claim_once(
+                perform_recovery=perform_recovery,
+                excluded_job_ids=excluded_job_ids,
+            )
+
+    def _claim_once(
+        self,
+        *,
+        perform_recovery: bool,
+        excluded_job_ids: frozenset[str],
+    ) -> WorkerClaim | None:
         cycle_started = perf_counter()
         if self.network_mode is not AdapterNetworkMode.OFFLINE:
             assert self.network_guard is not None
@@ -287,10 +345,13 @@ class Worker:
         self._paused = False
         self._pause_error_code = None
         try:
-            self.repository.reconcile_attempt_directories(
-                list_attempt_ids=self.asset_store.list_managed_attempt_ids,
-                cleanup_attempt=self.asset_store.cleanup_attempt_identity,
-            )
+            if perform_recovery:
+                self.repository.reconcile_attempt_directories(
+                    list_attempt_ids=self.asset_store.list_managed_attempt_ids,
+                    cleanup_attempt=self.asset_store.cleanup_attempt_identity,
+                )
+            if self.stop_event.is_set():
+                return None
             lease = self.repository.claim_next(
                 worker_id=self.worker_id,
                 adapter=self.adapter.name,
@@ -303,6 +364,9 @@ class Worker:
                 ),
                 skip_unsupported_graph_jobs=self.skip_unsupported_graph_jobs,
                 supported_routes=self.supported_routes,
+                claim_gate_run_id=self.claim_gate_run_id,
+                perform_recovery=perform_recovery,
+                excluded_job_ids=excluded_job_ids,
             )
         except OSError as exc:
             # Recovery cleanup is part of claiming.  A filesystem denial must
@@ -346,6 +410,12 @@ class Worker:
             job_kind=lease.job_kind,
             adapter=lease.adapter,
         )
+        return WorkerClaim(lease=lease, cycle_started=cycle_started)
+
+    def execute_claimed(self, claim: WorkerClaim) -> WorkerRunResult:
+        """Execute one claimed attempt, including its final filesystem cleanup."""
+        lease = claim.lease
+        cycle_started = claim.cycle_started
         self._emit_phase(lease, "preparing")
 
         attempt_paths = None
@@ -368,8 +438,9 @@ class Worker:
                 failure_site="heartbeat",
             ),
         )
-        heartbeat.start()
         try:
+            self._check_stopping()
+            heartbeat.start()
             attempt_paths = self.asset_store.prepare_attempt(
                 lease.job_id, lease.attempt_id
             )
@@ -411,6 +482,7 @@ class Worker:
                     ),
                     context,
                 )
+                self._check_stopping()
                 heartbeat.raise_if_failed()
                 if heartbeat.is_cancelled():
                     heartbeat.stop()
@@ -479,6 +551,7 @@ class Worker:
                     result_status="canceled",
                     started=cycle_started,
                 )
+            self._check_stopping()
             self._emit_phase(lease, "downloading")
             self.repository.transition(
                 lease,
@@ -487,17 +560,40 @@ class Worker:
                 now=self.clock(),
                 lease_seconds=self.lease_seconds,
             )
+            persisted_progress = 0.05
+            entered_postprocessing = False
 
             def report_progress(update: ProgressUpdate) -> None:
+                nonlocal entered_postprocessing, persisted_progress
                 heartbeat.raise_if_failed()
+                if update.phase == "postprocessing" and not entered_postprocessing:
+                    entered_postprocessing = True
+                    self._emit_phase(lease, "postprocessing")
                 if update.fraction is None:
-                    heartbeat.pulse()
+                    if not entered_postprocessing:
+                        heartbeat.pulse()
+                        return
+                    self.repository.transition(
+                        lease,
+                        status=JobStatus.POSTPROCESSING,
+                        progress=persisted_progress,
+                        now=self.clock(),
+                        lease_seconds=self.lease_seconds,
+                    )
                     return
                 bounded = min(max(update.fraction, 0.0), 1.0)
+                persisted_progress = max(
+                    persisted_progress,
+                    0.05 + (bounded * 0.75),
+                )
                 self.repository.transition(
                     lease,
-                    status=JobStatus.DOWNLOADING,
-                    progress=0.05 + (bounded * 0.75),
+                    status=(
+                        JobStatus.POSTPROCESSING
+                        if entered_postprocessing
+                        else JobStatus.DOWNLOADING
+                    ),
+                    progress=persisted_progress,
                     now=self.clock(),
                     lease_seconds=self.lease_seconds,
                 )
@@ -519,6 +615,7 @@ class Worker:
                 report_progress,
                 heartbeat,
             )
+            self._check_stopping()
             heartbeat.raise_if_failed()
             if heartbeat.is_cancelled():
                 heartbeat.stop()
@@ -583,6 +680,7 @@ class Worker:
                 lease_seconds=self.lease_seconds,
             )
             for produced in sorted(download.files, key=lambda item: item.ordinal):
+                self._check_stopping()
                 staged = self.asset_store.stage_file(
                     attempt=attempt_paths,
                     produced_path=produced.path,
@@ -607,6 +705,7 @@ class Worker:
                     ),
                 )
                 staged_assets.append(staged)
+                self._check_stopping()
                 heartbeat.raise_if_failed()
                 if heartbeat.is_cancelled():
                     heartbeat.stop()
@@ -627,6 +726,7 @@ class Worker:
                     now=self.clock(),
                 )
                 durable_intent_ids.add(staged.asset_id)
+            self._check_stopping()
             heartbeat.stop()
             self._emit_phase(lease, "committing")
             final_status = self.repository.finalize_asset_commit_intents(
@@ -667,8 +767,10 @@ class Worker:
             heartbeat.stop()
             return self._handle_failure(
                 lease,
-                error_code=ErrorCode.VALIDATION_FAILED,
-                diagnostic=str(exc),
+                error_code=(ErrorCode.WORKER_LOST if self.stop_event.is_set()
+                            else ErrorCode.VALIDATION_FAILED),
+                diagnostic=("worker verification was interrupted" if self.stop_event.is_set()
+                            else str(exc)),
                 started=cycle_started,
             )
         except GraphValidationError as exc:
@@ -900,15 +1002,17 @@ class Worker:
         lease: JobLease | None = None,
         exception: BaseException | None = None,
     ) -> None:
-        self._paused = True
-        self._pause_error_code = error_code
         pause_failure: BaseException | None = None
-        try:
-            self.repository.pause_queue(reason=error_code, now=self.clock())
-        except Exception as exc:  # noqa: BLE001 - queue stays locally fail-closed
-            # Keep this process fail-closed even if the control database is
-            # itself the storage component that became unavailable.
-            pause_failure = exc
+        with self._state_lock:
+            self._paused = True
+            self._pause_error_code = error_code
+            try:
+                self.repository.pause_queue(reason=error_code, now=self.clock())
+            except Exception as exc:  # noqa: BLE001 - queue stays locally fail-closed
+                # An unpersisted pause cannot safely be cleared by a later DB
+                # read or resume. Only a fresh Worker may recover this latch.
+                self._pause_persistence_failed = True
+                pause_failure = exc
         fields: dict[str, object] = {
             "worker_id": self._log_worker_id,
             "error_code": error_code.value,
