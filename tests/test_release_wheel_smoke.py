@@ -29,11 +29,11 @@ def release_fixture(tmp_path, monkeypatch):
     scripts = {f"video-download-example-{number}": "video_download_control.cli:main" for number in range(13)}
     config = ("[project.scripts]\n" + "".join(f'{name} = "{value}"\n' for name, value in scripts.items())).encode()
     source = {"deployment/requirements.runtime.lock": runtime, "pyproject.toml": config}
-    wheel_name = "video_download_control-0.23.0-py3-none-any.whl"
+    wheel_name = "video_download_control-0.24.2-py3-none-any.whl"
     wheel = b"synthetic verified project wheel"
     manifest = {
-        "version": "0.23.0", "product_identity": "0.23.0+build.sha256." + "b" * 64,
-        "source_zip": "Open-Flame-0.23.0-source.zip",
+        "version": "0.24.2", "product_identity": "0.24.2+build.sha256." + "b" * 64,
+        "source_zip": "Open-Flame-0.24.2-source.zip",
         "source_files": {name: smoke.release.fingerprint(payload) for name, payload in source.items()},
         "artifacts": {wheel_name: smoke.release.fingerprint(wheel)},
     }
@@ -45,7 +45,7 @@ def release_fixture(tmp_path, monkeypatch):
         return manifest
 
     monkeypatch.setattr(smoke.release, "verify_release", verify)
-    monkeypatch.setattr(smoke.release, "archive_payloads", lambda path: {"Open-Flame-0.23.0-source/" + n: b for n, b in source.items()})
+    monkeypatch.setattr(smoke.release, "archive_payloads", lambda path: {"Open-Flame-0.24.2-source/" + n: b for n, b in source.items()})
     monkeypatch.setattr(smoke.release, "read_plain", lambda root, name: wheel)
     monkeypatch.setattr(smoke.release, "command", lambda python, arguments, cwd: calls.append((python, arguments, cwd)))
     return directory, cache, work, manifest, calls
@@ -116,7 +116,7 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     assert any(command[-1] == "check" for command in commands)
     project_lock = (work / "requirements.project-wheel.lock").read_text()
     assert "file:///" in project_lock and "%20" in project_lock
-    assert manifest["artifacts"]["video_download_control-0.23.0-py3-none-any.whl"]["sha256"] in project_lock
+    assert manifest["artifacts"]["video_download_control-0.24.2-py3-none-any.whl"]["sha256"] in project_lock
     assert "pytest" not in (work / "requirements.runtime.lock").read_text()
     probe = commands[-1]
     assert probe[:2] == ["-c", smoke.INSTALLED_PROBE]

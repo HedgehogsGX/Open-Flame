@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.23.0"
-description = "Local-first control plane for auditable multi-platform media download jobs"
+version = "0.24.2"
+description = "Local-first media downloads and explicitly confirmed multi-platform uploads"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python/*/*"]
@@ -49,6 +49,7 @@ exclude = [
   "/validation/apache-2.0-license-migration-evidence.md",
   "/validation/local/**",
   "/runtime-tools/**",
+  "/data-uploads/**",
   "/dist/**",
   "/build/**",
   "/.venv/**",

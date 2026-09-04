@@ -44,7 +44,8 @@ INDEX_HTML = """<!doctype html>
 <body>
   <main>
     <h1>多平台视频下载控制面</h1>
-    <p class="muted">迭代 0.23.0：Windows 一体化应用接入受控分享短链展开，以及本次启动配置的默认平台 Cookie。新任务与手动重试可明确选择匿名。双槽下载、实时阶段与进度条、平台冷却、运行日志、ready 原件、缩略图与字幕下载继续保留。</p>
+    <p><a href="/uploads">打开上传器：Bilibili、抖音、视频号 →</a></p>
+    <p class="muted">迭代 0.24.2：新增 Bilibili、抖音和视频号上传入口，支持独立账号、草稿预览与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
     <p class="notice">普通 Windows 使用可由 video-download-local-app supervisor 同时管理控制面与本机 Worker；页面本身不会启动进程或推断外部 Worker。若只单独启动控制面，任务会保持排队。</p>
     <section class="card">
       <h2>运行状态</h2>
@@ -632,6 +633,12 @@ INDEX_HTML = """<!doctype html>
           const size = Number.isFinite(bytes) ? ` · ${bytes.toLocaleString()} bytes` : '';
           link.textContent = `下载成品 ${index + 1}（${kind}${size}）`;
           item.append(link);
+          if (kind === 'video' && typeof asset.asset_id === 'string') {
+            const uploadLink = document.createElement('a');
+            uploadLink.href = '/uploads?asset_id=' + encodeURIComponent(asset.asset_id);
+            uploadLink.textContent = ' · 用于上传';
+            item.append(uploadLink);
+          }
           const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts : [];
           if (artifacts.length > 0) {
             const artifactList = document.createElement('ul');

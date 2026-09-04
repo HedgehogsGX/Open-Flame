@@ -12,6 +12,7 @@ htmlcov/
 !**/.env.*.example
 !**/*.env.example
 data/
+data-uploads/
 validation/local/
 dist/
 build/

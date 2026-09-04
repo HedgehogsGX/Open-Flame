@@ -1,12 +1,16 @@
-# Open-Flame — 多平台视频下载控制面
+# Open-Flame — 多平台视频下载与上传
 
-这是一个面向单机、单管理员、私有环境的媒体下载控制面。架构方向是“模块化单体控制面 + 独立 Worker + 可替换适配器 + 不可变媒体资产”。
+这是一个面向单机、单管理员、私有环境的媒体控制面，包含下载器和需要逐项确认的上传器。上传与下载使用独立任务库及账号状态。
 
-> 当前为 **Iteration 0.23.0 / version 0.23.0**，数据库仍为 **Schema 11**。新增 Windows 源码首次安装与修复入口：准备锁定运行依赖和媒体工具，保护已有环境与业务数据，失败或安装中取消可查独立诊断日志。源码版仍需要已安装的 64 位 CPython，不是免 Python EXE；不要求 Codex 或 uv。原有多平台下载功能保留；单样本成功不代表平台完整验收，Windows 仍为 direct/non-isolated，第三方再分发门禁不变。
+> 当前开发版本为 **0.24.2**，下载数据库仍为 **Schema 11**，上传库独立使用 **Schema 1**。首批上传支持 Bilibili、抖音和视频号：页面内扫码登录、本地视频或下载成品导入、多账号草稿预览、逐项确认、取消及结果不确定时的人工核对。Bilibili 已由用户扫码并通过账号检查；三平台真实投稿和审核结果由外部测试员分别验收；小红书等平台后续维护。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
-首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。本轮证据见 [0.23.0 安装验收](validation/iteration-0.23.0-source-setup-evidence.md)；0.22.0 及更早记录保持为历史，不替代当前发布包验收。
+外部测试入口：[三平台上传测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。从下载成品点击“用于上传”，导入后创建本地草稿，核对后才由测试员逐项确认。
 
-本版已补齐独立源码发行工具与解压安装 / wheel 验收，最终回归 **1670 passed、8 skipped**（Windows 不具备的 POSIX 项）。维护者见 [构建与验收说明](docs/RELEASE.md)，使用者见 [版本交接与待开发清单](HANDOFF.md#本次交接入口)。项目源码 ZIP、sdist、wheel 均不包含第三方运行二进制；本机生成制品不自动成为 GitHub Release。详见 [最终 debug 与发行证据](validation/iteration-0.23.0-release-evidence.md)。
+上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。现有下载备份不包含上传目录。
+
+首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。本轮证据见 [0.24.2 下载上传集成验收](validation/iteration-0.24.2-integration-evidence.md)；[0.23.0 安装验收](validation/iteration-0.23.0-source-setup-evidence.md)及更早记录保持为历史。
+
+上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
 
 ## License status
 
@@ -18,6 +22,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 | 项目 | 当前状态 |
 |---|---|
+| 上传器 | `/uploads`；Bilibili、抖音、视频号的独立账号与任务；先本地草稿、后明确确认；视频号另有平台草稿；开源工具运行环境独立安装；真实平台投稿未验收 |
 | Windows 一体化应用 | `video-download-local-app` 可独立启动控制面、Worker 与浏览器；固定 app/data/database 布局、抢占前预检、严格握手、单实例、异常子进程回收及结构化日志继续保留；Schema 11 的 two-phase run claim gate 将“允许领取”和停机关闭在 SQLite 写事务中线性化，旧 run 不能因 Pipe 检查竞态领取新 Job |
 | Web UI / FastAPI 控制面 | 可由一体化入口启动，也保留开发用单独入口；显示每个 Job 的中文阶段与估算进度条，列出 ready 原件及其缩略图/字幕并提供独立下载链接；无认证，代码强制绑定 loopback |
 | SQLite | Schema 11；WAL、`busy_timeout=5000`、`synchronous=FULL`，启动时 forward-only 迁移、结构、claim-gate singleton 与 capability ledger 语义检查；Schema 9 能力行只读封存，旧 flat-v1/graph 记录继续可读 |
@@ -25,7 +30,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 | 本机工具链 | Windows x64 固定 yt-dlp `2026.08.19`、FFmpeg/ffprobe `n9.0.1-11-ge47273f4d9-20260831`；改用官方月末保留构建，逐文件校验并通过离线真实二进制 smoke；不加入系统 `PATH` |
 | `yt-dlp` | 固定命令、zipimport 入口、本机/候选适配器已组装；可显式接入一个受校验的 Node/Deno/Bun/QuickJS，probe/download 强制 UTF-8；格式选择优先非 HLS 并保留有界回退；下载 stdout 控制协议只输出常量 transfer 标识和有界数值，实时阶段估算不会记录原始工具行 |
 | 凭证 | 业务库不保存 Cookie 路径/内容；Windows 一体化 v2 配置可显式选择平台默认，启动时登记或复用有效同 ref profile，新建/重试时原子绑定；v1 仍仅映射 source。网页只选使用默认或匿名，不编辑或披露凭证；本地可用不等于平台登录有效 |
-| 备份/恢复 | 当前 0.23.0 create/restore 要求精确 Schema 11，并保存 claim-gate singleton、Schema 9 只读档案、evidence ledger、完整 decision chain 与 current view；Schema 8/9/10 旧备份必须先用匹配历史版本恢复，再用 0.23.0 在副本上迁移并建立 Schema 11 基线 |
+| 备份/恢复 | 下载 create/restore 要求精确 Schema 11，并保存 claim-gate singleton、Schema 9 只读档案、evidence ledger、完整 decision chain 与 current view；Schema 8/9/10 旧备份必须先用匹配历史版本恢复，再用当前版本在副本上迁移并建立 Schema 11 基线 |
 | 运行日志 | supervisor、控制面、本机 Worker、离线 Worker 与 candidate Worker 写入有界、轮转、字段白名单的 JSONL；一体化三进程共享 `run_id`，前端可统一查看最近事件；启动后写入仍为 best-effort |
 | 平台能力 | X、YouTube、Bilibili、Douyin、TikTok、Instagram 的窄范围静态路由均为 `candidate`；兼容 API 保留三层读接口，UI 使用单次一致性 snapshot 展示 implementation、精确 product build/downloader/environment evidence 和 current decision。导入永不自动批准，只有达到固定阈值且完整 build identity 匹配当前包的证据可经本地 CLI 显式批准；历史单样本与离线 E2E 均不满足 Stage 0，当前仓库不附带任何批准记录 |
 | 短链 | Windows `local-app --allow-direct-network` 接通受控本机直连展开；通用控制面仍默认关闭，POSIX 可显式使用独立 UDS/HMAC egress。支持 `t.co`、`b23.tv`、`v.douyin.com`、TikTok `vm`/`vt`，逐跳限制 hostname/IP/redirect/时限；本轮仅离线与模拟网络，不是隔离或真实平台验收 |
@@ -51,7 +56,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 - deployment-owned Cookie source override、六平台 0–6 映射、完整祖先/ACL/路径重叠检查、Worker core-dump 禁用，以及默认只读且需要二次明确授权才执行变更的 Linux/Docker acceptance runner。
 - [ADR-0001](docs/adr/0001-x-attachment-discovery.md) 的 Schema 8 graph-v2 编排已实现；真实 stable key 与 exact-selector 仍未经过 Stage 0，故真实 X graph 路由保持 gate 关闭。
 
-准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在 [Iteration 0.23.0 源码安装](validation/iteration-0.23.0-source-setup-evidence.md)；[Iteration 0.22.0 启动与诊断](validation/iteration-0.22.0-launcher-diagnostics-evidence.md)、[Iteration 0.21.0 平台实测](validation/iteration-0.21.0-platform-startup-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前 0.23.0 / Schema 11 验证。
+准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在 [Iteration 0.24.2 下载上传集成验收](validation/iteration-0.24.2-integration-evidence.md)；[Iteration 0.23.0 源码安装](validation/iteration-0.23.0-source-setup-evidence.md)、[Iteration 0.22.0 启动与诊断](validation/iteration-0.22.0-launcher-diagnostics-evidence.md)、[Iteration 0.21.0 平台实测](validation/iteration-0.21.0-platform-startup-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前构建或真实上传验收。
 
 ## 本地启动
 
@@ -218,7 +223,7 @@ uv run video-download-local-worker `
 
 ### Stage 0 v3 证据与决定
 
-先把模板复制到仓库外的私有目录，并从实际执行验证的同一 0.23.0 包读取 build identity；把 JSON 中的完整 `product_identity` 原样填写进 results 的 `product_version` 列。不要只填 `0.23.0`，不要沿用旧构建 identity，也不要手工替换 SHA-256。另填写一个不含主机名、用户名或路径的安全 `environment` token。报告只输出 aggregate，不含 URL、来源 identity hash、sample ID 或 run ID：
+先把模板复制到仓库外的私有目录，并从实际执行验证的同一当前版本包读取 build identity；把 JSON 中的完整 `product_identity` 原样填写进 results 的 `product_version` 列。不要只填 `0.24.2`，不要沿用旧构建 identity，也不要手工替换 SHA-256。另填写一个不含主机名、用户名或路径的安全 `environment` token。报告只输出 aggregate，不含 URL、来源 identity hash、sample ID 或 run ID：
 
 ```powershell
 uv run video-download-validation --print-product-identity
@@ -411,7 +416,7 @@ uv run video-download-backup restore `
   --restore-database C:\vdc-restore-drill\control.sqlite3
 ```
 
-当前 v0.19.0 备份/恢复 CLI 要求精确 Schema 11；graph snapshot、relation、generation、active-snapshot 指针、claim-gate singleton、Schema 9 capability archive、不可变 evidence 和完整 decision chain 都进入同一 SQLite 一致快照，已发布资产按 manifest 复制，顶层 `logs`、`temporary` 与 `assets/.staging` 排除。仍应先正常停止一体化应用再创建运维备份，使 snapshot 中的 gate 已关闭且活动 lease/临时输出边界清晰。Schema 10 备份必须先由匹配的 v0.15.0 历史应用恢复到独立根，Schema 8/9 备份同样先由各自匹配版本恢复；随后再由 v0.19.0 在副本上 forward-migrate，并另行制作、实际恢复 Schema 11 基线。v0.19.0 不直接 restore 旧 schema 备份，旧程序也不得打开 Schema 11。[Iteration 0.6 offline graph evidence](validation/iteration-0.6-graph-v2-offline-evidence.md) 与 [Iteration 0.5 recovery evidence](validation/backup-restore-drill-iteration-0.5.md) 保留为当时的历史记录，不替代本轮或目标 Linux/NAS 的恢复验收。运行日志与部署所有 Cookie source 都不在业务备份内。
+下载备份/恢复 CLI 要求精确 Schema 11；graph snapshot、relation、generation、active-snapshot 指针、claim-gate singleton、Schema 9 capability archive、不可变 evidence 和完整 decision chain 都进入同一 SQLite 一致快照，已发布资产按 manifest 复制，顶层 `logs`、`temporary` 与 `assets/.staging` 排除。仍应先正常停止一体化应用再创建运维备份，使 snapshot 中的 gate 已关闭且活动 lease/临时输出边界清晰。Schema 10 备份必须先由匹配的 v0.15.0 历史应用恢复到独立根，Schema 8/9 备份同样先由各自匹配版本恢复；随后再由当前版本在副本上 forward-migrate，并另行制作、实际恢复 Schema 11 基线。当前版本不直接 restore 旧 schema 备份，旧程序也不得打开 Schema 11。[Iteration 0.6 offline graph evidence](validation/iteration-0.6-graph-v2-offline-evidence.md) 与 [Iteration 0.5 recovery evidence](validation/backup-restore-drill-iteration-0.5.md) 保留为当时的历史记录，不替代本轮或目标 Linux/NAS 的恢复验收。运行日志与部署所有 Cookie source 都不在业务备份内。
 
 ## 安全边界
 
@@ -424,7 +429,7 @@ uv run video-download-backup restore `
 - 业务数据库只保存 profile ID 与 opaque ref；claim 后 JobLease 仅向 `ProbeRequest` / `DownloadRequest` 传递 opaque ref，不持久化 Cookie 路径或内容。Cookie 源到 Attempt 私有 `0600` 副本的组件已测试路径、权限、identity、swap 与 fsync。当前 override 只是 service-level isolation：单个 Worker 仍能读整棵多平台 source root，真实凭据上线前需要 credential sidecar、per-platform Worker 或 per-attempt mount namespace。
 - 代码中的凭证流已接通；credential-free base Compose 不含 Cookie，显式 override 才把 root-owned source/mapping 只读挂到 Worker。Host preflight 拒绝路径重叠、不安全祖先、named/default ACL、links、错误 owner/mode 与 race；full acceptance 还要求 host `/proc/sys/kernel/core_pattern` 可读且不是 pipe collector，因为 Worker `RLIMIT_CORE=0` 单独不能排除主机侧 crash capture。这些仍只有静态/Windows 离线证据。
 - Linux runner 的 execute mode 还要求 effective root，并固定使用通过 Python 3.12+ 检查的 `/usr/bin/python3`。Docker endpoint 判定遵循 `DOCKER_CONTEXT` 高于 `DOCKER_HOST` 的官方 precedence；execute 拒绝 inherited Docker/Compose/BuildKit endpoint、config 与 project/profile 控制变量，default context 仍须解析为 local Unix Linux daemon。Fresh build tag 只作初始名称；runner 随即捕获并验证不可变 local `sha256:...` image ID，把该 ID 写进 effective Compose，再递归拒绝 `$` 并在 private env 同目录冻结为 `root:root 0600` 文件。二次渲染必须与原 JSON 深等值并再次通过完整校验；之后 Compose mutation 只用 frozen file，direct `docker run` 和 runtime `Image` inspect 均绑定同一 ID，checkpoint 也会重验它，避免 tag rebind 改变验收对象。正常退出只按 identity/snapshot 删除冻结文件，crash 残留必须在受保护目录人工定点审计。
-- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后 `pip check`。Runner 的 network-none runtime contract 还精确核对 13 个 runtime-lock distributions + `video-download-control==0.19.0`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；这些 target Linux 检查尚未执行。
+- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后 `pip check`。Runner 的 network-none runtime contract 还精确核对 13 个 runtime-lock distributions + `video-download-control==0.24.2`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；这些 target Linux 检查尚未执行。
 - `VDC_ENABLE_X_GRAPH_V2` 只改变新 X Input 的任务形状，不会让 adapter 获得 exact selector。当前真实 `YtDlpAdapter.supports_exact_selector=False`；即使误入队，Worker claim 也会 fail closed，因此不要把该保护当作启用方案。
 - 下载输出、元数据和媒体文件始终视为不可信输入；不绕过 DRM、付费墙、验证码、地区或其他访问控制。
 

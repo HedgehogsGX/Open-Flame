@@ -367,6 +367,7 @@ def test_source_snapshot_ignores_generated_cache_but_keeps_package_identity(
 
 @pytest.mark.parametrize("name", [
     "runtime-tools/tool.txt", "validation/local/report.md", "notes.jsonl",
+    "data-uploads/private/accounts/bilibili/account.json",
     "cookies-private.txt", ".ENV.secret", ".env.not-reviewed.example",
     "download.wav", "download.mov", "download.part", "control.sqlite3-wal",
 ])

@@ -1,0 +1,160 @@
+"""Upload workspace using the existing control page's visual language."""
+
+UPLOAD_HTML = r'''<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Flame · 上传器</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,sans-serif;background:#f5f6f8;color:#18202a}body{margin:0}main{max-width:880px;margin:0 auto;padding:40px 20px 80px}h1{margin-bottom:8px}.muted{color:#5d6875}.card{background:white;border:1px solid #dfe3e8;border-radius:14px;padding:22px;margin-top:24px;box-shadow:0 8px 30px rgba(24,32,42,.06)}label{display:block;font-weight:650;margin:14px 0 7px}input,textarea,select,button{box-sizing:border-box;font:inherit}input,textarea,select{width:100%;border:1px solid #bbc3cc;border-radius:8px;padding:10px 12px}textarea{min-height:100px;resize:vertical}button{margin-top:12px;border:0;border-radius:8px;background:#155eef;color:white;padding:10px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}a{color:#155eef}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.row button{margin-top:0}.notice{border-left:4px solid #d97706;padding-left:12px}.danger{color:#a61b1b;font-weight:650}.item{border-top:1px solid #edf0f3;padding:14px 0}.item:first-child{border-top:0}.choice{display:flex;gap:9px;align-items:center;font-weight:400}.choice input{width:auto}.details{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.92rem}code,#source-info{overflow-wrap:anywhere}#message{position:sticky;top:0;background:#f5f6f8;padding:12px 0;z-index:1}fieldset{border:1px solid #dfe3e8;border-radius:8px;margin-top:15px}legend{font-weight:650}.small{font-size:.9rem}[hidden]{display:none!important}
+button{transition:transform 140ms cubic-bezier(.23,1,.32,1)}button:active:not(:disabled){transform:scale(.97)}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #8ab4ff;outline-offset:3px}.secondary{background:#eef2f8;color:#26354a}.login-panel{margin-top:20px;padding:22px;border:1px solid #b7ccf9;border-radius:12px;background:#f8faff;scroll-margin-top:80px}.login-content{display:flex;align-items:center;gap:24px;flex-wrap:wrap}.qr-frame{width:248px;height:248px;box-sizing:border-box;padding:12px;background:#fff;border:1px solid #e0e6f0;border-radius:10px;display:grid;place-items:center;flex:none}.qr-frame img{width:224px;height:224px;object-fit:contain;image-rendering:pixelated}.qr-placeholder{text-align:center;color:#66758c;padding:20px}.login-copy{flex:1;min-width:200px}.login-copy h3{margin:0 0 10px}.login-badge{display:inline-block;border-radius:20px;background:#e8effd;color:#174bb4;padding:4px 10px;font-size:.8rem;margin-bottom:12px}.login-actions{margin-top:18px}.login-actions button{margin-top:0}.login-panel[data-state=ready]{border-color:#75bda0;background:#f2fbf6}@media(max-width:520px){.login-content{justify-content:center}.login-copy{width:100%;min-width:0;text-align:center}.qr-frame{width:min(248px,100%);height:auto;aspect-ratio:1}.qr-frame img{width:100%;height:100%}.login-panel{padding:16px}.login-actions{justify-content:center}}@media(prefers-reduced-motion:reduce){button{transition:none}button:active:not(:disabled){transform:none}}
+</style></head><body><main>
+<a href="/">← 返回下载器</a><h1>上传器</h1>
+<p class="muted">将本地视频或下载成品发送到你选择的账号。支持 Bilibili、抖音和视频号；视频号还可选择保存平台草稿。</p>
+<p class="notice">先创建本地草稿并核对内容，再逐个确认执行。上传账号单独登录；不会使用下载 Cookie。结果来自上游工具；审核和公开状态需在平台核对。</p>
+<p id="message" role="status" aria-live="polite">正在连接上传器…</p>
+<section class="card" aria-labelledby="engine-heading"><h2 id="engine-heading">上传引擎</h2>
+<p id="engine-status" class="muted">正在读取状态…</p>
+<p id="engine-help" class="muted small">引擎就绪后，选择平台并点击“添加并扫码登录”，二维码会直接显示在本页。用对应手机 App 扫码并确认，登录状态会自动更新。</p>
+<button id="refresh" type="button">刷新状态</button></section>
+<section class="card" aria-labelledby="accounts-heading"><h2 id="accounts-heading">1. 账号</h2>
+<form id="account-form"><label for="account-platform">平台</label><select id="account-platform"><option value="bilibili">Bilibili</option><option value="douyin">抖音</option><option value="tencent">视频号</option></select>
+<label for="account-name">账号备注（可选）</label><input id="account-name" maxlength="60" placeholder="例如：主账号；留空会自动命名">
+<button type="submit">添加并扫码登录</button></form>
+<div id="login-panel" class="login-panel" hidden tabindex="-1" role="region" aria-labelledby="login-title">
+<div class="login-content"><div class="qr-frame"><img id="login-qr" alt="平台登录二维码，请用对应手机 App 扫码" hidden><p id="qr-placeholder" class="qr-placeholder">正在准备登录…</p></div>
+<div class="login-copy"><span id="login-account" class="login-badge"></span><h3 id="login-title">扫码登录</h3><p id="login-description" class="muted" role="status" aria-live="polite"></p><p id="login-expiry" class="small muted"></p><p class="small muted">扫码仅用于登录；上传和发布需要另外确认。</p></div></div>
+<div class="row login-actions"><button id="login-retry" type="button">重新获取二维码</button><button id="login-cancel" class="secondary" type="button">取消登录</button><button id="login-done" class="secondary" type="button" hidden>完成</button></div></div>
+<div id="accounts" aria-live="polite"></div><div id="operations" aria-live="polite"></div></section>
+<section class="card" aria-labelledby="source-heading"><h2 id="source-heading">2. 选择视频</h2>
+<div id="asset-import" hidden><p>已从下载器选择一份成品。导入后会核验文件并创建独立上传副本。</p><button id="import-asset" type="button">导入此下载成品</button></div>
+<form id="source-form"><label for="source-file">选择本地视频（最多 2 GiB）</label><input id="source-file" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" required><button type="submit">导入视频</button></form>
+<label for="source-id">已导入的视频</label><select id="source-id"><option value="">尚无视频</option></select><p id="source-info" class="muted small"></p></section>
+<section class="card" aria-labelledby="compose-heading"><h2 id="compose-heading">3. 创建本地草稿</h2>
+<form id="job-form"><fieldset><legend>选择接收账号</legend><div id="account-choices"><p class="muted">请先添加账号并登录或检查登录态。</p></div></fieldset>
+<label for="title">标题</label><input id="title" required maxlength="100"><p id="title-help" class="muted small">请遵守所选平台标题长度限制，提交前会再次检查。</p>
+<label for="description">简介</label><textarea id="description" maxlength="2000"></textarea>
+<label for="tags">标签（逗号分隔，不加 #）</label><input id="tags" maxlength="500">
+<fieldset id="tencent-options" hidden><legend>视频号操作</legend><label for="tencent-mode">确认后的动作</label><select id="tencent-mode"><option value="draft">上传并保存平台草稿</option><option value="publish">立即上传发布</option></select></fieldset>
+<fieldset id="bilibili-options" hidden><legend>Bilibili 投稿信息</legend><label for="category-id">分区 ID（tid）</label><input id="category-id" type="number" min="1" step="1" placeholder="填写目标分区 ID">
+<label for="copyright">投稿类型</label><select id="copyright"><option value="">请选择原创或转载</option><option value="1">原创</option><option value="2">转载</option></select>
+<label for="source-credit">转载来源</label><input id="source-credit" maxlength="200" placeholder="转载时必须填写来源"></fieldset>
+<p class="muted">Bilibili、抖音确认后立即投稿；视频号按上方所选动作执行。此按钮只创建本地草稿，不上传视频。</p><button type="submit">创建本地草稿并预览</button></form></section>
+<section class="card" aria-labelledby="jobs-heading"><h2 id="jobs-heading">4. 核对草稿与任务</h2><p class="muted small">若结果不确定，请先在平台查看是否已经收到视频，再决定是否创建新的草稿。取消不能撤回平台已经接收的内容。</p><div id="jobs" aria-live="polite"></div></section>
+</main><script>
+'use strict';
+const $=id=>document.getElementById(id);
+const platformNames={bilibili:'Bilibili',douyin:'抖音',tencent:'视频号'};
+const stateNames={draft:'本地草稿',queued:'等待执行',running:'执行中',submitted:'上游报告投稿完成',draft_saved:'上游报告草稿已保存',failed:'失败',canceled:'已取消',unknown:'结果不确定',succeeded:'完成',ready:'可用',invalid:'登录失效',unchecked:'尚未检查',checking:'检查中'};
+const codeNames={backend_unavailable:'上传引擎未安装或不可用',runtime_unavailable:'上传引擎未安装或不可用',runtime_missing:'上传引擎未安装',account_not_ready:'请先登录或检查账号',authentication_required:'需要重新登录',login_required:'需要重新登录',source_changed:'视频校验不一致，请重新导入',source_too_large:'视频超过 2 GiB',source_empty:'视频为空',invalid_metadata:'投稿信息不符合平台要求',unknown_acknowledgement_required:'请先核对平台结果',upload_request_forbidden:'页面会话失效或请求来源不匹配，请刷新页面',uploader_stopped:'上传器已停止，请重启应用',internal_error:'上传器内部错误'};
+Object.assign(codeNames,{ready:'就绪',account_ready:'登录态可用',account_name_exists:'该平台已有同名账号，请修改备注',account_not_found:'账号不存在',account_operation_active:'该账号已有登录或检查任务，请等待或取消',account_missing:'尚无登录态，请先登录',account_invalid:'登录态已失效，请重新登录',login_failed:'登录未完成，请重试',login_terminal_unavailable:'当前环境无法打开 Bilibili 登录终端',backend_failed:'上传引擎执行失败，请检查运行环境',runtime_invalid:'运行环境校验失败，请按文档重新准备',invalid_accounts:'请重新选择接收账号',invalid_identifier:'所选记录无效，请刷新页面',bilibili_category_required:'请填写 Bilibili 分区 ID',bilibili_copyright_required:'请选择 Bilibili 原创或转载',account_session_changed:'账号已重新登录，请核对后再次确认',runtime_busy:'运行环境正在安装，请稍后刷新',bilibili_tags_required:'Bilibili 投稿至少需要一个标签',source_credit_required:'转载必须填写来源',source_not_found:'视频不存在，请重新导入',source_hash_mismatch:'下载成品校验不一致，请检查原件',source_size_invalid:'视频为空或超过 2 GiB',source_unavailable:'视频不可用，请重新导入',unsupported_video_type:'不支持此视频格式',source_changed:'视频已发生变化，请重新导入',title_too_long:'标题超过所选平台的长度限制',invalid_tags:'最多 10 个不重复标签，每个最多 20 字',invalid_source_name:'文件名称无效',upload_storage_full:'上传目录可用空间不足',unsafe_upload_file:'文件或目录不符合本地存储要求',verify_remote_result_first:'请先在平台核对结果，再勾选确认重试',interrupted_result_unknown:'上次上传中断，请先在平台核对是否已收到',upstream_result_unknown:'上游结果不确定，请在平台核对',upstream_submitted:'上游工具报告投稿完成，请在平台核对审核状态',upstream_draft_saved:'上游工具报告草稿已保存',restart_confirmation_required:'应用重启后需要再次确认',operation_interrupted:'上次账号操作中断，请重新检查',job_requires_new_draft:'此任务不能再次提交，请创建新草稿',job_not_found:'任务不存在',retry_not_allowed:'该任务当前不能重试',draft_mode_unsupported:'所选平台不支持草稿模式',idempotency_conflict:'提交内容已变化，请刷新页面后重新创建草稿',upload_worker_stopping:'上传器正在停止，请稍后重启',canceled:'已取消',cancelled:'已取消'});
+let csrf='', snapshot={accounts:[],sources:[],jobs:[],operations:[],status:{}}, busy=false, pollPromise=null, timer=null, pageActive=true;
+let draftSubmission=null;const unknownAcknowledgements=new Set(), jobDetailsOpen=new Map();
+let loginOperationId=null, loginAccountId=null, qrObjectUrl=null, qrKey=null, qrGeneration=0, qrRequest=null, loginTimer=null;
+const loginPhases={queued:['等待登录通道','前面的账号操作完成后，会自动显示二维码。'],preparing:['正在获取二维码','正在连接平台，请稍候。'],waiting_scan:['请扫码登录','用对应手机 App 扫描左侧二维码，并在手机上确认。'],scanned:['已扫码，等待手机确认','请在手机上确认本次登录，页面会自动更新。'],verification_required:['平台要求额外验证','请完成平台要求的验证。如仍无法继续，可取消后重新扫码。'],expired:['二维码已过期','点击“重新获取二维码”开始新的登录。'],ready:['登录成功','账号已连接，可以继续创建上传草稿。'],failed:['登录未完成','可以重新获取二维码再试一次。'],canceled:['登录已取消','需要时可以重新扫码登录。']};
+Object.assign(codeNames,{login_owned_by_other_instance:'请在正在运行上传任务的应用中扫码登录',login_expired:'二维码已过期',login_qr_expired:'二维码已过期',login_timeout:'登录等待超时，请重新扫码',login_qr_unavailable:'暂时无法获取二维码，请重试',login_verification_required:'平台要求额外验证，请完成验证后重试'});
+function clearQR(){qrGeneration++;if(qrRequest)qrRequest.abort();qrRequest=null;if(qrObjectUrl)URL.revokeObjectURL(qrObjectUrl);qrObjectUrl=null;qrKey=null;$('login-qr').hidden=true;$('login-qr').removeAttribute('src');}
+function selectedLogin(){return snapshot.operations.find(item=>item.id===loginOperationId&&item.action==='login');}
+function qrStillCurrent(id,revision){const op=selectedLogin();return pageActive&&op&&op.id===id&&op.qr_revision===revision&&op.state==='running'&&op.qr_available&&op.login_phase==='waiting_scan'&&(!op.expires_at||op.expires_at*1000>Date.now());}
+async function loadLoginQR(op){
+  const key=op.id+':'+op.qr_revision;if(qrKey===key)return;clearQR();qrKey=key;
+  const generation=qrGeneration;const controller=new AbortController();qrRequest=controller;
+  const timeout=setTimeout(()=>controller.abort(),15000);
+  try{
+    const response=await fetch('/api/v1/uploads/operations/'+encodeURIComponent(op.id)+'/qr',{headers:new Headers({'X-Upload-CSRF':csrf}),cache:'no-store',signal:controller.signal});
+    if(!response.ok||response.headers.get('Content-Type')?.split(';')[0]!=='image/png')throw new Error('qr_unavailable');
+    const blob=await response.blob();if(blob.size>524288)throw new Error('qr_invalid');
+    if(generation!==qrGeneration||!qrStillCurrent(op.id,op.qr_revision))return;
+    qrObjectUrl=URL.createObjectURL(blob);$('login-qr').src=qrObjectUrl;$('login-qr').hidden=false;$('qr-placeholder').hidden=true;
+  }catch(error){if(generation===qrGeneration){qrKey=null;$('qr-placeholder').hidden=false;$('qr-placeholder').textContent='二维码暂未就绪，正在重试…';}}
+  finally{clearTimeout(timeout);if(qrRequest===controller)qrRequest=null;}
+}
+function renderLogin(){
+  if(!pageActive){clearQR();return;}
+  if(!loginOperationId){const active=snapshot.operations.find(item=>item.action==='login'&&['queued','running'].includes(item.state));if(active){loginOperationId=active.id;loginAccountId=active.account_id;}}
+  const op=selectedLogin();if(!op){$('login-panel').hidden=true;clearQR();return;}
+  const account=snapshot.accounts.find(item=>item.id===op.account_id);loginAccountId=op.account_id;
+  let phase=op.state==='running'?(op.login_phase||'preparing'):op.state;
+  if(op.code==='cancellation_requested')phase='canceling';
+  if(op.state==='failed'&&['login_qr_expired','login_expired','login_timeout'].includes(op.code))phase='expired';
+  if(op.state==='failed'&&op.code==='login_verification_required')phase='verification_required';
+  if(op.expires_at&&op.expires_at*1000<=Date.now()&&phase==='waiting_scan')phase='expired';
+  const copy=phase==='canceling'?['正在取消登录','正在关闭本次登录会话。']:loginPhases[phase]||loginPhases.preparing;
+  $('login-panel').hidden=false;$('login-panel').dataset.state=phase;
+  $('login-account').textContent=account?platformNames[account.platform]+' · '+account.name:'账号登录';
+  $('login-title').textContent=copy[0];$('login-description').textContent=copy[1]+(op.state==='failed'&&op.code?' '+codeText(op.code):'');
+  if(phase==='waiting_scan'&&account){const app={bilibili:'Bilibili App',douyin:'抖音 App',tencent:'微信'}[account.platform];$('login-description').textContent='使用'+app+'扫码，并在手机上确认本次登录。'+(account.platform==='bilibili'?'平台授权页可能显示 TV 客户端。':'');}
+  $('login-expiry').textContent=phase==='waiting_scan'&&op.expires_at?'约 '+Math.max(0,Math.ceil(op.expires_at-Date.now()/1000))+' 秒后过期':'';
+  const active=['queued','running'].includes(op.state);
+  $('login-cancel').hidden=!active;$('login-retry').hidden=phase==='ready';$('login-done').hidden=active;
+  $('login-retry').disabled=busy||phase==='canceling';$('login-cancel').disabled=busy||phase==='canceling';
+  if(phase==='waiting_scan'&&op.qr_available){$('qr-placeholder').textContent='正在加载二维码…';loadLoginQR(op);}
+  else{clearQR();$('qr-placeholder').hidden=false;$('qr-placeholder').textContent=phase==='ready'?'✓ 登录成功':copy[0];}
+}
+async function startLogin(accountId){clearQR();loginAccountId=accountId;message('正在创建登录会话…');const op=await api('/accounts/'+encodeURIComponent(accountId)+'/login',{method:'POST'});loginOperationId=op.id;message('本页会自动更新登录状态。');await refresh();$('login-panel').focus();}
+async function restartLogin(){const op=selectedLogin();const accountId=loginAccountId;if(!accountId)return;clearQR();
+  if(op&&['queued','running'].includes(op.state)){await api('/operations/'+encodeURIComponent(op.id)+'/cancel',{method:'POST'});
+    for(let attempt=0;attempt<50;attempt++){const operations=await api('/operations');const previous=operations.find(item=>item.id===op.id);if(!previous||!['queued','running'].includes(previous.state))break;if(attempt===49)throw new Error('正在结束上一次登录，请稍后重新获取二维码。');await new Promise(resolve=>setTimeout(resolve,150));}}
+  await startLogin(accountId);
+}
+$('login-retry').addEventListener('click',()=>mutate(restartLogin));
+$('login-cancel').addEventListener('click',()=>mutate(async()=>{const op=selectedLogin();clearQR();if(op)await api('/operations/'+encodeURIComponent(op.id)+'/cancel',{method:'POST'});message('已取消本次登录。');}));
+$('login-done').addEventListener('click',()=>{clearQR();loginOperationId=null;loginAccountId=null;$('login-panel').hidden=true;});
+function scheduleLoginTick(){if(loginTimer!==null)clearTimeout(loginTimer);loginTimer=pageActive?setTimeout(tickLogin,1000):null;}
+function tickLogin(){if(loginTimer!==null)clearTimeout(loginTimer);loginTimer=null;if(!pageActive)return;if(selectedLogin()&&!document.hidden)renderLogin();scheduleLoginTick();}
+scheduleLoginTick();
+function element(tag,text,className){const item=document.createElement(tag);if(text!==undefined)item.textContent=text;if(className)item.className=className;return item;}
+function codeText(code){return code?codeNames[code]||code:'';}
+function message(text,error=false){$('message').textContent=text;$('message').className=error?'danger':'muted';}
+async function api(path,options={}){
+  const headers=new Headers(options.headers||{});
+  if(options.method && options.method!=='GET')headers.set('X-Upload-CSRF',csrf);
+  if(options.json!==undefined){headers.set('Content-Type','application/json');options.body=JSON.stringify(options.json);delete options.json;}
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),options.body instanceof Blob?600000:30000);
+  try{const response=await fetch('/api/v1/uploads'+path,{...options,headers,cache:'no-store',signal:controller.signal});
+    let payload;try{payload=await response.json();}catch{throw new Error('服务器返回了无法读取的响应');}
+    if(!response.ok){const detail=typeof payload.detail==='string'?codeText(payload.detail):'请检查必填信息和平台限制';throw new Error(detail+'（HTTP '+response.status+'）');}return payload;
+  }finally{clearTimeout(timeout);}
+}
+function button(text,action){const item=element('button',text);item.type='button';item.disabled=busy;item.addEventListener('click',()=>mutate(action));return item;}
+async function mutate(action){if(busy)return;busy=true;document.querySelectorAll('button').forEach(item=>item.disabled=true);
+  try{if(pollPromise)await pollPromise;await action();await refresh();}catch(error){message(error.message||String(error),true);}
+  finally{busy=false;document.querySelectorAll('button').forEach(item=>item.disabled=false);renderAccounts();renderJobs();renderLogin();}}
+function selectedAccounts(){return [...document.querySelectorAll('#account-choices input:checked')].map(item=>item.value);}
+function updateMetadata(){const selected=new Set(selectedAccounts());const platforms=snapshot.accounts.filter(item=>selected.has(item.id)).map(item=>item.platform);const bili=platforms.includes('bilibili');$('bilibili-options').hidden=!bili;$('tencent-options').hidden=!platforms.includes('tencent');$('category-id').required=bili;$('copyright').required=bili;$('source-credit').required=bili&&$('copyright').value==='2';
+  const limits=(snapshot.status.platforms||[]).filter(item=>platforms.includes(item.id)).map(item=>platformNames[item.id]+' '+item.title_limit+' 字');$('title-help').textContent=limits.length?'标题限制：'+limits.join('；'):'请先选择接收账号。';}
+function renderAccounts(){const selected=new Set(selectedAccounts());$('accounts').replaceChildren();$('account-choices').replaceChildren();
+  for(const account of snapshot.accounts){const item=element('div',undefined,'item');item.append(element('strong',platformNames[account.platform]+' · '+account.name));item.append(element('p',(stateNames[account.auth_state]||account.auth_state)+(account.code?' · '+codeText(account.code):''),'muted'));
+    const actions=element('div',undefined,'row');const active=snapshot.operations.find(op=>op.account_id===account.id&&['queued','running'].includes(op.state));
+    if(active&&active.action==='login')actions.append(button('查看二维码',async()=>{loginOperationId=active.id;loginAccountId=account.id;renderLogin();$('login-panel').focus();}));
+    else{const login=button(account.auth_state==='ready'?'重新扫码登录':'扫码登录',()=>startLogin(account.id));login.disabled=busy||!!active;actions.append(login);}
+    const checkLogin=button('检查登录态',async()=>{await api('/accounts/'+encodeURIComponent(account.id)+'/check',{method:'POST'});message('登录态检查已排队。');});checkLogin.className='secondary';checkLogin.disabled=busy||!!active;actions.append(checkLogin);item.append(actions);$('accounts').append(item);
+    const choice=element('label',undefined,'choice');const check=element('input');check.type='checkbox';check.value=account.id;check.checked=selected.has(account.id);check.addEventListener('change',updateMetadata);choice.append(check,element('span',platformNames[account.platform]+' · '+account.name+'（'+(stateNames[account.auth_state]||account.auth_state)+'）'));$('account-choices').append(choice);}
+  if(!snapshot.accounts.length)$('account-choices').append(element('p','请先添加账号。','muted'));updateMetadata();
+  $('operations').replaceChildren();for(const operation of snapshot.operations.filter(item=>item.action!=='login'&&['queued','running','failed','unknown'].includes(item.state)).slice(0,5)){const account=snapshot.accounts.find(item=>item.id===operation.account_id);const item=element('div',undefined,'item');item.append(element('p',(account?account.name:'账号操作')+' · '+(operation.action==='login'?'登录':'检查')+' · '+(stateNames[operation.state]||operation.state)+' '+codeText(operation.code)));if(['queued','running'].includes(operation.state))item.append(button('取消账号操作',async()=>{await api('/operations/'+encodeURIComponent(operation.id)+'/cancel',{method:'POST'});message('已请求取消账号操作。');}));$('operations').append(item);}
+}
+function renderSources(){const previous=$('source-id').value;$('source-id').replaceChildren(element('option','请选择视频'));$('source-id').firstChild.value='';for(const source of snapshot.sources){const option=element('option',source.name+' · '+(source.size/1048576).toFixed(1)+' MiB');option.value=source.id;$('source-id').append(option);}if(snapshot.sources.some(item=>item.id===previous))$('source-id').value=previous;else if(snapshot.sources.length)$('source-id').value=snapshot.sources[0].id;showSource();}
+function showSource(){const source=snapshot.sources.find(item=>item.id===$('source-id').value);$('source-info').textContent=source?'SHA-256：'+source.sha256:'';}
+function renderJobs(){for(const preview of $('jobs').querySelectorAll('details[data-job-id]'))jobDetailsOpen.set(preview.dataset.jobId,preview.open);$('jobs').replaceChildren();if(!snapshot.jobs.length){$('jobs').append(element('p','尚无上传任务。','muted'));return;}
+  for(const job of snapshot.jobs){const item=element('article',undefined,'item');const source=snapshot.sources.find(entry=>entry.id===job.source_id);item.append(element('strong',platformNames[job.platform]+' · '+job.account_name+' · '+(stateNames[job.state]||job.state)));item.append(element('p',job.title));
+    const preview=element('details');preview.dataset.jobId=job.id;preview.open=jobDetailsOpen.has(job.id)?jobDetailsOpen.get(job.id):job.state==='draft';preview.append(element('summary','查看投稿信息'));preview.append(element('p','视频：'+(source?source.name:'已登记视频')+'\n简介：'+(job.description||'（空）')+'\n标签：'+(job.tags||[]).join('，')+'\n动作：'+(job.mode==='draft'?'保存平台草稿':'立即投稿')+(job.platform==='bilibili'?'\n分区 ID：'+job.category_id+'\n类型：'+(job.copyright===1?'原创':'转载')+(job.copyright===2?'\n来源：'+job.source_credit:''):''),'details'));item.append(preview);if(job.code)item.append(element('p',codeText(job.code),job.state==='failed'||job.state==='unknown'?'danger':'muted'));
+    const actions=element('div',undefined,'row');if(job.state==='draft')actions.append(button(job.mode==='draft'?'确认上传并保存平台草稿':'确认立即上传投稿',async()=>{await api('/jobs/'+encodeURIComponent(job.id)+'/confirm',{method:'POST'});message('已确认此任务，等待上传器执行。');}));
+    if(['draft','queued','running'].includes(job.state))actions.append(button('取消',async()=>{await api('/jobs/'+encodeURIComponent(job.id)+'/cancel',{method:'POST'});message('已请求取消。平台已接收的内容不会被撤回。');}));
+    if(['failed','canceled','unknown'].includes(job.state)){let acknowledge=null;if(job.state==='unknown'){const label=element('label',undefined,'choice');acknowledge=element('input');acknowledge.type='checkbox';acknowledge.checked=unknownAcknowledgements.has(job.id);acknowledge.addEventListener('change',()=>{if(acknowledge.checked)unknownAcknowledgements.add(job.id);else unknownAcknowledgements.delete(job.id);});label.append(acknowledge,element('span','我已在平台核对结果，确定需要重新上传'));item.append(label);}actions.append(button('重新创建本地草稿',async()=>{if(acknowledge&&!acknowledge.checked)throw new Error('请先到平台核对结果，并勾选确认。');await api('/jobs/'+encodeURIComponent(job.id)+'/retry',{method:'POST',json:{acknowledge_unknown:!!acknowledge?.checked}});message('新本地草稿已创建，请核对后再次确认。');}));}item.append(actions);$('jobs').append(item);}
+}
+async function refresh(){if(pollPromise)return pollPromise;pollPromise=(async()=>{const [status,accounts,sources,jobs,operations]=await Promise.all([api('/status'),api('/accounts'),api('/sources'),api('/jobs'),api('/operations')]);snapshot={status,accounts,sources,jobs,operations};const backend=status.backend||{};const state=backend.ready?'ready':backend.state||backend.status||'不可用';$('engine-status').textContent='引擎：'+(stateNames[state]||state)+(backend.code?' · '+codeText(backend.code):'')+'；上传调度：'+(status.worker_running?'运行中':'未运行');renderAccounts();renderSources();renderJobs();renderLogin();})();try{await pollPromise;}finally{pollPromise=null;}}
+function schedulePoll(){if(timer!==null)clearTimeout(timer);timer=pageActive?setTimeout(poll,selectedLogin()&&['queued','running'].includes(selectedLogin().state)?1500:3000):null;}
+async function poll(){if(timer!==null)clearTimeout(timer);timer=null;if(!pageActive)return;try{if(!busy)await refresh();}catch(error){message('状态刷新失败：'+error.message,true);}finally{schedulePoll();}}
+$('refresh').addEventListener('click',()=>mutate(async()=>{message('状态已刷新。');}));
+$('copyright').addEventListener('change',updateMetadata);$('source-id').addEventListener('change',showSource);
+$('account-form').addEventListener('submit',event=>{event.preventDefault();mutate(async()=>{const platform=$('account-platform').value;let name=$('account-name').value.trim();if(!name){let count=1;do{name=platformNames[platform]+' 账号 '+count++;}while(snapshot.accounts.some(item=>item.platform===platform&&item.name===name));}const account=await api('/accounts',{method:'POST',json:{platform,name}});$('account-name').value='';await startLogin(account.id);});});
+$('source-form').addEventListener('submit',event=>{event.preventDefault();mutate(async()=>{const file=$('source-file').files[0];if(!file)throw new Error('请选择视频。');if(file.size>2147483648)throw new Error('视频超过 2 GiB。');message('正在导入视频，请等待文件校验完成…');const source=await api('/sources?name='+encodeURIComponent(file.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});await refresh();$('source-id').value=source.id;showSource();message('视频已导入。');});});
+$('job-form').addEventListener('submit',event=>{event.preventDefault();mutate(async()=>{const accountIds=selectedAccounts();if(!accountIds.length)throw new Error('请选择至少一个账号。');if(!$('source-id').value)throw new Error('请先导入并选择视频。');const selected=snapshot.accounts.filter(item=>accountIds.includes(item.id));const bili=selected.some(item=>item.platform==='bilibili');if(bili&&(!$('category-id').value||!$('copyright').value))throw new Error('Bilibili 必须填写分区 ID 并选择原创或转载。');if(bili&&$('copyright').value==='2'&&!$('source-credit').value.trim())throw new Error('转载必须填写来源。');
+  const base={source_id:$('source-id').value,title:$('title').value.trim(),description:$('description').value,tags:$('tags').value.split(/[,，]/).map(item=>item.trim()).filter(Boolean),category_id:bili?Number($('category-id').value):null,copyright:bili?Number($('copyright').value):1,source_credit:$('source-credit').value.trim()};
+  const tencentMode=$('tencent-mode').value;const signature=JSON.stringify({...base,accountIds:[...accountIds].sort(),tencentMode});if(!draftSubmission||draftSubmission.signature!==signature)draftSubmission={signature,key:crypto.randomUUID()};
+  for(const mode of ['publish','draft']){const group=selected.filter(item=>(item.platform==='tencent'?tencentMode:'publish')===mode).map(item=>item.id);if(group.length)await api('/jobs',{method:'POST',json:{...base,account_ids:group,mode,idempotency_key:draftSubmission.key+'-'+mode}});}
+  draftSubmission=null;message('本地草稿已创建。请在下方核对每份内容，再确认执行。');});});
+const assetId=new URL(location.href).searchParams.get('asset_id');if(assetId&&/^[0-9a-f-]{36}$/.test(assetId)){$('asset-import').hidden=false;$('import-asset').addEventListener('click',()=>mutate(async()=>{const source=await api('/sources/assets/'+encodeURIComponent(assetId),{method:'POST'});await refresh();$('source-id').value=source.id;showSource();$('asset-import').hidden=true;message('下载成品已导入，原下载文件保持不变。');}));}
+window.addEventListener('pagehide',()=>{pageActive=false;schedulePoll();scheduleLoginTick();clearQR();});
+window.addEventListener('pageshow',event=>{if(!event.persisted)return;pageActive=true;scheduleLoginTick();return poll();});
+(async()=>{try{csrf=(await api('/session')).csrf_token;await refresh();message('选择账号和视频，创建本地草稿后确认执行。');}catch(error){message('上传器连接失败：'+error.message,true);}finally{schedulePoll();}})();
+</script></body></html>'''

@@ -1,5 +1,26 @@
 # Third-Party Notices
 
+## Optional upload runtime (0.24.0)
+
+The upload integration uses separately installed upstream tools. Neither the
+Open-Flame source distribution nor its wheel includes their source archives,
+dependency wheels, browser binaries, account state, or the biliup executable.
+The application itself remains Apache-2.0 with its existing NOTICE unchanged.
+
+- social-auto-upload: MIT; fixed source revision and archive identity are listed
+  in [the uploader review](docs/OPEN_SOURCE_UPLOADER_REVIEW.md). The installer
+  retains the upstream source archive and its LICENSE in the runtime directory.
+- biliup: MIT; a separately downloaded, hash-checked Windows release is used for
+  Bilibili login and submission. Release and source links are documented in the
+  same review.
+- Upload-only Python distributions, Patchright/Playwright and their browser
+  distributions have their own license materials. The exact dependency lock is
+  [runtime-lock.json](src/video_download_control/uploads/runtime-lock.json).
+
+Installing these tools locally is separate from distributing an offline bundle.
+This change does not claim that an aggregate third-party binary bundle has been
+audited or approved for redistribution. See [runtime setup](docs/UPLOAD_RUNTIME.md).
+
 Project-authored source code, documentation, and scripts are licensed under
 the Apache License, Version 2.0. Copyright 2026 HedgehogsGX & Cyaegha_Xu.
 Third-party components remain governed by their own licenses; the project's

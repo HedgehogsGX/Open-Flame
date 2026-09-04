@@ -8,6 +8,7 @@ __pycache__
 htmlcov
 .env
 data
+data-uploads
 validation/local
 dist
 build

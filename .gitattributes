@@ -4,6 +4,10 @@
 # cover the original wheel bytes, including any native line endings.
 licenses/python/** -text
 
+# The installed uploader manifest pins this lock file's exact byte hash.
+# Preserve it across Git checkout just like the audited license payloads.
+src/video_download_control/uploads/runtime-lock.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+
 # Keep Windows command scripts native if any are added later.
 *.bat text eol=crlf
 *.cmd text eol=crlf

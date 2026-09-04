@@ -1,11 +1,29 @@
 # 多平台视频下载项目开发交接
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
-> 最后更新：2026-09-04
-> 当前迭代：Iteration 0.23.0 — 源码发行工具、最终 debug 与版本交付
-> 当前版本：`0.23.0`；数据库：Schema `11`；本轮最终全量回归 **1670 passed / 8 skipped**
+> 最后更新：2026-09-05
+> 当前迭代：Iteration 0.24.2 — 下载成品接入上传与测试交付
+> 当前版本：`0.24.2`；下载数据库：Schema `11`；上传数据库：独立 Schema `1`
 
 ## 本次交接入口
+
+本轮完成目标是上传器开发、下载成品到上传草稿集成、调试与代码提交；真实平台上传由用户安排外部测试。首批验收平台固定为 **Bilibili、抖音、视频号**，其他平台后续维护。测试员直接阅读 [测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)，本轮工程证据见 [0.24.2 集成验收](validation/iteration-0.24.2-integration-evidence.md)。
+
+用户已完成 Bilibili 扫码，账号检查返回 ready；实际本地控件测试完成导入、必填校验、草稿、取消和重建，两个测试任务均取消，未执行真实上传。所发现的草稿详情折叠状态被轮询重置问题在本轮修复。
+
+最新改动将三个平台的二维码统一显示在 `/uploads`：账号备注可省略，点击“添加并扫码登录”即可获取二维码；扫码、确认、成功、取消和过期均在本页显示。Bilibili 使用固定 biliup 同款官方 TV QR 协议；抖音/视频号在独立无头浏览器中打开登录页，仅传回二维码元素截图。二维码不进入 SQLite 或日志，操作临时目录结束清理。真实扫码及投稿仍须用户完成；证据见 [0.24.1 扫码登录](validation/iteration-0.24.1-qr-login-evidence.md)。
+
+用户最新决定：优先开发 **Bilibili、抖音、视频号** 上传；小红书等其他平台后续维护。这一明确请求接续并调整了历史“先完善下载再做上传”的顺序。
+
+新增 `/uploads` 页面及 `/api/v1/uploads/*`。普通 Start 的上传目录为 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-uploads`，与下载 `data` 同级；现有下载备份不包含上传记录或账号。服务在首次访问上传 API 时初始化，下载启动与 `--check` 不自动启用上传、登录账号或提交内容。使用见 [上传指南](docs/UPLOADER.md)；安装与开源依据见 [运行环境](docs/UPLOAD_RUNTIME.md)、[方案调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。
+
+实现包括：独立账号、受管视频与 SHA-256、ready 下载成品导入、本地草稿、多账号分发、逐项确认、视频号草稿/发布、取消和持久化结果；未知结果必须先到平台核对，再显式创建新草稿。重启将 running 标记 unknown、queued 退回 draft；重新登录会撤回同账号尚未执行的旧队列确认。上传不使用下载 Cookie，不修改下载 Schema 11 或原始媒体。
+
+执行层采用固定 social-auto-upload 与 biliup，以及独立 CPython 3.12/浏览器环境。安装检查、模拟测试和实际本地网页操作都不能证明真实平台投稿已成功；登录和真实视频/投稿许可仍须由用户提供。当前尚未新建 GitHub Release 或推送本轮开发内容，0.23.0 的制品与旧平台记录保持历史身份。
+
+上一轮上传核心、浏览器操作与已安装运行环境的记录见 [0.24.0 上传开发证据](validation/iteration-0.24.0-upload-evidence.md)。下一步由外部测试员按测试计划完成三平台真实登录、媒体传输与平台结果核对；本轮不代为确认真实上传。
+
+### v0.23.0 交付历史入口
 
 普通 Windows x64 使用：完整源码 ZIP 解压后，先运行 `Setup-Open-Flame.cmd`，成功后运行 `Start-Open-Flame.cmd`。需要已安装 64 位 CPython 3.12+，无需 Codex 或 uv，仍不是免 Python EXE。安装、修复、日志位置与故障处理见 [Windows 安装](docs/WINDOWS_SETUP.md) 和 [启动指南](docs/WINDOWS_LAUNCHER.md)。
 
@@ -15,7 +33,7 @@
 
 本机交付候选目录为 ignored `dist/Open-Flame-0.23.0-final-r2/release/`；只交付其中五个文件，不交付构建环境、测试 profile、原始日志或工具二进制。Git 目标是 `HedgehogsGX/Open-Flame` 的 `main`，使用正常 fast-forward push，不覆盖远端历史；具体提交以 `git log` / GitHub 提交页为准。Git push 不等于创建 GitHub Release 或上传这些本机制品。
 
-### 仍待开发 / 验收（按下一步顺序）
+### v0.23.0 当时的待办（上传开发由上方 0.24.0 接续）
 
 | 优先级 | 工作 | 当前限制与完成条件 |
 |---|---|---|

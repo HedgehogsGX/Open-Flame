@@ -1,7 +1,7 @@
 # Stage 0 validation workspace
 
-Current iteration: [0.23.0 release and final debug](iteration-0.23.0-release-evidence.md), following [source setup and repair](iteration-0.23.0-source-setup-evidence.md). Earlier iteration records are historical, not proof for this build.
-This iteration verifies project-only archives, fresh source/wheel installations, and a limited actual browser smoke. It does not prove new platform media downloads, full browser coverage, Stage 0 qualification, Linux isolation, a Python-free installer, or third-party redistribution permission.
+Current iteration: [0.24.2 download/upload integration](iteration-0.24.2-integration-evidence.md), following [0.24.1 inline QR login](iteration-0.24.1-qr-login-evidence.md) and [0.24.0 first-platform uploader](iteration-0.24.0-upload-evidence.md). The [0.23.0 release](iteration-0.23.0-release-evidence.md) and [source setup](iteration-0.23.0-source-setup-evidence.md) records remain historical evidence.
+This iteration implements Bilibili, Douyin and WeChat Channels upload workflows and verifies local runtime, offline regressions and a browser flow with a simulated backend. A user has completed Bilibili QR login and its account check; real Douyin/WeChat Channels authentication, platform media uploads and publication remain for external testing. It does not establish Stage 0 qualification, Linux isolation, a Python-free installer, or third-party redistribution permission.
 
 This directory contains Stage 0 schemas/templates plus explicitly labeled
 engineering evidence. Raw current-platform samples, logs and media remain under

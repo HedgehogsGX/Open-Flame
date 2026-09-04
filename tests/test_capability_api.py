@@ -458,7 +458,7 @@ def test_home_page_exposes_three_capability_layers_with_safe_dom_updates(
         page = client.get("/")
 
     assert page.status_code == 200
-    assert "迭代 0.23.0" in page.text
+    assert "迭代 0.24.2" in page.text
     assert "本次启动配置的默认平台 Cookie" in page.text
     assert "双槽下载" in page.text
     assert "video-download-local-app supervisor 同时管理控制面与本机 Worker" in page.text

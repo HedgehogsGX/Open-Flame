@@ -35,6 +35,7 @@ def test_sdist_excludes_self_reference_and_local_runtime_trees() -> None:
         "/validation/apache-2.0-license-migration-evidence.md",
         "/validation/local/**",
         "/runtime-tools/**",
+        "/data-uploads/**",
         "/dist/**",
         "/build/**",
         "/.venv/**",

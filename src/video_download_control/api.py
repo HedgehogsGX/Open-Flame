@@ -86,6 +86,7 @@ from .short_link_transport import (
 )
 from .short_links import ControlledShortLinkResolver
 from .toolchain import inspect_toolchain
+from .uploads.api import install_upload_routes
 from .web import INDEX_HTML
 from .worker_repository import (
     CircuitResetConflict,
@@ -621,10 +622,13 @@ def create_app(
         try:
             yield
         finally:
-            if owns_local_short_link_transport:
-                assert isinstance(short_link_resolver, ControlledShortLinkResolver)
-                short_link_resolver.transport.close()
-            active_logger.emit("control.stopped")
+            try:
+                await run_in_threadpool(app.state.upload_manager.stop)
+            finally:
+                if owns_local_short_link_transport:
+                    assert isinstance(short_link_resolver, ControlledShortLinkResolver)
+                    short_link_resolver.transport.close()
+                active_logger.emit("control.stopped")
 
     app = FastAPI(
         title="Video Download Control",
@@ -642,6 +646,29 @@ def create_app(
     app.state.toolchain_status = cached_toolchain_status
     app.state.download_capabilities = DEFAULT_DOWNLOAD_CAPABILITIES
     app.state.capability_evidence_repository = capability_repository
+
+    def upload_original_asset(asset_id: str) -> tuple[Path, str]:
+        try:
+            canonical_id = _canonical_asset_id(asset_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="asset_not_found") from None
+        registered = service.get_ready_original_asset(canonical_id)
+        if registered is None:
+            raise HTTPException(status_code=404, detail="asset_not_found")
+        try:
+            path, _ = _registered_original_file(
+                resolved_settings.data_root, asset_id=canonical_id,
+                relative_path=registered["original_path"],
+                expected_size=registered["size_bytes"],
+            )
+        except (OSError, ValueError):
+            raise HTTPException(status_code=409, detail="asset_file_unavailable") from None
+        return path, registered["sha256"]
+
+    install_upload_routes(
+        app, data_root=resolved_settings.data_root,
+        original_asset_resolver=upload_original_asset,
+    )
 
     @app.exception_handler(CredentialDefaultsError)
     async def credential_defaults_error(_request: Request, _exc: CredentialDefaultsError):
