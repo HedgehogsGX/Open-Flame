@@ -4,7 +4,7 @@
 
 > 当前开发版本为 **0.24.2**，下载数据库仍为 **Schema 11**，上传库独立使用 **Schema 1**。首批上传支持 Bilibili、抖音和视频号：页面内扫码登录、本地视频或下载成品导入、多账号草稿预览、逐项确认、取消及结果不确定时的人工核对。Bilibili 已由用户扫码并通过账号检查；三平台真实投稿和审核结果由外部测试员分别验收；小红书等平台后续维护。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
-外部测试入口：[三平台上传测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。从下载成品点击“用于上传”，导入后创建本地草稿，核对后才由测试员逐项确认。
+外部测试入口：[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)，包含 `codex/uploader-first-platforms` 分支的源码获取与安装步骤。从下载成品点击“用于上传”，导入后创建本地草稿，核对后才由测试员逐项确认。
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。现有下载备份不包含上传目录。
 

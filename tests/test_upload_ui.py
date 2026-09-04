@@ -16,7 +16,7 @@ class Element{
  constructor(tag,attrs={},text=''){this.tagName=tag;this.children=[];this.listeners=new Map();this._text=text;this.value=attrs.value||'';this.hidden=Object.hasOwn(attrs,'hidden');this.disabled=false;this.checked=false;this.dataset={};this.type=attrs.type||'';this.files=[];if(attrs.id)ids.set(attrs.id,this);}
  get textContent(){return this._text+this.children.map(item=>item.textContent).join('');}set textContent(value){this._text=String(value);this.children=[];}
  set innerHTML(value){throw new Error('Unsafe innerHTML assignment');}
- removeAttribute(name){delete this[name];}focus(){this.focused=true;}
+ removeAttribute(name){delete this[name];}focus(){this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
  append(...items){for(const item of items)this.children.push(typeof item==='string'?new Element('#text',{},item):item);}
  replaceChildren(...items){this._text='';this.children=[];this.append(...items);}get firstChild(){return this.children[0];}
  querySelectorAll(selector){if(selector==='details[data-job-id]')return all(this).filter(item=>item.tagName==='details'&&item.dataset.jobId!==undefined);throw new Error('Unsupported selector '+selector);}
@@ -248,3 +248,64 @@ return {afterCancel,afterRetry,afterPoll:{old:preview('1').open,other:preview('2
     assert result["afterPoll"] == {"old": True, "other": True, "newDraft": False}
     assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + suffix
                                for suffix in ("/cancel", "/retry")]
+
+
+@pytest.mark.parametrize("selection_change", ["cleared", "missing"])
+def test_source_selection_stays_empty_after_user_clear_or_missing_selected_source(selection_change):
+    result = run_upload_ui(r"""
+const initial=$('source-id').value;
+""" + ("$('source-id').value='';showSource();" if selection_change == "cleared" else
+       "__test.sources=[{id:'9'.repeat(32),name:'different.mp4',size:7,sha256:'8'.repeat(64)}];") + r"""
+await poll();const afterPoll=$('source-id').value,shaAfterPoll=$('source-info').textContent;
+await $('refresh').dispatch('click');await __test.turn();
+for(const input of __test.all($('account-choices')).filter(item=>item.tagName==='input'))input.checked=input.value==='b'.repeat(32);
+updateMetadata();$('title').value='Synthetic';await $('job-form').dispatch('submit');for(let i=0;i<3;i++)await __test.turn();
+return {initial,afterPoll,shaAfterPoll,afterRefresh:$('source-id').value,posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url),message:$('message').textContent};
+""")
+    assert result["initial"] == "c" * 32
+    assert result["afterPoll"] == result["afterRefresh"] == ""
+    assert result["shaAfterPoll"] == ""
+    assert result["posts"] == []
+    assert result["message"] == "请先导入并选择视频。"
+
+
+def test_importing_source_explicitly_selects_it_after_previous_selection_was_cleared():
+    result = run_upload_ui(r"""
+$('source-id').value='';showSource();await poll();
+const imported={id:'9'.repeat(32),name:'new.mp4',size:13,sha256:'8'.repeat(64)};
+const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);if(options.method==='POST'&&url.startsWith('/api/v1/uploads/sources?')){__test.sources.unshift(imported);return {ok:true,status:201,json:async()=>imported};}return response;};
+const file=new Blob(['synthetic-mp4'],{type:'video/mp4'});file.name='new.mp4';$('source-file').files=[file];
+await $('source-form').dispatch('submit');for(let i=0;i<6;i++)await __test.turn();
+const selectedAfterImport=$('source-id').value;await poll();
+return {selectedAfterImport,selectedAfterPoll:$('source-id').value,sha:$('source-info').textContent,posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
+""")
+    assert result["selectedAfterImport"] == result["selectedAfterPoll"] == "9" * 32
+    assert result["sha"] == "SHA-256：" + "8" * 64
+    assert result["posts"] == ["/api/v1/uploads/sources?name=new.mp4"]
+
+
+@pytest.mark.parametrize("successor_state,label", [
+    ("draft", "本地草稿已就绪"),
+    ("canceled", "已取消"),
+    ("running", "执行中"),
+    ("submitted", "上游报告投稿完成"),
+    ("draft_saved", "上游报告草稿已保存"),
+])
+def test_retry_reports_returned_successor_state_and_focuses_it_without_confirming(successor_state, label):
+    result = run_upload_ui(r"""
+const original={id:'1'.repeat(32),platform:'tencent',account_name:'Synthetic',source_id:'c'.repeat(32),title:'Original',tags:[],mode:'draft',state:'canceled'};
+const successor={...original,id:'2'.repeat(32),state:""" + json.dumps(successor_state) + r"""};
+__test.jobs=[successor,original];await refresh();
+const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);return url.endsWith('/retry')?{ok:true,status:201,json:async()=>successor}:response;};
+const articleFor=id=>[...$('jobs').children].find(item=>__test.all(item).some(child=>child.tagName==='details'&&child.dataset.jobId===id));
+const retry=__test.all(articleFor(original.id)).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');await retry.dispatch('click');await __test.turn();
+const target=articleFor(successor.id);
+return {message:$('message').textContent,focused:!!target.focused,scrolled:!!target.scrolledIntoView,jobCount:__test.jobs.length,posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
+""")
+    assert label in result["message"]
+    assert "新本地草稿已创建" not in result["message"]
+    if successor_state != "draft":
+        assert "未创建新草稿" in result["message"]
+    assert result["focused"] and result["scrolled"]
+    assert result["jobCount"] == 2
+    assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + "/retry"]
