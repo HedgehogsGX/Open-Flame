@@ -5,6 +5,7 @@ import hmac
 import os
 import re
 import secrets
+import sqlite3
 import tempfile
 from pathlib import Path
 from threading import RLock
@@ -26,7 +27,8 @@ _OPERATION_FIELDS = ("id", "account_id", "action", "state", "code", "login_phase
 _JOB_FIELDS = (
     "id", "platform", "account_id", "account_name", "source_id", "title",
     "description", "tags", "category_id", "mode", "copyright", "source_credit",
-    "state", "code", "created_at", "updated_at",
+    "state", "code", "created_at", "updated_at", "retry_of", "source_name",
+    "source_size", "source_sha256",
 )
 
 
@@ -110,6 +112,22 @@ class _LazyUploads:
         if current is not None:
             current.stop()
 
+    def recover(self):
+        with self.lock:
+            if self.closed:
+                raise UploadError("uploader_stopped")
+            current = self.service
+        if current is None:
+            current = self.get()
+        else:
+            try:
+                current.start()
+            except UploadError:
+                raise
+            except Exception:
+                raise UploadError("scheduler_recovery_failed") from None
+        return current.status()
+
 
 def install_upload_routes(
     app: FastAPI,
@@ -155,6 +173,8 @@ def install_upload_routes(
             return await run_in_threadpool(work)
         except UploadError as exc:
             raise _safe_error(exc) from None
+        except sqlite3.Error:
+            raise HTTPException(status_code=503, detail="upload_database_unavailable") from None
 
     @app.get("/uploads", response_class=HTMLResponse, include_in_schema=False)
     def page():
@@ -169,6 +189,13 @@ def install_upload_routes(
     @router.get("/status")
     async def status():
         return await invoke("status")
+
+    @router.post("/recover")
+    async def recover():
+        try:
+            return await run_in_threadpool(manager.recover)
+        except UploadError as exc:
+            raise _safe_error(exc) from None
 
     @router.get("/accounts")
     async def accounts():
@@ -197,6 +224,17 @@ def install_upload_routes(
     @router.get("/sources")
     async def sources():
         return [_public(record, _SOURCE_FIELDS) for record in await invoke("sources")]
+
+    @router.get("/sources/page")
+    async def source_page(cursor: str | None = Query(default=None, max_length=64),
+                          limit: int = Query(default=50, ge=1, le=200)):
+        page = await invoke("source_page", cursor=cursor, limit=limit)
+        return {"items": [_public(record, _SOURCE_FIELDS) for record in page["items"]],
+                "next_cursor": page["next_cursor"]}
+
+    @router.get("/sources/{source_id}")
+    async def source(source_id: str):
+        return _public(await invoke("source", source_id), _SOURCE_FIELDS)
 
     @router.post("/sources", status_code=201)
     async def import_source(request: Request, name: str = Query(min_length=1, max_length=180)):
@@ -249,6 +287,22 @@ def install_upload_routes(
     @router.get("/jobs")
     async def jobs():
         return [_public(record, _JOB_FIELDS) for record in await invoke("jobs")]
+
+    @router.get("/jobs/page")
+    async def job_page(cursor: str | None = Query(default=None, max_length=64),
+                       limit: int = Query(default=50, ge=1, le=200)):
+        page = await invoke("job_page", cursor=cursor, limit=limit)
+        return {"items": [_public(record, _JOB_FIELDS) for record in page["items"]],
+                "next_cursor": page["next_cursor"]}
+
+    @router.get("/jobs/resolve")
+    async def resolve_jobs(ids: str = Query(min_length=32, max_length=2111)):
+        job_ids = ids.split(",")
+        return [_public(record, _JOB_FIELDS) for record in await invoke("jobs_by_ids", job_ids)]
+
+    @router.get("/jobs/{job_id}")
+    async def job(job_id: str):
+        return _public(await invoke("job", job_id), _JOB_FIELDS)
 
     @router.post("/jobs", status_code=201)
     async def create_jobs(payload: JobsRequest):

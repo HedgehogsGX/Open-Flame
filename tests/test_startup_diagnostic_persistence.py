@@ -282,7 +282,7 @@ def test_mismatched_code_and_site_is_rejected_by_runtime_record_contract(profile
     )
     assert not logger.emit(
         "local_app.failure_reported",
-        app_version="0.24.2",
+        app_version="0.24.3",
         diagnostic_code="local_app_failed",
         failure_site="port_reservation",
         log_status="not_started",
@@ -459,7 +459,7 @@ def test_setup_failure_has_fixed_context_guidance_and_one_private_record(
     assert not logger.emit("worker.cleanup_failed", failure_site=site)
     assert not logger.emit(
         "local_app.failure_reported",
-        app_version="0.24.2",
+        app_version="0.24.3",
         diagnostic_code="local_app_failed",
         failure_site=site,
         log_status="not_started",

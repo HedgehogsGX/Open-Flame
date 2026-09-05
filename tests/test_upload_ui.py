@@ -35,6 +35,9 @@ async function fetch(url,options={}){state.requests.push({url,method:options.met
  else if(options.method==='POST'&&url.endsWith('/cancel')){const op=state.operations.find(item=>url.includes(item.id));if(op)op.state='canceled';payload=op||{state:'canceled'};}
  else if(options.method==='POST')payload={state:'draft'};
  else if(url.endsWith('/qr')){if(state.qrHandler)return state.qrHandler();return {ok:true,status:200,headers:new Headers({'Content-Type':'image/png'}),blob:async()=>new Blob(['synthetic-png'],{type:'image/png'})};}
+ else if(url.includes('/jobs/resolve?')){const wanted=new URL(url,'http://127.0.0.1').searchParams.get('ids').split(',');payload=state.jobs.filter(item=>wanted.includes(item.id));}
+ else if(url.includes('/sources/page'))payload=state.sourcePageHandler?state.sourcePageHandler(url):{items:state.sources,next_cursor:null};else if(url.includes('/jobs/page'))payload=state.jobPageHandler?state.jobPageHandler(url):{items:state.jobs,next_cursor:null};
+ else if(/\/sources\/[0-9a-f]{32}$/.test(url))payload=state.sources.find(item=>url.endsWith(item.id));else if(/\/jobs\/[0-9a-f]{32}$/.test(url))payload=state.jobs.find(item=>url.endsWith(item.id));
  else if(url.endsWith('/accounts'))payload=state.accounts;else if(url.endsWith('/sources'))payload=state.sources;else if(url.endsWith('/jobs'))payload=state.jobs;else if(url.endsWith('/operations'))payload=state.operations;
  else throw new Error('Unexpected fetch '+url);return {ok:true,status:200,json:async()=>payload};}
 let timer=0;const timers=new Map(),windowListeners=new Map();state.timers=timers;
@@ -102,6 +105,45 @@ return {before,posts:__test.requests.filter(item=>item.method==='POST').map(item
 """)
     assert result["before"] == 0
     assert result["posts"] == ["/api/v1/uploads/jobs/" + "e" * 32 + "/confirm"]
+
+
+def test_scheduler_failure_is_visible_and_recovery_is_explicit():
+    result = run_upload_ui(r"""
+let uploadStatus={worker_running:false,scheduler_state:'faulted',scheduler_code:'scheduler_database_unavailable',backend:{ready:true},platforms:[{id:'bilibili',title_limit:80},{id:'tencent',title_limit:100}]};
+const defaultFetch=fetch;fetch=async(url,options={})=>{
+ if(url.endsWith('/status'))return {ok:true,status:200,json:async()=>uploadStatus};
+ if(options.method==='POST'&&url.endsWith('/recover')){uploadStatus={...uploadStatus,worker_running:true,scheduler_state:'running',scheduler_code:'scheduler_recovered'};__test.requests.push({url,method:'POST',body:options.body,headers:Object.fromEntries(options.headers.entries())});return {ok:true,status:200,json:async()=>uploadStatus};}
+ return defaultFetch(url,options);
+};
+await refresh();const before={text:$('engine-status').textContent,visible:!$('recover-scheduler').hidden};
+await $('recover-scheduler').dispatch('click');for(let i=0;i<4;i++)await __test.turn();
+return {before,after:$('engine-status').textContent,hidden:$('recover-scheduler').hidden,posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
+""")
+    assert "上传调度故障" in result["before"]["text"]
+    assert "数据库" in result["before"]["text"]
+    assert result["before"]["visible"] is True
+    assert "已恢复" in result["after"]
+    assert result["hidden"] is True
+    assert result["posts"] == ["/api/v1/uploads/recover"]
+
+
+def test_scheduler_failure_stays_visible_when_database_lists_are_unavailable():
+    result = run_upload_ui(r"""
+const accountsBefore=$('accounts').textContent;const defaultFetch=fetch;
+fetch=async(url,options={})=>{
+ if(url.endsWith('/status'))return {ok:true,status:200,json:async()=>({worker_running:false,scheduler_state:'faulted',scheduler_code:'scheduler_database_unavailable',backend:{ready:true},platforms:[]})};
+ if(options.method!=='POST'&&(url.endsWith('/accounts')||url.includes('/sources/page')||url.includes('/jobs/page')||url.endsWith('/operations')))return {ok:false,status:503,json:async()=>({detail:'upload_database_unavailable'})};
+ return defaultFetch(url,options);
+};
+try{await refresh();}catch{}
+return {engine:$('engine-status').textContent,recoverVisible:!$('recover-scheduler').hidden,recordsVisible:!$('records-status').hidden,records:$('records-status').textContent,accountsKept:$('accounts').textContent===accountsBefore,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert "上传调度故障" in result["engine"] and "数据库" in result["engine"]
+    assert result["recoverVisible"] is True
+    assert result["recordsVisible"] is True
+    assert "上次成功读取" in result["records"]
+    assert result["accountsKept"] is True
+    assert result["posts"] == 0
 
 
 def test_add_account_starts_inline_login_in_one_action_with_optional_name():
@@ -269,10 +311,70 @@ return {initial,afterPoll,shaAfterPoll,afterRefresh:$('source-id').value,posts:_
     assert result["message"] == "请先导入并选择视频。"
 
 
+def test_history_pagination_preserves_active_job_details_and_empty_source_choice():
+    result = run_upload_ui(r"""
+const active={id:'1'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'8'.repeat(32),title:'Active',tags:[],mode:'publish',state:'running'};
+const history={...active,id:'2'.repeat(32),source_id:'7'.repeat(32),source_name:'old.mp4',title:'History',state:'submitted'};
+const currentSource={id:'8'.repeat(32),name:'current.mp4',size:8,sha256:'8'.repeat(64)};
+const oldSource={id:'7'.repeat(32),name:'old.mp4',size:7,sha256:'7'.repeat(64)};
+__test.sourcePageHandler=url=>url.includes('cursor=')?{items:[oldSource],next_cursor:null}:{items:[currentSource],next_cursor:'1:2'};
+__test.jobPageHandler=url=>url.includes('cursor=')?{items:[history],next_cursor:null}:{items:[active],next_cursor:'2:2'};
+await refresh();$('source-id').value='';showSource();
+let activeDetails=__test.all($('jobs')).find(item=>item.tagName==='details'&&item.dataset.jobId===active.id);activeDetails.open=false;
+await $('more-jobs').dispatch('click');for(let i=0;i<3;i++)await __test.turn();
+const historyBeforeSourcePage=[...$('jobs').children].find(item=>item.dataset.jobId===history.id).textContent;
+await $('more-sources').dispatch('click');for(let i=0;i<3;i++)await __test.turn();
+await poll();
+activeDetails=__test.all($('jobs')).find(item=>item.tagName==='details'&&item.dataset.jobId===active.id);
+return {sourceValue:$('source-id').value,sourceNames:__test.all($('source-id')).filter(item=>item.tagName==='option').map(item=>item.textContent),historyBeforeSourcePage,jobTitles:[...$('jobs').children].map(item=>item.textContent),activeOpen:activeDetails.open,moreSourcesHidden:$('more-sources').hidden,moreJobsHidden:$('more-jobs').hidden,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert result["sourceValue"] == ""
+    assert any("old.mp4" in value for value in result["sourceNames"])
+    assert "old.mp4" in result["historyBeforeSourcePage"]
+    assert any("History" in value for value in result["jobTitles"])
+    assert result["activeOpen"] is False
+    assert result["moreSourcesHidden"] is True
+    assert result["moreJobsHidden"] is True
+    assert result["posts"] == 0
+
+
+def test_poll_resolves_running_job_after_it_moves_out_of_the_first_page():
+    result = run_upload_ui(r"""
+const running={id:'1'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'c'.repeat(32),source_name:'synthetic.mp4',title:'Tracked',tags:[],mode:'publish',state:'running',code:''};
+const replacement={...running,id:'2'.repeat(32),title:'Recent draft',state:'draft'};let completed=null;__test.jobs=[running];
+__test.jobPageHandler=()=>({items:completed?[replacement]:[running],next_cursor:'2:2'});await refresh();
+completed={...running,state:'submitted',code:'upstream_submitted'};__test.jobs=[completed];await poll();
+const target=[...$('jobs').children].find(item=>item.dataset.jobId===running.id);
+return {found:!!target,text:target?.textContent||'',resolveRequests:__test.requests.filter(item=>item.url.includes('/jobs/resolve?')).length,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert result["found"]
+    assert "上游报告投稿完成" in result["text"]
+    assert "执行中" not in result["text"]
+    assert result["resolveRequests"] == 1
+    assert result["posts"] == 0
+
+
+def test_cancel_response_keeps_old_draft_visible_when_it_leaves_the_first_page():
+    result = run_upload_ui(r"""
+const original={id:'1'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'c'.repeat(32),source_name:'synthetic.mp4',title:'Old draft',tags:[],mode:'publish',state:'draft',code:''};
+const replacement={...original,id:'2'.repeat(32),title:'Recent draft'};__test.jobs=[original];
+__test.jobPageHandler=()=>({items:original.state==='draft'?[original]:[replacement],next_cursor:'2:2'});await refresh();
+const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);if(options.method==='POST'&&url.endsWith('/cancel')){original.state='canceled';original.code='canceled';return {ok:true,status:200,json:async()=>original};}return response;};
+const article=[...$('jobs').children].find(item=>item.dataset.jobId===original.id);const cancel=__test.all(article).find(item=>item.tagName==='button'&&item.textContent==='取消');await cancel.dispatch('click');for(let i=0;i<4;i++)await __test.turn();
+const target=[...$('jobs').children].find(item=>item.dataset.jobId===original.id);
+return {found:!!target,text:target?.textContent||'',posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
+""")
+    assert result["found"]
+    assert "已取消" in result["text"]
+    assert "确认立即上传投稿" not in result["text"]
+    assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + "/cancel"]
+
+
 def test_importing_source_explicitly_selects_it_after_previous_selection_was_cleared():
     result = run_upload_ui(r"""
 $('source-id').value='';showSource();await poll();
 const imported={id:'9'.repeat(32),name:'new.mp4',size:13,sha256:'8'.repeat(64)};
+const unchangedFirstPage=[...__test.sources];__test.sourcePageHandler=()=>({items:unchangedFirstPage,next_cursor:'2:1'});
 const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);if(options.method==='POST'&&url.startsWith('/api/v1/uploads/sources?')){__test.sources.unshift(imported);return {ok:true,status:201,json:async()=>imported};}return response;};
 const file=new Blob(['synthetic-mp4'],{type:'video/mp4'});file.name='new.mp4';$('source-file').files=[file];
 await $('source-form').dispatch('submit');for(let i=0;i<6;i++)await __test.turn();
@@ -308,4 +410,23 @@ return {message:$('message').textContent,focused:!!target.focused,scrolled:!!tar
         assert "未创建新草稿" in result["message"]
     assert result["focused"] and result["scrolled"]
     assert result["jobCount"] == 2
+    assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + "/retry"]
+
+
+def test_retry_fetches_and_focuses_successor_and_its_source_outside_loaded_history():
+    result = run_upload_ui(r"""
+const original={id:'1'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'c'.repeat(32),title:'Original',tags:[],mode:'publish',state:'canceled'};
+const successor={...original,id:'2'.repeat(32),source_id:'7'.repeat(32),title:'Older successor',state:'draft',retry_of:original.id};
+const oldSource={id:'7'.repeat(32),name:'older-source.mp4',size:77,sha256:'7'.repeat(64)};
+__test.jobs=[successor];__test.sources=[oldSource];
+__test.jobPageHandler=()=>({items:[original],next_cursor:null});__test.sourcePageHandler=()=>({items:[],next_cursor:null});await refresh();
+const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);return options.method==='POST'&&url.endsWith('/retry')?{ok:true,status:201,json:async()=>successor}:response;};
+const article=[...$('jobs').children].find(item=>item.dataset.jobId===original.id);const retry=__test.all(article).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');await retry.dispatch('click');for(let i=0;i<5;i++)await __test.turn();
+const target=[...$('jobs').children].find(item=>item.dataset.jobId===successor.id);const focused=!!target?.focused,scrolled=!!target?.scrolledIntoView;await poll();const afterPoll=[...$('jobs').children].find(item=>item.dataset.jobId===successor.id);
+return {found:!!target,focused,scrolled,persisted:!!afterPoll,text:afterPoll?.textContent||'',gets:__test.requests.filter(item=>item.method==='GET'&&(item.url.includes('/jobs/')||item.url.includes('/sources/'))).map(item=>item.url),posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
+""")
+    assert result["found"] and result["focused"] and result["scrolled"] and result["persisted"]
+    assert "older-source.mp4" in result["text"]
+    assert "/api/v1/uploads/jobs/" + "2" * 32 in result["gets"]
+    assert "/api/v1/uploads/sources/" + "7" * 32 in result["gets"]
     assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + "/retry"]

@@ -5,6 +5,7 @@
 .gitattributes
 .gitignore
 .python-version
+AGENTS.md
 HANDOFF.md
 LICENSE
 NOTICE
@@ -28,6 +29,8 @@ deployment/requirements.build.lock
 deployment/requirements.runtime.lock
 deployment/run-linux-acceptance.sh
 deployment/validate_tool_bundle.py
+docs/DESIGN_SYSTEM.md
+docs/FOLLOW_UP_EXECUTION_PLAN.md
 docs/OPEN_SOURCE_DOWNLOADER_REVIEW.md
 docs/OPEN_SOURCE_UPLOADER_REVIEW.md
 docs/RELEASE.md
@@ -38,6 +41,7 @@ docs/UPLOAD_RUNTIME.md
 docs/WINDOWS_LAUNCHER.md
 docs/WINDOWS_SETUP.md
 docs/adr/0001-x-attachment-discovery.md
+docs/design-preview.html
 licenses/python/annotated_doc-0.0.5/LICENSE
 licenses/python/annotated_types-0.8.0/LICENSE
 licenses/python/anyio-4.14.2/LICENSE
@@ -140,6 +144,7 @@ src/video_download_control/uploads/contracts.py
 src/video_download_control/uploads/login_progress.py
 src/video_download_control/uploads/runtime-lock.json
 src/video_download_control/uploads/runtime_setup.py
+src/video_download_control/uploads/schema.py
 src/video_download_control/uploads/service.py
 src/video_download_control/uploads/setup_gate.py
 src/video_download_control/uploads/web.py
@@ -153,6 +158,7 @@ src/video_download_control/worker.py
 src/video_download_control/worker_cli.py
 src/video_download_control/worker_pool.py
 src/video_download_control/worker_repository.py
+src/video_download_control/worker_runtime_status.py
 start_open_flame.py
 tests/conftest.py
 tests/test_adapter_contract.py
@@ -185,6 +191,7 @@ tests/test_cookie_source_config.py
 tests/test_credential_defaults.py
 tests/test_credential_flow.py
 tests/test_credentials.py
+tests/test_current_operations_docs.py
 tests/test_default_credentials_api.py
 tests/test_default_credentials_ui.py
 tests/test_default_credentials_worker_e2e.py
@@ -246,6 +253,7 @@ tests/test_unix_relay.py
 tests/test_upload_api.py
 tests/test_upload_backend.py
 tests/test_upload_login.py
+tests/test_upload_runtime_integrity.py
 tests/test_upload_service.py
 tests/test_upload_ui.py
 tests/test_validation.py
@@ -257,6 +265,8 @@ tests/test_worker_multi_asset.py
 tests/test_worker_platform_routes.py
 tests/test_worker_pool.py
 tests/test_worker_repository.py
+tests/test_worker_runtime_status.py
+tests/test_worker_runtime_ui.py
 tests/test_worker_stop.py
 tests/test_yt_dlp_adapter.py
 tests/test_yt_dlp_bundle_progress_contract.py
@@ -265,6 +275,7 @@ tests/test_yt_dlp_contract.py
 uv.lock
 validation/README.md
 validation/backup-restore-drill-iteration-0.5.md
+validation/full-debug-20260905.md
 validation/iteration-0.10.0-instagram-live-evidence.md
 validation/iteration-0.10.0-multiplatform-routing-evidence.md
 validation/iteration-0.11.0-schema9-bilibili-evidence.md
@@ -284,6 +295,8 @@ validation/iteration-0.23.0-source-setup-evidence.md
 validation/iteration-0.24.0-upload-evidence.md
 validation/iteration-0.24.1-qr-login-evidence.md
 validation/iteration-0.24.2-integration-evidence.md
+validation/iteration-0.24.3-debug-fixes.md
+validation/iteration-0.24.3-final-review.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

@@ -80,8 +80,8 @@ def test_unconfigured_toolchain_is_visible_without_changing_worker_health(
         "network_download_enabled": False,
         "local_direct_worker_available": False,
         "security_note": (
-            "本机工具链 ready 只表示固定工具通过离线检查；本机直连 Worker 需要"
-            "单独显式启动，控制面不推断其进程在线状态；隔离运行环境与平台级能力"
+            "本机工具链 ready 只表示固定工具通过离线检查；本机托管 Worker 的"
+            "运行状态另由应用心跳报告，外部 Worker 状态保持未知；隔离运行环境与平台级能力"
             "仍未验证。redistribution_status 只描述本机第三方工具包，不描述项目源码"
             "的 Apache-2.0 许可状态。"
         ),
@@ -119,7 +119,8 @@ def test_ready_local_tools_never_claim_an_isolated_or_verified_worker(
     assert payload["local_direct_worker_available"] is (os.name == "nt")
     assert payload["yt_dlp_version"] == "2026.08.19"
     assert str(tool_root) not in response.text
-    assert "本机直连 Worker 需要单独显式启动" in payload["security_note"]
+    assert "运行状态另由应用心跳报告" in payload["security_note"]
+    assert "外部 Worker 状态保持未知" in payload["security_note"]
     assert "只描述本机第三方工具包" in payload["security_note"]
 
 

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
 import shutil
 import stat
 import tempfile
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from secrets import token_hex
 from time import perf_counter
 from typing import BinaryIO, Iterator
 from uuid import UUID, uuid4
@@ -18,9 +21,11 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    Response,
     StreamingResponse,
 )
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
 from starlette.types import Receive, Scope, Send
 
 from . import __version__
@@ -77,6 +82,7 @@ from .schemas import (
     QueueControlResponse,
     RuntimeLogsResponse,
     ToolchainStatusResponse,
+    WorkerRuntimeStatusResponse,
 )
 from .service import BatchService, BatchValidationError, ShortLinkResolver
 from .short_link_transport import (
@@ -88,6 +94,7 @@ from .short_links import ControlledShortLinkResolver
 from .toolchain import inspect_toolchain
 from .uploads.api import install_upload_routes
 from .web import INDEX_HTML
+from .worker_runtime_status import ManagedWorkerRuntimeStatus, unknown_runtime_status
 from .worker_repository import (
     CircuitResetConflict,
     InvalidTransition,
@@ -154,8 +161,8 @@ _JOB_RESPONSE_FIELDS = (
 )
 
 _TOOLCHAIN_SECURITY_NOTE = (
-    "本机工具链 ready 只表示固定工具通过离线检查；本机直连 Worker 需要"
-    "单独显式启动，控制面不推断其进程在线状态；隔离运行环境与平台级能力"
+    "本机工具链 ready 只表示固定工具通过离线检查；本机托管 Worker 的"
+    "运行状态另由应用心跳报告，外部 Worker 状态保持未知；隔离运行环境与平台级能力"
     "仍未验证。redistribution_status 只描述本机第三方工具包，不描述项目源码"
     "的 Apache-2.0 许可状态。"
 )
@@ -164,8 +171,24 @@ _TOOLCHAIN_LOG_VERSION_FIELDS = (
     "ffmpeg_version",
     "ffprobe_version",
 )
-_AUXILIARY_STREAM_CHUNK_BYTES = 64 * 1024
+_VERIFIED_STREAM_CHUNK_BYTES = 64 * 1024
 _AUXILIARY_SPOOL_MEMORY_BYTES = 1024 * 1024
+_ORIGINAL_SPOOL_MEMORY_BYTES = 1024 * 1024
+_CLIENT_CLOSED_REQUEST_STATUS = 499
+
+
+class _OriginalSnapshotCancelled(Exception):
+    """Internal cooperative stop between bounded source/spool operations."""
+
+
+def _raise_if_snapshot_cancelled(cancellation: threading.Event | None) -> None:
+    if cancellation is not None and cancellation.is_set():
+        raise _OriginalSnapshotCancelled
+
+
+def _close_binary_handle(handle: BinaryIO) -> None:
+    with suppress(Exception):
+        handle.close()
 
 
 def _toolchain_log_fields(payload: dict[str, object]) -> dict[str, object]:
@@ -305,6 +328,346 @@ def _registered_original_file(
     return resolved, final_info
 
 
+def _verified_original_payload(
+    path: Path,
+    *,
+    expected_info: os.stat_result,
+    expected_sha256: object,
+    cancellation: threading.Event | None = None,
+) -> BinaryIO:
+    """Copy one verified original into a stable, bounded-memory response spool."""
+
+    if (
+        not isinstance(expected_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        raise ValueError("registered original hash is invalid")
+    _raise_if_snapshot_cancelled(cancellation)
+    spool: BinaryIO = tempfile.SpooledTemporaryFile(
+        max_size=_ORIGINAL_SPOOL_MEMORY_BYTES,
+        mode="w+b",
+    )
+    try:
+        digest = hashlib.sha256()
+        total_bytes = 0
+        with path.open("rb") as handle:
+            _raise_if_snapshot_cancelled(cancellation)
+            opened_info = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened_info.st_mode)
+                or opened_info.st_nlink != 1
+                or opened_info.st_dev != expected_info.st_dev
+                or opened_info.st_ino != expected_info.st_ino
+                or opened_info.st_size != expected_info.st_size
+            ):
+                raise ValueError("registered original changed before reading")
+            while True:
+                _raise_if_snapshot_cancelled(cancellation)
+                chunk = handle.read(_VERIFIED_STREAM_CHUNK_BYTES)
+                _raise_if_snapshot_cancelled(cancellation)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > expected_info.st_size:
+                    raise ValueError("registered original content is invalid")
+                digest.update(chunk)
+                spool.write(chunk)
+                _raise_if_snapshot_cancelled(cancellation)
+            final_opened_info = os.fstat(handle.fileno())
+        if (
+            total_bytes != expected_info.st_size
+            or final_opened_info.st_dev != opened_info.st_dev
+            or final_opened_info.st_ino != opened_info.st_ino
+            or final_opened_info.st_size != opened_info.st_size
+            or final_opened_info.st_mtime_ns != opened_info.st_mtime_ns
+            or final_opened_info.st_ctime_ns != opened_info.st_ctime_ns
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise ValueError("registered original content is invalid")
+        _raise_if_snapshot_cancelled(cancellation)
+        spool.flush()
+        spool.seek(0)
+        _raise_if_snapshot_cancelled(cancellation)
+        return spool
+    except BaseException:
+        _close_binary_handle(spool)
+        raise
+
+
+class _VerifiedOriginalFileResponse(FileResponse):
+    """Serve a verified spool without reopening the registered filesystem path."""
+
+    def __init__(
+        self,
+        handle: BinaryIO,
+        *,
+        file_info: os.stat_result,
+        filename: str,
+        expected_sha256: str,
+    ) -> None:
+        self._verified_handle = handle
+        self._size_bytes = int(file_info.st_size)
+        try:
+            super().__init__(
+                "<verified-original>",
+                media_type="application/octet-stream",
+                filename=filename,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "ETag": f'"{expected_sha256}"',
+                },
+                stat_result=file_info,
+            )
+        except BaseException:
+            handle.close()
+            raise
+
+    async def _send_span(
+        self,
+        send: Send,
+        start: int,
+        end: int,
+        *,
+        more_after: bool,
+    ) -> None:
+        await run_in_threadpool(self._verified_handle.seek, start)
+        position = start
+        if position == end:
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": more_after,
+                }
+            )
+            return
+        while position < end:
+            chunk = await run_in_threadpool(
+                self._verified_handle.read,
+                min(self.chunk_size, end - position),
+            )
+            if not chunk:
+                raise RuntimeError("verified original spool ended unexpectedly")
+            position += len(chunk)
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": position < end or more_after,
+                }
+            )
+
+    async def _handle_simple(
+        self,
+        send: Send,
+        send_header_only: bool,
+        _send_pathsend: bool,
+    ) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": self.status_code,
+                "headers": self.raw_headers,
+            }
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b""})
+            return
+        await self._send_span(
+            send,
+            0,
+            self._size_bytes,
+            more_after=False,
+        )
+
+    async def _handle_single_range(
+        self,
+        send: Send,
+        start: int,
+        end: int,
+        file_size: int,
+        send_header_only: bool,
+    ) -> None:
+        headers = MutableHeaders(raw=list(self.raw_headers))
+        headers["content-range"] = f"bytes {start}-{end - 1}/{file_size}"
+        headers["content-length"] = str(end - start)
+        await send(
+            {"type": "http.response.start", "status": 206, "headers": headers.raw}
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b""})
+            return
+        await self._send_span(send, start, end, more_after=False)
+
+    async def _handle_multiple_ranges(
+        self,
+        send: Send,
+        ranges: list[tuple[int, int]],
+        file_size: int,
+        send_header_only: bool,
+    ) -> None:
+        boundary = token_hex(13)
+        content_length, header_generator = self.generate_multipart(
+            ranges,
+            boundary,
+            file_size,
+            self.headers["content-type"],
+        )
+        headers = MutableHeaders(raw=list(self.raw_headers))
+        headers["content-type"] = f"multipart/byteranges; boundary={boundary}"
+        headers["content-length"] = str(content_length)
+        await send(
+            {"type": "http.response.start", "status": 206, "headers": headers.raw}
+        )
+        if send_header_only:
+            await send({"type": "http.response.body", "body": b""})
+            return
+        for start, end in ranges:
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": header_generator(start, end),
+                    "more_body": True,
+                }
+            )
+            await self._send_span(send, start, end, more_after=True)
+            await send(
+                {"type": "http.response.body", "body": b"\r\n", "more_body": True}
+            )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": f"--{boundary}--".encode("latin-1"),
+                "more_body": False,
+            }
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            _close_binary_handle(self._verified_handle)
+
+
+async def _wait_for_http_disconnect(receive: Receive) -> None:
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return
+
+
+async def _cancel_and_join(task: asyncio.Task) -> None:
+    if not task.done():
+        task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await task
+
+
+async def _close_unclaimed_snapshot(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    try:
+        if task.done():
+            orphan = task.result()
+        else:
+            orphan = await asyncio.shield(task)
+    except (asyncio.CancelledError, Exception):
+        return
+    _close_binary_handle(orphan)
+
+
+class _VerifiedOriginalSnapshotResponse(Response):
+    """Verify to a stable spool while cooperatively observing disconnects."""
+
+    media_type = "application/octet-stream"
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        file_info: os.stat_result,
+        filename: str,
+        expected_sha256: str,
+    ) -> None:
+        super().__init__(content=None, media_type=self.media_type)
+        self._source_path = path
+        self._file_info = file_info
+        self._filename = filename
+        self._expected_sha256 = expected_sha256
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        cancellation = threading.Event()
+        snapshot_task = asyncio.create_task(
+            run_in_threadpool(
+                _verified_original_payload,
+                self._source_path,
+                expected_info=self._file_info,
+                expected_sha256=self._expected_sha256,
+                cancellation=cancellation,
+            )
+        )
+        disconnect_task = asyncio.create_task(_wait_for_http_disconnect(receive))
+        send_task: asyncio.Task | None = None
+        payload: BinaryIO | None = None
+        snapshot_claimed = False
+        try:
+            done, _ = await asyncio.wait(
+                {snapshot_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if disconnect_task in done:
+                cancellation.set()
+                try:
+                    payload = await snapshot_task
+                    snapshot_claimed = True
+                except (_OriginalSnapshotCancelled, OSError, ValueError):
+                    snapshot_claimed = True
+                await Response(status_code=_CLIENT_CLOSED_REQUEST_STATUS)(
+                    scope,
+                    receive,
+                    send,
+                )
+                return
+            try:
+                payload = await snapshot_task
+                snapshot_claimed = True
+            except (_OriginalSnapshotCancelled, OSError, ValueError):
+                snapshot_claimed = True
+                await _cancel_and_join(disconnect_task)
+                await JSONResponse(
+                    status_code=409,
+                    content={"detail": "成品文件不可用"},
+                )(scope, receive, send)
+                return
+
+            response = _VerifiedOriginalFileResponse(
+                payload,
+                file_info=self._file_info,
+                filename=self._filename,
+                expected_sha256=self._expected_sha256,
+            )
+            payload = None
+            send_task = asyncio.create_task(response(scope, receive, send))
+            done, _ = await asyncio.wait(
+                {send_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if send_task in done:
+                await send_task
+            else:
+                await _cancel_and_join(send_task)
+        finally:
+            cancellation.set()
+            if send_task is not None and not send_task.done():
+                await _cancel_and_join(send_task)
+            await _cancel_and_join(disconnect_task)
+            if not snapshot_claimed:
+                await _close_unclaimed_snapshot(snapshot_task)
+            if payload is not None:
+                _close_binary_handle(payload)
+
+
 def _registered_auxiliary_payload(
     data_root: Path,
     *,
@@ -428,7 +791,7 @@ def _registered_auxiliary_payload(
                 or opened_info.st_size != final_info.st_size
             ):
                 raise ValueError("registered artifact changed before reading")
-            while chunk := handle.read(_AUXILIARY_STREAM_CHUNK_BYTES):
+            while chunk := handle.read(_VERIFIED_STREAM_CHUNK_BYTES):
                 total_bytes += len(chunk)
                 if total_bytes > DEFAULT_MAX_AUXILIARY_FILE_BYTES:
                     raise ValueError("registered artifact content is invalid")
@@ -454,7 +817,7 @@ def _stream_auxiliary_payload(handle: BinaryIO) -> Iterator[bytes]:
     """Stream verified bytes and always release a rolled temporary file."""
 
     try:
-        while chunk := handle.read(_AUXILIARY_STREAM_CHUNK_BYTES):
+        while chunk := handle.read(_VERIFIED_STREAM_CHUNK_BYTES):
             yield chunk
     finally:
         handle.close()
@@ -533,6 +896,7 @@ def create_app(
     short_link_resolver: ShortLinkResolver | None = None,
     runtime_logger: RuntimeLogger | None = None,
     credential_defaults: CredentialDefaults | None = None,
+    managed_worker_status: ManagedWorkerRuntimeStatus | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
     resolved_settings.validate_startup_security()
@@ -610,6 +974,7 @@ def create_app(
     )
     worker_repository = WorkerRepository(database)
     capability_repository = CapabilityEvidenceRepository(database)
+    managed_product_identity = current_product_identity() if managed_worker_status is not None else None
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -653,7 +1018,7 @@ def create_app(
         except ValueError:
             raise HTTPException(status_code=404, detail="asset_not_found") from None
         registered = service.get_ready_original_asset(canonical_id)
-        if registered is None:
+        if registered is None or registered.get("media_kind") != "video":
             raise HTTPException(status_code=404, detail="asset_not_found")
         try:
             path, _ = _registered_original_file(
@@ -787,6 +1152,20 @@ def create_app(
     def health() -> HealthResponse:
         payload, _ = health_payload()
         return payload
+
+    @app.get("/api/v1/operations/runtime", response_model=WorkerRuntimeStatusResponse)
+    def worker_runtime_status() -> WorkerRuntimeStatusResponse:
+        if managed_worker_status is None or managed_product_identity is None:
+            return unknown_runtime_status()
+        try:
+            queue = worker_repository.get_queue_control()
+        except Exception:
+            return unknown_runtime_status(detail_code="queue_state_unavailable")
+        return managed_worker_status.snapshot(
+            expected_run_id=active_logger.run_id,
+            expected_product_identity=managed_product_identity,
+            queue_paused=bool(queue["paused"]),
+        )
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:
@@ -936,7 +1315,7 @@ def create_app(
         "/api/v1/assets/{asset_id}/download",
         response_class=FileResponse,
     )
-    def download_asset(asset_id: str) -> FileResponse:
+    def download_asset(asset_id: str) -> Response:
         try:
             canonical_id = _canonical_asset_id(asset_id)
         except ValueError:
@@ -956,15 +1335,11 @@ def create_app(
         suffix = path.suffix.lower()
         if not suffix.startswith(".") or not suffix[1:].isalnum() or len(suffix) > 12:
             suffix = ""
-        return FileResponse(
+        return _VerifiedOriginalSnapshotResponse(
             path,
-            media_type="application/octet-stream",
+            file_info=file_info,
             filename=f"asset-{canonical_id}{suffix}",
-            headers={
-                "Cache-Control": "private, no-store",
-                "X-Content-Type-Options": "nosniff",
-            },
-            stat_result=file_info,
+            expected_sha256=registered["sha256"],
         )
 
     @app.get("/api/v1/artifacts/{artifact_id}/download")

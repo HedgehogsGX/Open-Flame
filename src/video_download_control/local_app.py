@@ -70,6 +70,7 @@ from .runtime_logging import (
 from .windows_job import WindowsJobError, WindowsKillOnCloseJob
 from .worker_repository import WorkerRepository
 from .worker_pool import run_concurrent_worker
+from .worker_runtime_status import ManagedWorkerRuntimeStatus
 
 
 _PROTOCOL_VERSION = 1
@@ -1024,6 +1025,7 @@ def _control_child_main(
     command_connection: Connection,
     run_id: str,
     expected_identity: str,
+    managed_worker_status: ManagedWorkerRuntimeStatus | None = None,
 ) -> None:
     runtime_logger: RuntimeLogger | None = None
     phase = "control_ready"
@@ -1063,9 +1065,11 @@ def _control_child_main(
             )
             app = create_app(
                 settings, runtime_logger=runtime_logger, credential_defaults=defaults,
+                managed_worker_status=managed_worker_status,
             )
         else:
-            app = create_app(settings, runtime_logger=runtime_logger)
+            app = create_app(settings, runtime_logger=runtime_logger,
+                             managed_worker_status=managed_worker_status)
         if runtime_logger.status()["status"] != "ok":
             raise RuntimeError("local control runtime log is unavailable")
         uvicorn_config = uvicorn.Config(
@@ -1682,7 +1686,10 @@ def _run_local_app_with_listener(
         failure: LocalAppError | None = None
         stop_reason = "normal"
         forced = False
+        managed_worker_status: ManagedWorkerRuntimeStatus | None = None
         try:
+            managed_worker_status = ManagedWorkerRuntimeStatus(run_id=run_id, product_identity=product_identity)
+            managed_worker_status.publish('check_only' if config.check_only else 'starting')
             startup_deadline = time.monotonic() + config.startup_timeout_seconds
             control = context.Process(
                 target=_control_child_main,
@@ -1694,6 +1701,7 @@ def _run_local_app_with_listener(
                     control_command_receive,
                     run_id,
                     product_identity,
+                    managed_worker_status,
                 ),
             )
             worker = context.Process(
@@ -1847,6 +1855,7 @@ def _run_local_app_with_listener(
                     child_role="worker",
                     app_phase="worker_ready",
                 )
+                managed_worker_status.publish('online', worker_pid=worker.pid)
                 _verify_control(
                     config.port,
                     product_identity,
@@ -1876,6 +1885,7 @@ def _run_local_app_with_listener(
                     flush=True,
                 )
                 while control.is_alive() and worker.is_alive():
+                    managed_worker_status.publish('online', worker_pid=worker.pid)
                     time.sleep(0.2)
                 failed_child = control if not control.is_alive() else worker
                 failed_role = "control" if failed_child is control else "worker"
@@ -1910,6 +1920,8 @@ def _run_local_app_with_listener(
                 reason="startup_failed",
             )
         finally:
+            if managed_worker_status is not None:
+                managed_worker_status.publish('stopping', worker_pid=worker.pid if worker is not None else None)
             try:
                 forced = _cleanup_children(
                     worker=worker,
@@ -1942,6 +1954,8 @@ def _run_local_app_with_listener(
                         pass
                 listener.close()
                 job.close()
+                if managed_worker_status is not None:
+                    managed_worker_status.publish('stopped')
             if forced:
                 if stop_reason == "normal":
                     stop_reason = "forced_shutdown"

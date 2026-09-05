@@ -449,13 +449,14 @@ class BatchRepository:
         return records
 
     def get_ready_original_asset(self, asset_id: str) -> dict[str, Any] | None:
-        """Resolve one DB-registered original for the read-only download API."""
+        """Resolve one ready original with its registered media classification."""
 
         with self.database.connect() as connection:
             row = connection.execute(
                 """
                 SELECT
                     asset.id AS asset_id,
+                    asset.media_kind,
                     asset.size_bytes,
                     asset.sha256,
                     original.path AS original_path,

@@ -6,17 +6,21 @@
 
 ## 快速开始：先检查本地控件
 
-**获取本次测试源码：** 使用 `codex/uploader-first-platforms` 分支。任选一种方式取得完整源码：
+**获取固定测试源码：** 优先使用维护者本次交付的受控源码 ZIP、对应 `release-manifest.json` 和 `SHA256SUMS`。先核对 ZIP 的 SHA-256，再解压完整目录，在含 `Setup-Open-Flame.cmd` 的根目录继续。报告同时记录 `source_commit`（完整 40 位 Git SHA）、`source_archive_sha256` 与应用实际返回的完整 `product_identity`。未提交的本地候选包须另外注明 `working_tree_dirty=true` 和基线提交，不能把基线提交说成修复提交。
 
-- **浏览器下载：** 打开 [GitHub 测试分支](https://github.com/HedgehogsGX/Open-Flame/tree/codex/uploader-first-platforms)，选择 `Code → Download ZIP`，或使用 [测试分支源码 ZIP](https://github.com/HedgehogsGX/Open-Flame/archive/refs/heads/codex/uploader-first-platforms.zip)。解压完整目录，在含 `Setup-Open-Flame.cmd` 的源码根目录继续。
-- **Git 克隆：** 在准备存放测试源码的位置执行下列命令；`Open-Flame-upload-test` 应是尚不存在的新目录。
+[GitHub 测试分支](https://github.com/HedgehogsGX/Open-Flame/tree/codex/uploader-first-platforms) 用于浏览进展；分支随推送移动，不作为唯一验收身份。没有受控 ZIP 时，向维护者取得本轮**完整修复提交**，按以下步骤检出；`Open-Flame-upload-test` 应是尚不存在的新目录。GitHub 自动生成的源码 ZIP 与项目受控 ZIP 也须分别记录，不能套用另一份 ZIP 的 hash。
 
 ```powershell
-git clone -b codex/uploader-first-platforms --single-branch https://github.com/HedgehogsGX/Open-Flame.git Open-Flame-upload-test
+$uploadTestCommit = '<维护者提供的完整 40 位修复提交>'
+if ($uploadTestCommit -notmatch '^[0-9a-f]{40}$') { throw '请先填写完整测试提交' }
+git clone https://github.com/HedgehogsGX/Open-Flame.git Open-Flame-upload-test
 Set-Location .\Open-Flame-upload-test
+git checkout --detach $uploadTestCommit
+git rev-parse HEAD
+git status --porcelain
 ```
 
-本次交付入口是测试分支源码；获取后仍需完成以下安装与构建身份核对。不要沿用此前本地测试 ZIP 的构建身份，本轮交互修复改变了源码构建散列。
+最后一条命令在未改源码时应无输出。ZIP 交付用 `Get-FileHash -Algorithm SHA256 -LiteralPath '<实际源码 ZIP 路径>'` 核对；Git 检出没有 ZIP 时，`source_archive_sha256` 填 `N/A (Git checkout)`。获取后仍需完成安装与运行中身份核对；不要沿用此前测试包的构建散列。维护者尚未提供修复提交时，可以验收有明确 hash 的本地候选包，但不能报告为远端固定提交已验收。
 
 1. **启动并记录构建。** 按第 2 节完成安装，打开 `/uploads`，点击“刷新状态”，执行该节命令记录版本、构建身份和运行环境结果。
 2. **检查两种导入入口。** 本地短片：选择文件后点击“导入视频”。下载成品：点击“用于上传”打开上传页，再点击“导入此下载成品”。核对文件名、大小和 SHA-256；这一步不向平台传视频。
@@ -144,6 +148,9 @@ Windows 版本 / x64：
 页面浏览器及版本：
 Open-Flame version（命令读取）：
 product_identity（完整命令输出）：
+source_commit（完整 40 位；未提交包则填基线并注明）：
+working_tree_dirty（true / false / unknown）：
+source_archive_sha256（完整 64 位；Git 检出填 N/A）：
 交付来源/文件名（不含个人路径）：
 上传运行环境检查：ready= / code=
 应用启动方式、端口；默认或自定义数据根（不用提交完整个人路径）：

@@ -225,6 +225,20 @@ class RuntimeLogsResponse(BaseModel):
     events: list[dict[str, str | int | float | bool | None]]
 
 
+class WorkerRuntimeStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["managed_direct", "external_unknown"]
+    state: Literal["starting", "online", "paused", "stopping", "stopped", "check_only", "stale", "unknown"]
+    run_id: str | None = None
+    worker_pid: int | None = None
+    heartbeat_age_seconds: float | None = None
+    heartbeat_timeout_seconds: float
+    network_download_enabled: bool | None = None
+    queue_paused: bool | None = None
+    detail_code: str
+
+
 class ToolchainStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

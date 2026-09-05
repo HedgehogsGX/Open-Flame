@@ -21,7 +21,16 @@ from threading import Event
 from ..windows_job import WindowsKillOnCloseJob
 from .contracts import BackendResult, UploadRequest
 from .login_progress import read_update
-from .runtime_setup import BILIUP_VERSION, SAU_COMMIT, SetupError, browser_view, inspect_runtime, runtime_lock
+from .runtime_setup import (
+    BILIUP_VERSION,
+    SAU_COMMIT,
+    RuntimeInspectionCache,
+    SetupError,
+    browser_view,
+    inspect_runtime,
+    isolated_python_command,
+    runtime_lock,
+)
 
 
 _ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
@@ -133,6 +142,7 @@ class SauBackend:
         self.login_timeout = login_timeout
         self.check_timeout = check_timeout
         self.upload_timeout = upload_timeout
+        self._runtime_cache = RuntimeInspectionCache()
 
     def inspect(self) -> dict:
         if os.name != "nt":
@@ -142,12 +152,18 @@ class SauBackend:
         else:
             try:
                 with runtime_lock(self.root, exclusive=False):
-                    status = inspect_runtime(self.root)
+                    status = inspect_runtime(self.root, cache=self._runtime_cache)
             except SetupError as exc:
                 status = {"ready": False, "code": str(exc)}
         return {**status, "backend": "social-auto-upload", "revision": SAU_COMMIT,
                 "biliup_version": BILIUP_VERSION,
                 "platforms": ["bilibili", "douyin", "tencent"]}
+
+    def _inspect_for_execution(self) -> dict:
+        """Perform the uncached integrity check required before any child starts."""
+        if os.name != "nt":
+            return {"ready": False, "code": "unsupported_platform"}
+        return inspect_runtime(self.root)
 
     def login(self, platform: str, account_id: str, stop: Event) -> BackendResult:
         return self._run("login", platform, account_id, {}, stop, self.login_timeout)
@@ -196,7 +212,7 @@ class SauBackend:
             return BackendResult("failed", "invalid_account")
         if stop.is_set():
             return BackendResult("cancelled", "cancelled")
-        state = self.inspect()
+        state = self._inspect_for_execution()
         if not state["ready"]:
             return BackendResult("failed", state["code"])
         if action == "login" and platform == "bilibili" and os.name != "nt":
@@ -315,5 +331,10 @@ class SauBackend:
     def _bridge_command(self, operation: Path) -> list[str]:
         runtime = self.root / "runtime"
         python = runtime / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        return [str(python), "-I", str(Path(__file__).with_name("bridge.py")),
-                "--operation", str(operation)]
+        return isolated_python_command(
+            python,
+            Path(__file__).with_name("bridge.py"),
+            operation / "tmp" / "pycache",
+            "--operation",
+            str(operation),
+        )

@@ -324,7 +324,7 @@ wheels = [
 
 [[package]]
 name = "video-download-control"
-version = "0.24.2"
+version = "0.24.3"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

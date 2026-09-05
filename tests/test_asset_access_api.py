@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import errno
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+import video_download_control.api as api_module
 from video_download_control.adapters import ScriptedFakeAdapter
 from video_download_control.adapters.base import DownloadResult, ProducedFile
 from video_download_control.api import create_app
@@ -489,6 +496,374 @@ def test_asset_download_rejects_unregistered_missing_and_outside_paths(
     assert escaped.status_code == 409
     assert escaped.json() == {"detail": "成品文件不可用"}
     assert outside.read_bytes() == b"must never be served"
+
+
+def test_asset_download_rejects_same_size_content_drift(settings: Settings) -> None:
+    payload = b"registered immutable bytes\n"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-same-size-drift"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+        registered = app.state.batch_service.get_ready_original_asset(
+            asset["asset_id"]
+        )
+        assert registered is not None
+        original = settings.data_root.joinpath(
+            *Path(registered["original_path"]).parts
+        )
+        original.write_bytes(b"x" * len(payload))
+
+        rejected = client.get(asset["download_url"])
+
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "成品文件不可用"}
+
+
+def test_asset_download_closes_spool_when_temporary_storage_is_full(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-full-spool"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=b"registered bytes\n")
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+
+        class FullSpool:
+            closed = False
+
+            def write(self, _chunk: bytes) -> None:
+                raise OSError(errno.ENOSPC, "synthetic temporary storage full")
+
+            def close(self) -> None:
+                self.closed = True
+
+        spool = FullSpool()
+        monkeypatch.setattr(
+            api_module.tempfile,
+            "SpooledTemporaryFile",
+            lambda **_kwargs: spool,
+        )
+        rejected = client.get(asset["download_url"])
+
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "成品文件不可用"}
+    assert spool.closed is True
+
+
+def test_asset_snapshot_stops_cooperatively_when_client_disconnects(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = bytes(range(256)) * 4096
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-snapshot-cancel"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+        registered = app.state.batch_service.get_ready_original_asset(
+            asset["asset_id"]
+        )
+        assert registered is not None
+        original = settings.data_root.joinpath(
+            *Path(registered["original_path"]).parts
+        )
+
+        first_read = threading.Event()
+        read_calls = 0
+        real_open = Path.open
+
+        class SlowReader:
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self._handle.close()
+
+            def fileno(self):
+                return self._handle.fileno()
+
+            def read(self, size=-1):
+                nonlocal read_calls
+                read_calls += 1
+                chunk = self._handle.read(size)
+                if chunk:
+                    first_read.set()
+                    time.sleep(0.01)
+                return chunk
+
+        def slow_open(path, *args, **kwargs):
+            handle = real_open(path, *args, **kwargs)
+            if path == original and args and args[0] == "rb":
+                return SlowReader(handle)
+            return handle
+
+        spools = []
+        real_spooled_file = api_module.tempfile.SpooledTemporaryFile
+
+        def tracked_spool(**kwargs):
+            spool = real_spooled_file(**kwargs)
+            spools.append(spool)
+            return spool
+
+        monkeypatch.setattr(Path, "open", slow_open)
+        monkeypatch.setattr(
+            api_module.tempfile,
+            "SpooledTemporaryFile",
+            tracked_spool,
+        )
+        messages = []
+        request_delivered = False
+
+        async def receive():
+            nonlocal request_delivered
+            if not request_delivered:
+                request_delivered = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await asyncio.to_thread(first_read.wait)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        async def request():
+            await app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0", "spec_version": "2.4"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": asset["download_url"],
+                    "raw_path": asset["download_url"].encode("ascii"),
+                    "query_string": b"",
+                    "root_path": "",
+                    "headers": [(b"host", b"testserver")],
+                    "client": ("testclient", 50000),
+                    "server": ("testserver", 80),
+                    "state": {},
+                },
+                receive,
+                send,
+            )
+
+        asyncio.run(request())
+
+    expected_reads = (
+        len(payload) + api_module._VERIFIED_STREAM_CHUNK_BYTES - 1
+    ) // api_module._VERIFIED_STREAM_CHUNK_BYTES
+    assert read_calls < expected_reads
+    [start] = [
+        message for message in messages if message["type"] == "http.response.start"
+    ]
+    assert start["status"] == api_module._CLIENT_CLOSED_REQUEST_STATUS
+    assert all(
+        not message.get("body")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    assert len(spools) == 1
+    assert spools[0].closed is True
+
+
+def test_verified_asset_download_preserves_byte_ranges(settings: Settings) -> None:
+    payload = b"0123456789-range-payload"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-range"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+
+        partial = client.get(
+            asset["download_url"],
+            headers={"Range": "bytes=3-9"},
+        )
+        unsatisfiable = client.get(
+            asset["download_url"],
+            headers={"Range": "bytes=999-"},
+        )
+        multipart = client.get(
+            asset["download_url"],
+            headers={"Range": "bytes=0-1,4-5"},
+        )
+
+    assert partial.status_code == 206
+    assert partial.content == payload[3:10]
+    assert partial.headers["content-range"] == f"bytes 3-9/{len(payload)}"
+    assert partial.headers["content-length"] == "7"
+    assert partial.headers["accept-ranges"] == "bytes"
+    assert unsatisfiable.status_code == 416
+    assert unsatisfiable.headers["content-range"] == f"bytes */{len(payload)}"
+    assert multipart.status_code == 206
+    assert multipart.headers["content-type"].startswith("multipart/byteranges;")
+    assert int(multipart.headers["content-length"]) == len(multipart.content)
+    assert b"01" in multipart.content
+    assert b"45" in multipart.content
+
+
+def test_asset_download_serves_verified_snapshot_if_path_changes_after_hash(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"registered snapshot bytes\n"
+    replacement = b"x" * len(payload)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-after-hash-swap"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+        registered = app.state.batch_service.get_ready_original_asset(
+            asset["asset_id"]
+        )
+        assert registered is not None
+        original = settings.data_root.joinpath(
+            *Path(registered["original_path"]).parts
+        )
+        real_sha256 = api_module.hashlib.sha256
+        swapped = False
+
+        class SwapAfterHash:
+            def __init__(self):
+                self._delegate = real_sha256()
+
+            def update(self, chunk: bytes) -> None:
+                self._delegate.update(chunk)
+
+            def hexdigest(self) -> str:
+                nonlocal swapped
+                if not swapped:
+                    original.write_bytes(replacement)
+                    swapped = True
+                return self._delegate.hexdigest()
+
+        monkeypatch.setattr(api_module.hashlib, "sha256", SwapAfterHash)
+        downloaded = client.get(asset["download_url"])
+
+    assert swapped is True
+    assert original.read_bytes() == replacement
+    assert downloaded.status_code == 200
+    assert downloaded.content == payload
+    assert downloaded.headers["etag"] == f'"{asset["original"]["sha256"]}"'
+
+
+def test_asset_download_rejects_content_changed_while_hashing(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"a" * (192 * 1024)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-during-hash-swap"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+        registered = app.state.batch_service.get_ready_original_asset(
+            asset["asset_id"]
+        )
+        assert registered is not None
+        original = settings.data_root.joinpath(
+            *Path(registered["original_path"]).parts
+        )
+        real_open = Path.open
+        mutated = False
+
+        class MutatingReader:
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self._handle.close()
+
+            def fileno(self):
+                return self._handle.fileno()
+
+            def read(self, size=-1):
+                nonlocal mutated
+                chunk = self._handle.read(size)
+                if chunk and not mutated:
+                    with real_open(original, "r+b") as writer:
+                        writer.seek(len(payload) - 1)
+                        writer.write(b"x")
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                    mutated = True
+                return chunk
+
+        def mutating_open(path, *args, **kwargs):
+            handle = real_open(path, *args, **kwargs)
+            if path == original and args and args[0] == "rb":
+                return MutatingReader(handle)
+            return handle
+
+        monkeypatch.setattr(Path, "open", mutating_open)
+        rejected = client.get(asset["download_url"])
+
+    assert mutated is True
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "成品文件不可用"}
+
+
+def test_asset_download_supports_independent_concurrent_readers(
+    settings: Settings,
+) -> None:
+    payload = bytes(range(256)) * 4096
+    app = create_app(settings)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/batches",
+            json={"inputs": ["https://youtu.be/asset-api-concurrent-readers"]},
+        ).json()
+        _finish_fake_download(app, settings, payload=payload)
+        asset = client.get(
+            f"/api/v1/batches/{created['id']}/assets"
+        ).json()[0]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda _: client.get(asset["download_url"]),
+                    range(2),
+                )
+            )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [response.content for response in responses] == [payload, payload]
 
 
 def test_asset_download_rejects_a_hard_linked_original(settings: Settings) -> None:

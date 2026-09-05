@@ -1,8 +1,8 @@
-# Open-Flame / Video Download Control v0.23.0 Runbook
+# Open-Flame / Video Download Control v0.24.3 Runbook
 
-> 状态：Iteration 0.23.0 / v0.23.0，数据库 Schema 11。新增源码首次安装/修复与安装故障诊断，固定 FFmpeg 工具改用可获取的官方月末构建。既有下载、成品、短链、凭证、并发、进度与日志保留。Windows 仍为 direct/non-isolated；源码安装验证不等于免 Python EXE、平台完整验收或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 当前版本：Iteration 0.24.3 / v0.24.3，下载数据库 Schema 11、独立上传数据库 Schema 1。上传首批为 Bilibili、抖音、视频号；支持本地草稿、前端扫码及逐项最终确认。Windows 仍为 direct/non-isolated；本地回归不等于真实平台投稿通过、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
 
-本轮记录：[源码安装验收](../validation/iteration-0.23.0-source-setup-evidence.md)。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。历史平台实测见 [0.21.0](../validation/iteration-0.21.0-platform-startup-evidence.md)。重复批次不创建新下载，也不改变原任务的凭证。
+本轮修复记录见 [0.24.3 调试修复](../validation/iteration-0.24.3-debug-fixes.md)；原始问题见 [0.24.2 全量核验](../validation/full-debug-20260905.md)。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。[0.23.0 源码安装验收](../validation/iteration-0.23.0-source-setup-evidence.md) 与 [0.21.0 平台实测](../validation/iteration-0.21.0-platform-startup-evidence.md) 为各自冻结版本的历史记录。重复批次不创建新下载，也不改变原任务的凭证。
 
 ### 启动失败时
 
@@ -17,7 +17,7 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 - 控制面无认证，启动安全检查只允许 `127.0.0.1`、`::1` 或 `localhost`。不得直接监听 LAN / WAN 地址。
 - 普通 `video-download-worker` 仍只有 `--offline-fake` QA 模式。Windows 普通使用首选 `video-download-local-app`；它在内部受控设置本机 Worker gate，并要求 CLI 明示 `--allow-direct-network`。高级手动入口 `video-download-local-worker` 仍要求 `VDC_ENABLE_LOCAL_REAL_WORKER=1`、同一数据库和独立终端。`video-download-candidate-worker` 是另一条 Linux 隔离候选路径，若缺 feature gate、loopback-only namespace、UDS relay、绝对工具路径或精确版本会在 claim 前失败。
 - [`deployment/`](../deployment/README.md) 含 Dockerfile/Compose、可选 Cookie override 与 acceptance runner，但默认镜像、feature gate、工具版本和出站策略都是不可运行占位值。
-- 2026-09-03 在当前 Windows 开发机的项目私有 `runtime-tools/windows-x64` 接入 yt-dlp `2026.08.19` 与 FFmpeg/ffprobe `n9.0.1-6-g9d4ca21220-20260820`；它们不进入系统 `PATH`。逐文件大小/SHA-256、版本、FFmpeg configuration 和 synthetic 音视频 probe 已通过。Docker/可用 WSL Linux runtime 与容器部署证据仍不存在。
+- 当前固定工具为 yt-dlp `2026.08.19`、FFmpeg/ffprobe `n9.0.1-11-ge47273f4d9-20260831`，安装到项目私有或 app root 的 `runtime-tools/windows-x64`，不进入系统 `PATH`。2026-09-03 使用的 `n9.0.1-6-g9d4ca21220-20260820` 仅是历史工具记录，不能作为当前安装输入。Docker/可用 WSL Linux runtime 与容器部署证据仍不存在。
 - Iteration 0.8.1 的直接工具样本证据继续保留在 [Iteration 0.8.1 live-platform evidence](../validation/iteration-0.8.1-live-platform-evidence.md)。v0.9.0 又让同两个精确授权样本经过共享控制数据库的真实 Worker、AssetStore、`source.json`/`manifest.json` 与成品访问 API 完成端到端闭环；脱敏汇总见 [Iteration 0.9.0 local Worker evidence](../validation/iteration-0.9.0-local-worker-e2e-evidence.md)，其原始文件/日志仍在 gitignored `validation/local/`。v0.10.0 在全新 data root 对一条 NASA 官方公开 Instagram Reel 完成同级 Windows direct/no-cookie/Node `1/1 ready` 闭环，公开汇总见 [Iteration 0.10.0 Instagram live evidence](../validation/iteration-0.10.0-instagram-live-evidence.md)；本轮临时 data root 已在取证后删除。Compose 与 Linux runner 仍只有 YAML、静态契约、shell syntax 和 Windows 只读 preflight 证据。
 - Iteration 0.11.0 的 Stage 0 CSV v2、Schema 8→9 边界和 Bilibili 脱敏诊断见 [Schema 9 / Bilibili 412 engineering evidence](../validation/iteration-0.11.0-schema9-bilibili-evidence.md)。raw probe `2/2` 成功，产品同款 fresh attempt `4/6` 成功、`2/6` 在 probe 阶段收到 HTTP 412；这是间歇现象的记录，不是平台认证。
 - Iteration 0.12.0 的辅助产物下载、TikTok 短链安全门禁与 MVP 路由离线 E2E 见 [artifact / TikTok engineering evidence](../validation/iteration-0.12.0-artifact-tiktok-evidence.md)。该记录没有真实媒体请求、Cookie、运行 UUID、绝对路径或媒体指纹。
@@ -37,7 +37,7 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 
 ## 2. 安装与配置
 
-前置条件：Python 3.12+ 与 `uv`。在仓库根目录执行：
+普通源码用户先运行 `Setup-Open-Flame.cmd`，再运行 `Start-Open-Flame.cmd`，步骤见 [Windows 首次安装](WINDOWS_SETUP.md)。以下为开发者流程，前置条件是 Python 3.12+ 与 `uv`，在仓库根目录执行：
 
 ```powershell
 uv sync --extra dev
@@ -97,9 +97,13 @@ $env:VDC_TOOL_ROOT = $ToolRoot
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/operations/tools
 ```
 
-只有 `state=ready`、`detail_code=ok`、`offline_smoke_passed=true` 才表示本机工具闭环完成。`isolated_worker_ready`、`platform_download_verified`、`network_download_enabled` 必须继续为 `false`；Windows 上的 `local_direct_worker_available=true` 只说明显式本机入口存在，不说明 gate 已开启、Worker 正在运行或任一平台整体已验证。不要把本机直连 Worker 或 loopback proxy 当成 Linux network guard 的替代证据。
+只有 `state=ready`、`detail_code=ok`、`offline_smoke_passed=true` 才表示本机工具闭环完成。此工具接口的 `isolated_worker_ready`、`platform_download_verified`、`network_download_enabled` 继续为 `false`，其中最后一项是通用隔离 Worker 的静态联网策略；Windows 的 `local_direct_worker_available=true` 只说明本机入口具备启动条件。它们不表示本次进程状态。
+
+本次状态读取 `GET /api/v1/operations/runtime`：普通 Start 的 supervisor 以同一 run/build 的进程间共享状态报告 `mode=managed_direct`，`state=online/paused` 且心跳未满 3 秒才表示本次托管 Worker 存活并启用本机直连下载。暂停只停止新领取；独立控制面为 `external_unknown/unknown`，在线心跳过期为 `stale`。`starting/check_only/stopping/stopped` 保留本次已记录的生命周期阶段，不是在线或响应能力断言，不因慢预检/清理而变成过期在线。页面每 1.5 秒读取，响应迟到或请求挂起时，先前在线显示也会在本地时限到达后失效。`/health` 原有 `external_status_unknown` 是数据库健康契约，不替代该心跳接口。心跳只证明 supervisor 最近观测到进程存活，不证明任务进度、平台可用或隔离执行。
 
 ### 2.2 Windows 一体化本机应用（推荐）
+
+正常退出时 supervisor 记录 `stopping`，先等待 Worker 再关闭控制面；浏览器能收到时显示正在停止。控制面已经关闭后，页面无法再次取得状态，应显示未知，不能继续显示在线。内部最终 `stopped` 记录不等于服务退出后仍有可访问的状态 API。
 
 开发树已存在并通过校验的工具包可显式传入；普通安装也可把工具放在默认 app root 下的 `runtime-tools\windows-x64`：
 
@@ -628,13 +632,13 @@ uv run video-download-unix-relay \
 - Compose 没有控制面 service，也没有发布端口；FastAPI 继续只在宿主 loopback 运行，避免在无认证时放宽 bind guard。
 - `wheel_builder` 与 `runtime` 的两个 Python `FROM` 都直接写死同一个 `python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2`，没有可覆盖它们的 Python image ARG；tool bundle 仍必须以受审阅的 `name@sha256:...` 提供。Registry 可用性、目标 platform manifest、镜像 provenance 与批准记录仍是发布边界。
 - `pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`；`requirements.build.lock` 固定 build closure，`requirements.runtime.lock` 固定从 `uv.lock` 导出的 runtime closure。两份 lock 都是 exact-version + SHA-256，可能同时列出 upstream wheel 与 sdist hash；实际 `pip download/install --only-binary=:all:` 会拒绝 sdist，不能把 lock 中的 sdist hash 写成执行许可。
-- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.19.0-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
+- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.24.3-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
 
 目标 Linux 必须提供绝对 `/usr/bin/python3` 且该解释器实际为 Python 3.12+；runner 不通过 `PATH` 解析它，Cookie rotation 另须验证绝对 `/usr/bin/mv` 是支持 `-fT` 的 GNU coreutils。可执行清单和默认只读 runner 见 [Linux/Docker acceptance](../validation/linux-docker-acceptance.md)。默认 `--preflight` 不 build、不启动/停止容器、不写数据库；mutation mode 还必须以 effective UID 0 运行，并显式给出 `--execute --authorize I_ACCEPT_TARGET_LINUX_MUTATIONS`。完整执行比产品 contract 更窄：只接受 checked-in、reviewed `run-candidate-worker.sh` wrapper 与其精确的 Worker-only read-only root/mapping binds；直接逐文件 `--cookie-source`、通用 command override、任意非 Worker service 变化都被拒绝。完整合成验收还要求六个不同的 `acceptance-*` ref/source，这不是使用真实 Cookie 的授权。
 
 传给 runner 的 private env 和可选 private Compose override 必须各自为 canonical、single-link、`root:root`、mode `0600`、base-ACL-only regular file；直到 `/` 的 ancestor 必须 root-owned、无 symlink、无 group/world write 且只有 base ACL。Egress policy 必须为 canonical、single-link、`root:10001`、mode `0440`、1–16384-byte、base-ACL-only regular file，并具有同样安全的 root-owned ancestor。Policy 必须与 repository、data/socket/recovery roots、private env/override 双向不重叠。runner 对这些输入记录 device/inode、size、high-resolution mtime/ctime snapshot，并在相关 service 每次 start/restart 前重新验证；Cookie validator 也在执行边界重跑。Runner 同时在 preflight 和 mutation checkpoints 重新读取 `/proc/sys/kernel/core_pattern`；不可读或首字符为 `|` 时 fail closed。必须在启动前通过目标 host 的受控配置停用 pipe collector 或改用审阅过的 non-pipe pattern；`RLIMIT_CORE=(0, 0)` 不能单独证明 host collector 不会接收进程内存。
 
-Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用该冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验它。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 13 个 distributions 与 `video-download-control==0.23.0`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
+Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用该冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验它。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 13 个 distributions 与 `video-download-control==0.24.3`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
 
 最外层必须由 clean trusted root launcher 以 empty/scrubbed environment 和 absolute trusted path 启动 runner。`#!/bin/bash -p`、脚本内 `unset` 与固定 `PATH` 都只能在 process/interpreter 已启动后生效，不能把 inherited `BASH_FUNC_*`、`LD_PRELOAD` 等 pre-body loader/interpreter 行为变成可信输入，也不能保护从不可信外层环境启动的子 shell。Endpoint 的只读判定遵循官方 precedence：非空 `DOCKER_CONTEXT` 高于 `DOCKER_HOST`，否则读取当前/default context；无论来源都必须解析为 local Unix Linux daemon。Execute 为避免重定向 daemon/build/config，明确拒绝 inherited `DOCKER_CONTEXT`、`DOCKER_HOST`、`DOCKER_CONFIG`、`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY`、`BUILDKIT_HOST`、`BUILDX_BUILDER`、`COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`、`COMPOSE_PROFILES`，此时 default context 仍必须通过同一 local-Unix/Linux 检查。
 
@@ -726,7 +730,9 @@ data/
 
 ## 9. 可执行备份
 
-`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.19.0 版本只接受通过 readiness 的精确 Schema 11 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
+**范围是下载控制数据库与下载资产。** 上传使用旁路的 `data-uploads`（Schema 1、独立 sources、账号和 jobs），本节命令不包含这些上传数据、账号登录态或上传运行时。上传整套备份/恢复尚未实现，不能将下载备份成功当作上传数据已备份；后续执行计划 T07/T14 跟踪此缺口。Linux candidate 同样仅是下载 Worker 路径，不提供 Windows 上传运行时的跨平台验收。
+
+`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.24.3 版本只接受通过 readiness 的精确 Schema 11 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
 
 ### 9.1 一致性边界与停机要求
 
@@ -828,7 +834,7 @@ uv run video-download-control
 
 ### 10.1 历史本机演练证据与限制
 
-2026-09-03 在当时的 Windows 开发机、Iteration 0.5 / Schema 7 代码上执行 `uv run pytest -q tests/test_backup_restore.py`，记录结果为 **14 passed**。其中主演练以 offline fake Worker 创建 ready asset，把数据库、原件和额外受管文件备份后恢复到不同的临时根目录，再验证 Schema 7 readiness、batch 状态以及恢复原件 SHA-256 与数据库记录一致；同一测试文件也实际调用当时的 `create` / `restore` CLI，并覆盖 payload/manifest 篡改、路径逃逸、link、目标碰撞、Schema 篡改、pending commit intent 与未跟踪文件的拒绝路径。命令、文件哈希和边界记录在 [Iteration 0.5 recovery evidence](../validation/backup-restore-drill-iteration-0.5.md)。不得把这条历史记录改写为后续 v0.10.0 / Schema 8、v0.11.0–0.12.0 / Schema 9、v0.13.0–0.15.0 / Schema 10、当前 v0.19.0 / Schema 11 或 graph-v2 恢复演练。
+2026-09-03 在当时的 Windows 开发机、Iteration 0.5 / Schema 7 代码上执行 `uv run pytest -q tests/test_backup_restore.py`，记录结果为 **14 passed**。其中主演练以 offline fake Worker 创建 ready asset，把数据库、原件和额外受管文件备份后恢复到不同的临时根目录，再验证 Schema 7 readiness、batch 状态以及恢复原件 SHA-256 与数据库记录一致；同一测试文件也实际调用当时的 `create` / `restore` CLI，并覆盖 payload/manifest 篡改、路径逃逸、link、目标碰撞、Schema 篡改、pending commit intent 与未跟踪文件的拒绝路径。命令、文件哈希和边界记录在 [Iteration 0.5 recovery evidence](../validation/backup-restore-drill-iteration-0.5.md)。不得把这条历史记录改写为后续 v0.10.0 / Schema 8、v0.11.0–0.12.0 / Schema 9、v0.13.0–0.15.0 / Schema 10、后续 Schema 11 版本 或 graph-v2 恢复演练。
 
 这只是本机小型临时数据的自动化独立根功能证据，不包含生产媒体量、NAS/网络文件系统、跨卷性能、容器 UID/GID、加密/offsite 介质、灾难主机、RTO/RPO 或人工值班流程。生产前仍须用真实容量和实际部署身份完成、记录并定期重复恢复演练；记录至少包括应用 revision、v0.5.0 / Schema 7、备份 ID、文件数/字节、manifest hash、存储介质、开始/完成时间、恢复检查结果、失败与处置。
 
@@ -843,10 +849,10 @@ uv run video-download-control
 Schema 11 在保留 Schema 10 capability ledger 的基础上增加唯一 `worker_claim_gate`。Schema 10→11 迁移只创建该表和关闭的初始 singleton；它不会把恢复出的旧 supervisor 状态视为启动授权。Schema 10 本身是在 Iteration 0.13.0 将 Schema 9 的可写 `platform_capabilities` 封存为只读 `capability_legacy_schema9`，并建立 evidence/decision ledger 与只读 current-head view。生产升级必须分别演练迁移前与迁移后的恢复点：
 
 1. 记录待迁移应用 revision、Schema、依赖锁与 Worker/tool digest；停止 Worker 和控制面。
-2. 用与原 Schema 8、9 或 10 精确兼容的历史工具创建备份，并用同一版本恢复到独立新根。v0.19.0 的 restore 只接受 Schema 11，不能直接恢复旧备份。
-3. 只在恢复副本上用 v0.19.0 启动迁移；确认 marker 精确为 1–11、`quick_check` / `foreign_key_check` 和 readiness 通过，`worker_claim_gate` 只有 `id=1` 的关闭初始行，并抽查 Schema 9 archive、evidence/decision/current view 及资产状态未漂移。
+2. 用与原 Schema 8、9 或 10 精确兼容的历史工具创建备份，并用同一版本恢复到独立新根。v0.24.3 的 restore 只接受 Schema 11，不能直接恢复旧备份。
+3. 只在恢复副本上用 v0.24.3 启动迁移；确认 marker 精确为 1–11、`quick_check` / `foreign_key_check` 和 readiness 通过，`worker_claim_gate` 只有 `id=1` 的关闭初始行，并抽查 Schema 9 archive、evidence/decision/current view 及资产状态未漂移。
 4. 检查 `/health`、Batch/Input/Job/asset API，以及三个 capability 分层端点。用 `video-download-local-app --check` 验证 gate 只 prepare、不 activate且无 claim；使用 synthetic 私有 CSV 演练 import、approve、revoke、stale revision 与 history，但不要把 synthetic 决定带入生产库。
-5. 使用 v0.19.0 创建 Schema 11 baseline，并恢复到另一个不存在的独立根；核对 claim gate singleton、archive、evidence、完整 decision chain、current view、资产与 manifest。恢复后再启动 local-app 时，确认新 `run_id` 先 prepare 为关闭状态。
+5. 使用 v0.24.3 创建 Schema 11 baseline，并恢复到另一个不存在的独立根；核对 claim gate singleton、archive、evidence、完整 decision chain、current view、资产与 manifest。恢复后再启动 local-app 时，确认新 `run_id` 先 prepare 为关闭状态。
 6. 最后才在维护窗口切换，同时保留迁移前后各自匹配的应用、锁文件和恢复工具。回滚只能整体恢复已经用历史版本实际演练过的旧数据库及匹配资产树。
 
 旧程序不得打开 Schema 11。不得原地删除 migration marker、`worker_claim_gate`、trigger、ledger 表或 view，也不得把旧数据库覆盖到新的资产树。没有经过实际恢复验证的迁移前备份时，只能修复并向前升级，不能声称可安全回滚。
@@ -883,7 +889,7 @@ uv run video-download-validation C:\private\samples.csv `
   --output C:\private\capability-report.md
 ```
 
-一个证据单元固定为 `platform × source_type × job_kind × adapter × downloader_version × environment × product_version`；这里的 `product_version` 是 `0.19.0+build.sha256.<64 hex>` 形式的完整 build identity，不是裸版本。至少 10 个公开正向样本、独立负向样本和同一身份下最新连续三轮完整运行都达到门槛后，评估才为 qualified；更新但不完整的最新轮次会使其 fail closed。来源样本按规范的 `platform/source_type/source_id` 去重，外层保留 `job_kind`；TikTok 同一 video ID 的不同 handle/host 不算独立样本。Bilibili 同一投稿可同时表示为 BV/av，Stage 0 暂时只接受 BV 以防双算；普通下载仍接受 BV 和 av。报告只含 aggregate，不含 URL、来源 identity hash、sample/run ID。
+一个证据单元固定为 `platform × source_type × job_kind × adapter × downloader_version × environment × product_version`；这里的 `product_version` 是 `<当前版本>+build.sha256.<64 hex>` 形式的完整 build identity，不是裸版本。至少 10 个公开正向样本、独立负向样本和同一身份下最新连续三轮完整运行都达到门槛后，评估才为 qualified；更新但不完整的最新轮次会使其 fail closed。来源样本按规范的 `platform/source_type/source_id` 去重，外层保留 `job_kind`；TikTok 同一 video ID 的不同 handle/host 不算独立样本。Bilibili 同一投稿可同时表示为 BV/av，Stage 0 暂时只接受 BV 以防双算；普通下载仍接受 BV 和 av。报告只含 aggregate，不含 URL、来源 identity hash、sample/run ID。
 
 导入必须使用现有且已经就绪的 Schema 11 数据库、当前完整 build identity 和显式 environment key；CLI 不创建或迁移数据库。数据库路径必须是绝对、规范、单 hard-link 的普通文件，并在每次连接前后重验文件 identity，避免 hard-link 别名形成不同 WAL/SHM 锁域。它从 CSV 重新计算，不导入 Markdown status。导入后仍是未审批，必须用另一条 CAS 命令批准：
 

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from video_download_control.uploads.contracts import BackendResult, UploadError
+from video_download_control.uploads import service as upload_service_module
+from video_download_control.uploads.schema import SCHEMA_DDL
 from video_download_control.uploads.service import UploadService, default_upload_root
 
 
@@ -191,6 +195,122 @@ def test_recovery_requires_review_and_does_not_replay_upload(tmp_path):
         service.stop()
 
 
+def test_final_database_write_failure_recovers_without_retransmitting(tmp_path, monkeypatch):
+    backend = FakeBackend()
+    backend.release.clear()
+    service = UploadService(tmp_path / "uploads", backend)
+    service.start()
+    first = drafts(service, tmp_path)[0]
+    second = service.create_jobs(
+        source_id=first["source_id"], account_ids=[first["account_id"]], title="第二项",
+        description="", tags=["测试"], category_id=249, copyright=1,
+        idempotency_key="final_write_second",
+    )[0]
+    service.confirm(first["id"])
+    assert backend.entered.wait(3)
+    service.confirm(second["id"])
+
+    original_db = service._db
+    failed = threading.Event()
+
+    @contextmanager
+    def fail_one_worker_write(*args, **kwargs):
+        if (threading.current_thread().name == "open-flame-uploads"
+                and backend.release.is_set() and not failed.is_set()):
+            failed.set()
+            raise sqlite3.OperationalError("synthetic final write failure")
+        with original_db(*args, **kwargs) as db:
+            yield db
+
+    monkeypatch.setattr(service, "_db", fail_one_worker_write)
+    backend.release.set()
+    try:
+        wait_for(lambda: failed.is_set())
+        wait_for(lambda: (
+            not service.status()["worker_running"]
+            or {row["id"]: row["state"] for row in service.jobs()}.get(first["id"]) != "running"
+        ))
+        current = {row["id"]: row for row in service.jobs()}
+        assert service.status()["worker_running"] is True
+        assert service.status()["scheduler_state"] == "running"
+        assert service.status()["scheduler_code"] == "scheduler_recovered"
+        assert current[first["id"]]["state"] == "unknown"
+        assert current[first["id"]]["code"] == "interrupted_result_unknown"
+        assert current[second["id"]]["state"] == "draft"
+        assert current[second["id"]]["code"] == "restart_confirmation_required"
+        assert len(backend.uploads) == 1
+    finally:
+        service.stop()
+
+
+def test_persistent_final_write_failure_is_visible_and_explicitly_recoverable(tmp_path, monkeypatch):
+    backend = FakeBackend()
+    backend.release.clear()
+    service = UploadService(tmp_path / "uploads", backend)
+    service.start()
+    first = drafts(service, tmp_path)[0]
+    second = service.create_jobs(
+        source_id=first["source_id"], account_ids=[first["account_id"]], title="第二项",
+        description="", tags=["测试"], category_id=249, copyright=1,
+        idempotency_key="persistent_write_second",
+    )[0]
+    service.confirm(first["id"])
+    assert backend.entered.wait(3)
+    service.confirm(second["id"])
+
+    original_db = service._db
+
+    @contextmanager
+    def fail_worker_database(*args, **kwargs):
+        if threading.current_thread().name == "open-flame-uploads" and backend.release.is_set():
+            raise sqlite3.OperationalError("synthetic persistent database failure")
+        with original_db(*args, **kwargs) as db:
+            yield db
+
+    monkeypatch.setattr(service, "_db", fail_worker_database)
+    backend.release.set()
+    wait_for(lambda: service.status()["scheduler_state"] == "faulted")
+    assert service.status()["worker_running"] is False
+    assert service.status()["scheduler_code"] == "scheduler_database_unavailable"
+    assert len(backend.uploads) == 1
+
+    monkeypatch.setattr(service, "_db", original_db)
+    service.start()
+    try:
+        current = {row["id"]: row for row in service.jobs()}
+        assert service.status()["worker_running"] is True
+        assert service.status()["scheduler_code"] == "scheduler_recovered"
+        assert current[first["id"]]["state"] == "unknown"
+        assert current[second["id"]]["state"] == "draft"
+        assert len(backend.uploads) == 1
+    finally:
+        service.stop()
+
+
+def test_database_connection_closes_when_connection_pragma_fails(tmp_path, monkeypatch):
+    service = UploadService(tmp_path / "uploads", FakeBackend())
+    real = sqlite3.connect(":memory:")
+    closed = threading.Event()
+
+    class FailingPragmaConnection:
+        row_factory = None
+
+        def execute(self, statement, *args):
+            if statement == "PRAGMA journal_mode=WAL":
+                raise sqlite3.OperationalError("synthetic pragma failure")
+            return real.execute(statement, *args)
+
+        def close(self):
+            real.close()
+            closed.set()
+
+    monkeypatch.setattr(upload_service_module.sqlite3, "connect", lambda *args, **kwargs: FailingPragmaConnection())
+    with pytest.raises(sqlite3.OperationalError, match="synthetic pragma failure"):
+        with service._db():
+            pass
+    assert closed.is_set()
+
+
 def test_bilibili_metadata_is_not_invented(service, tmp_path):
     with pytest.raises(UploadError, match="bilibili_category_required"):
         drafts(service, tmp_path, category_id=None)
@@ -270,7 +390,7 @@ def test_malformed_backend_result_does_not_stop_the_queue(service, tmp_path):
     service.backend.result = BackendResult("submitted", "upstream_submitted")
     retry = service.retry(job["id"], acknowledge_unknown=True)
     service.confirm(retry["id"])
-    wait_for(lambda: service.jobs()[0]["state"] == "submitted")
+    wait_for(lambda: {row["id"]: row["state"] for row in service.jobs()}[retry["id"]] == "submitted")
 
 
 def test_failed_account_check_stops_previously_queued_submission(service, tmp_path):
@@ -319,6 +439,300 @@ def test_unknown_database_is_not_modified(tmp_path):
     with pytest.raises(UploadError, match="upload_schema_unsupported"):
         UploadService(root, FakeBackend())
     assert path.read_bytes() == before
+
+
+def test_version_one_incomplete_database_is_rejected_without_any_mutation(tmp_path):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    path = root / "uploads.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE metadata(version INTEGER NOT NULL)")
+        db.execute("INSERT INTO metadata VALUES(1)")
+        db.execute("CREATE TABLE valuable(value TEXT)")
+        db.execute("INSERT INTO valuable VALUES('keep')")
+    before_bytes = path.read_bytes()
+    before_entries = {item.name: item.read_bytes() if item.is_file() else None for item in root.iterdir()}
+
+    with pytest.raises(UploadError, match="upload_schema_unsupported"):
+        UploadService(root, FakeBackend())
+
+    assert path.read_bytes() == before_bytes
+    assert {item.name: item.read_bytes() if item.is_file() else None for item in root.iterdir()} == before_entries
+
+
+def test_valid_schema_one_and_records_are_opened_without_mutation(tmp_path):
+    root = tmp_path / "uploads"
+    original = UploadService(root, FakeBackend())
+    acct = original.add_account("douyin", "现有账号")
+    src = source(original, tmp_path)
+    job = original.create_jobs(
+        source_id=src["id"], account_ids=[acct["id"]], title="现有草稿",
+        description="", tags=[], idempotency_key="existing_schema_one",
+    )[0]
+    before = {item.relative_to(root).as_posix(): item.read_bytes()
+              for item in root.rglob("*") if item.is_file()}
+
+    reader = UploadService(root, FakeBackend())
+
+    after = {item.relative_to(root).as_posix(): item.read_bytes()
+             for item in root.rglob("*") if item.is_file()}
+    assert after == before
+    assert reader.jobs()[0]["id"] == job["id"]
+    assert reader.sources()[0]["id"] == src["id"]
+
+
+def test_valid_schema_one_wal_is_opened_without_creating_a_shm_sidecar(tmp_path):
+    source_path = tmp_path / "wal-source.sqlite3"
+    target_root = tmp_path / "uploads"
+    target_root.mkdir()
+    for name in ("media", "incoming", "private"):
+        (target_root / name).mkdir()
+    target_path = target_root / "uploads.sqlite3"
+
+    source = sqlite3.connect(source_path)
+    try:
+        assert source.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        source.execute("PRAGMA wal_autocheckpoint=0")
+        source.executescript(SCHEMA_DDL + "\nINSERT INTO metadata VALUES(1);")
+        source.commit()
+        source_wal = Path(str(source_path) + "-wal")
+        assert source_wal.is_file()
+        target_path.write_bytes(source_path.read_bytes())
+        Path(str(target_path) + "-wal").write_bytes(source_wal.read_bytes())
+    finally:
+        source.close()
+
+    before = {
+        item.relative_to(target_root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in target_root.rglob("*")
+    }
+
+    UploadService(target_root, FakeBackend())
+
+    after = {
+        item.relative_to(target_root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in target_root.rglob("*")
+    }
+    assert after == before
+
+
+def test_malformed_schema_one_wal_is_rejected_without_mutation(tmp_path):
+    root = tmp_path / "uploads"
+    service = UploadService(root, FakeBackend())
+    with sqlite3.connect(service.database_path) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        db.execute("PRAGMA wal_autocheckpoint=0")
+        db.execute(
+            "INSERT INTO accounts(id,platform,name,created_at) VALUES(?,?,?,?)",
+            ("a" * 32, "douyin", "WAL account", "now"),
+        )
+        db.commit()
+        wal = Path(str(service.database_path) + "-wal")
+        malformed = bytearray(wal.read_bytes())
+        malformed[24] ^= 1
+    wal.write_bytes(malformed)
+    before = {
+        item.relative_to(root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in root.rglob("*")
+    }
+
+    with pytest.raises(UploadError, match="upload_schema_unsupported"):
+        UploadService(root, FakeBackend())
+
+    after = {
+        item.relative_to(root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in root.rglob("*")
+    }
+    assert after == before
+
+
+def test_schema_one_wal_reset_tail_is_accepted_without_mutation(tmp_path):
+    source_root = tmp_path / "wal-reset-source"
+    source_service = UploadService(source_root, FakeBackend())
+    source_path = source_service.database_path
+    target_root = tmp_path / "uploads"
+    target_root.mkdir()
+    for name in ("media", "incoming", "private"):
+        (target_root / name).mkdir()
+    target_path = target_root / "uploads.sqlite3"
+
+    source = sqlite3.connect(source_path)
+    try:
+        assert source.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        source.execute("PRAGMA wal_autocheckpoint=0")
+        source.execute("PRAGMA journal_size_limit=-1")
+        for index in range(500):
+            source.execute(
+                "INSERT INTO accounts(id,platform,name,created_at) VALUES(?,?,?,?)",
+                (f"{index:032x}", "douyin", f"reset-{index}", "now"),
+            )
+        source.commit()
+        assert source.execute("PRAGMA wal_checkpoint(RESTART)").fetchone()[0] == 0
+        source.execute("DELETE FROM accounts WHERE id=?", (f"{0:032x}",))
+        source.commit()
+        source_wal = Path(str(source_path) + "-wal")
+        wal_bytes = source_wal.read_bytes()
+        page_size = int.from_bytes(wal_bytes[8:12], "big")
+        frame_size = 24 + page_size
+        header_salt = wal_bytes[16:24]
+        frame_salts = [
+            wal_bytes[offset + 8:offset + 16]
+            for offset in range(32, len(wal_bytes) - frame_size + 1, frame_size)
+        ]
+        assert frame_salts and any(salt != header_salt for salt in frame_salts)
+        target_path.write_bytes(source_path.read_bytes())
+        Path(str(target_path) + "-wal").write_bytes(wal_bytes)
+    finally:
+        source.close()
+
+    before = {
+        item.relative_to(target_root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in target_root.rglob("*")
+    }
+    UploadService(target_root, FakeBackend())
+    after = {
+        item.relative_to(target_root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in target_root.rglob("*")
+    }
+    assert after == before
+
+
+def test_schema_one_wal_hardlink_is_rejected_without_mutation(tmp_path):
+    root = tmp_path / "uploads"
+    service = UploadService(root, FakeBackend())
+    with sqlite3.connect(service.database_path) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        db.execute("PRAGMA wal_autocheckpoint=0")
+        db.execute(
+            "INSERT INTO accounts(id,platform,name,created_at) VALUES(?,?,?,?)",
+            ("b" * 32, "douyin", "WAL hardlink", "now"),
+        )
+        db.commit()
+        wal = Path(str(service.database_path) + "-wal")
+        wal_bytes = wal.read_bytes()
+    wal.write_bytes(wal_bytes)
+    os.link(wal, tmp_path / "wal-hardlink")
+    before = {
+        item.relative_to(root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in root.rglob("*")
+    }
+
+    with pytest.raises(UploadError, match="upload_schema_unsupported"):
+        UploadService(root, FakeBackend())
+
+    after = {
+        item.relative_to(root).as_posix(): (
+            item.read_bytes() if item.is_file() else None
+        )
+        for item in root.rglob("*")
+    }
+    assert after == before
+
+
+def test_concurrent_new_database_initialization_publishes_only_complete_schema(tmp_path):
+    root = tmp_path / "uploads"
+    barrier = threading.Barrier(2)
+    services, errors = [], []
+
+    def construct():
+        try:
+            barrier.wait()
+            services.append(UploadService(root, FakeBackend()))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=construct) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert not errors
+    assert len(services) == 2
+    with sqlite3.connect(root / "uploads.sqlite3") as db:
+        assert db.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+        assert db.execute("SELECT version FROM metadata").fetchall() == [(1,)]
+        assert {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")} == {
+            "metadata", "accounts", "sources", "jobs", "operations", "requests",
+        }
+    assert not any(".tmp" in item.name or item.name.endswith("-journal") for item in root.iterdir())
+
+
+@pytest.mark.parametrize("damage", ["extra_table", "extra_index", "second_version", "orphan"])
+def test_schema_one_drift_and_broken_foreign_keys_are_rejected_read_only(tmp_path, damage):
+    root = tmp_path / "uploads"
+    service = UploadService(root, FakeBackend())
+    path = service.database_path
+    with sqlite3.connect(path) as db:
+        if damage == "extra_table":
+            db.execute("CREATE TABLE unexpected(value TEXT)")
+        elif damage == "extra_index":
+            db.execute("CREATE INDEX unexpected_index ON jobs(state)")
+        elif damage == "second_version":
+            db.execute("INSERT INTO metadata VALUES(1)")
+        else:
+            db.execute(
+                "INSERT INTO operations(id,account_id,action,created_at,updated_at) VALUES(?,?,?,?,?)",
+                ("f" * 32, "e" * 32, "check", "now", "now"),
+            )
+    before = path.read_bytes()
+
+    with pytest.raises(UploadError, match="upload_schema_unsupported"):
+        UploadService(root, FakeBackend())
+
+    assert path.read_bytes() == before
+    assert not Path(str(path) + "-journal").exists()
+
+
+def test_actionable_jobs_and_sources_are_prioritized_and_all_history_is_pageable(tmp_path):
+    service = UploadService(tmp_path / "uploads", FakeBackend())
+    acct = service.add_account("bilibili", "容量测试")
+    with service._db() as db:
+        for index in range(201):
+            source_id = f"{index:032x}"
+            job_id = f"{index + 1000:032x}"
+            state = "running" if index == 0 else "draft"
+            db.execute(
+                "INSERT INTO sources VALUES(?,?,?,?,?,?)",
+                (source_id, f"source-{index}.mp4", ".mp4", index + 1, "a" * 64, f"time-{index:03d}"),
+            )
+            db.execute(
+                "INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,mode,copyright,source_credit,state,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (job_id, acct["id"], source_id, f"job-{index}", "", "[]", 249,
+                 "publish", 1, "", state, f"time-{index:03d}", f"time-{index:03d}"),
+            )
+    oldest_job_id, oldest_source_id = f"{1000:032x}", f"{0:032x}"
+
+    assert any(row["id"] == oldest_job_id for row in service.jobs())
+    assert any(row["id"] == oldest_source_id for row in service.sources())
+    assert service.job(oldest_job_id)["state"] == "running"
+    assert service.source(oldest_source_id)["name"] == "source-0.mp4"
+
+    seen, cursor = [], None
+    while True:
+        page = service.job_page(cursor=cursor, limit=37)
+        seen.extend(row["id"] for row in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert len(seen) == len(set(seen)) == 201
+    assert set(seen) == {f"{index + 1000:032x}" for index in range(201)}
+    assert service.cancel(oldest_job_id)["code"] == "cancellation_requested"
 
 
 def test_bilibili_requires_explicit_copyright_choice(service, tmp_path):

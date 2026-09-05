@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Open-Flame · 设计预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --of-canvas: #f5f5f7;
+      --of-surface: #fff;
+      --of-surface-raised: rgb(255 255 255 / .88);
+      --of-surface-secondary: #ededf0;
+      --of-text: #1d1d1f;
+      --of-text-secondary: #616167;
+      --of-border: #d8d8de;
+      --of-control-border: #85858e;
+      --of-accent: #0066cc;
+      --of-accent-hover: #0055ad;
+      --of-on-accent: #fff;
+      --of-success: #18794e;
+      --of-success-bg: #eaf7ef;
+      --of-warning: #8a5000;
+      --of-warning-bg: #fff4df;
+      --of-danger: #b42318;
+      --of-danger-bg: #fff0ee;
+      --of-focus: #0066cc;
+      --of-shadow: 0 12px 40px rgb(0 0 0 / .08);
+      --of-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+        "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC",
+        sans-serif;
+      --of-font-mono: ui-monospace, "SFMono-Regular", Consolas,
+        "Liberation Mono", monospace;
+      --of-ease: cubic-bezier(.23, 1, .32, 1);
+      --of-fast: 120ms;
+      --of-medium: 180ms;
+      --of-slow: 240ms;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --of-canvas: #151517;
+        --of-surface: #202023;
+        --of-surface-raised: rgb(32 32 35 / .9);
+        --of-surface-secondary: #2b2b30;
+        --of-text: #f5f5f7;
+        --of-text-secondary: #b5b5bd;
+        --of-border: #45454d;
+        --of-control-border: #85858e;
+        --of-accent: #8abeff;
+        --of-accent-hover: #add2ff;
+        --of-on-accent: #11243b;
+        --of-success: #88dbb1;
+        --of-success-bg: #17362a;
+        --of-warning: #ffd18a;
+        --of-warning-bg: #3b2d16;
+        --of-danger: #ffb4ab;
+        --of-danger-bg: #421f20;
+        --of-focus: #8abeff;
+        --of-shadow: 0 16px 48px rgb(0 0 0 / .34);
+      }
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --of-canvas: #151517;
+      --of-surface: #202023;
+      --of-surface-raised: rgb(32 32 35 / .9);
+      --of-surface-secondary: #2b2b30;
+      --of-text: #f5f5f7;
+      --of-text-secondary: #b5b5bd;
+      --of-border: #45454d;
+      --of-control-border: #85858e;
+      --of-accent: #8abeff;
+      --of-accent-hover: #add2ff;
+      --of-on-accent: #11243b;
+      --of-success: #88dbb1;
+      --of-success-bg: #17362a;
+      --of-warning: #ffd18a;
+      --of-warning-bg: #3b2d16;
+      --of-danger: #ffb4ab;
+      --of-danger-bg: #421f20;
+      --of-focus: #8abeff;
+      --of-shadow: 0 16px 48px rgb(0 0 0 / .34);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--of-canvas);
+      color: var(--of-text);
+      font: 400 1rem/1.65 var(--of-font-sans);
+      text-rendering: optimizeLegibility;
+      font-optical-sizing: auto;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; }
+    button, a, input, select, summary { -webkit-tap-highlight-color: transparent; }
+    a { color: var(--of-accent); text-underline-offset: .18em; }
+    a:focus-visible, button:focus-visible, input:focus-visible,
+    select:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--of-focus);
+      outline-offset: 3px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--of-border);
+      border-bottom-color: color-mix(in srgb, var(--of-border) 76%, transparent);
+      background: var(--of-surface-raised);
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+    }
+    .topbar-inner {
+      width: min(100% - 4rem, 1200px);
+      min-height: 64px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .brand, .preview-nav, .theme-switch, .segment, .actions, .inline-meta {
+      display: flex;
+      align-items: center;
+    }
+    .brand { gap: .7rem; color: var(--of-text); font-weight: 650; }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--of-text);
+      color: var(--of-surface);
+    }
+    .brand-mark svg { width: 18px; height: 18px; }
+    .preview-nav { gap: .25rem; }
+    .preview-nav a {
+      min-height: 44px;
+      padding: .55rem .8rem;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 10px;
+      color: var(--of-text-secondary);
+      font-size: .875rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .preview-nav a[aria-current="page"] {
+      color: var(--of-text);
+      background: var(--of-surface-secondary);
+    }
+
+    main { width: min(100% - 4rem, 1200px); margin: 0 auto; padding: 3rem 0 6rem; }
+    .hero { max-width: 760px; margin-bottom: 2rem; }
+    .eyebrow {
+      margin: 0 0 .65rem;
+      color: var(--of-accent);
+      font-size: .875rem;
+      font-weight: 650;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      margin-bottom: 1rem;
+      font-size: clamp(2rem, 5vw, 2.5rem);
+      line-height: 1.2;
+      font-weight: 600;
+      letter-spacing: -.025em;
+    }
+    h2 { margin-bottom: .5rem; font-size: 1.375rem; line-height: 1.35; font-weight: 600; }
+    h3 { margin-bottom: .35rem; font-size: 1.0625rem; line-height: 1.45; font-weight: 600; }
+    .lead { margin-bottom: 1.25rem; color: var(--of-text-secondary); font-size: 1.0625rem; }
+    .hero-note {
+      display: inline-flex;
+      align-items: flex-start;
+      gap: .6rem;
+      padding: .7rem .9rem;
+      border: 1px solid var(--of-border);
+      border-radius: 12px;
+      background: var(--of-surface);
+      color: var(--of-text-secondary);
+      font-size: .875rem;
+    }
+    .hero-note svg { width: 18px; flex: 0 0 18px; margin-top: .12rem; color: var(--of-accent); }
+
+    .preview-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(270px, 304px);
+      gap: 1.5rem;
+      align-items: start;
+    }
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--of-border);
+      border-radius: 20px;
+      background: var(--of-surface);
+    }
+    .stage { overflow: clip; box-shadow: 0 1px 0 rgb(0 0 0 / .02); }
+    .stage-head {
+      padding: 1.5rem 1.5rem 1.2rem;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid var(--of-border);
+    }
+    .stage-head p { margin: 0; color: var(--of-text-secondary); font-size: .875rem; }
+    .segment, .theme-switch {
+      padding: 3px;
+      gap: 2px;
+      border-radius: 12px;
+      background: var(--of-surface-secondary);
+    }
+    .segment button, .theme-switch button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--of-text-secondary);
+      cursor: pointer;
+      font-size: .875rem;
+      font-weight: 600;
+      transition: color var(--of-fast) var(--of-ease),
+        background-color var(--of-fast) var(--of-ease),
+        box-shadow var(--of-fast) var(--of-ease),
+        transform var(--of-fast) var(--of-ease);
+    }
+    .segment button { min-width: 88px; padding: .45rem .8rem; }
+    .theme-switch button { min-width: 44px; padding: .45rem .7rem; }
+    .segment button[aria-selected="true"], .theme-switch button[aria-pressed="true"] {
+      color: var(--of-text);
+      background: var(--of-surface);
+      box-shadow: 0 1px 4px rgb(0 0 0 / .1);
+    }
+
+    .workspace-panel { padding: 1.5rem; }
+    .workspace-panel.is-entering {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    .workspace-panel:not(.is-entering) {
+      transition: opacity var(--of-medium) var(--of-ease),
+        transform var(--of-medium) var(--of-ease);
+    }
+    .workspace-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .workspace-title p { margin: 0; color: var(--of-text-secondary); font-size: .875rem; }
+    .status {
+      min-height: 28px;
+      padding: .25rem .65rem;
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      border-radius: 999px;
+      color: var(--of-success);
+      background: var(--of-success-bg);
+      font-size: .8125rem;
+      font-weight: 650;
+      white-space: nowrap;
+      transition: color var(--of-fast) var(--of-ease),
+        background-color var(--of-fast) var(--of-ease);
+    }
+    .status.warning { color: var(--of-warning); background: var(--of-warning-bg); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+    .form-block, .confirm-card {
+      padding: 1rem;
+      border: 1px solid var(--of-border);
+      border-radius: 16px;
+      background: var(--of-surface);
+      background: color-mix(in srgb, var(--of-surface) 86%, var(--of-canvas));
+    }
+    .field-grid { display: grid; grid-template-columns: 1fr auto; gap: .75rem; align-items: end; }
+    label { display: block; margin-bottom: .4rem; color: var(--of-text); font-size: .875rem; font-weight: 600; }
+    input, select {
+      width: 100%;
+      min-height: 44px;
+      padding: .62rem .75rem;
+      border: 1px solid var(--of-control-border);
+      border-radius: 12px;
+      background: var(--of-surface);
+      color: var(--of-text);
+      transition: border-color var(--of-fast) var(--of-ease),
+        box-shadow var(--of-fast) var(--of-ease);
+    }
+    .button {
+      min-height: 44px;
+      padding: .64rem 1rem;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .45rem;
+      background: var(--of-accent);
+      color: var(--of-on-accent);
+      cursor: pointer;
+      font-size: .9375rem;
+      font-weight: 650;
+      line-height: 1.4;
+      text-decoration: none;
+      transition: transform var(--of-fast) var(--of-ease),
+        background-color var(--of-fast) var(--of-ease),
+        border-color var(--of-fast) var(--of-ease),
+        color var(--of-fast) var(--of-ease);
+    }
+    .button svg { width: 17px; height: 17px; }
+    .button.secondary { border-color: var(--of-border); background: var(--of-surface-secondary); color: var(--of-text); }
+    .button.text { background: transparent; color: var(--of-accent); }
+    .button.danger { border-color: color-mix(in srgb, var(--of-danger) 35%, transparent); background: var(--of-danger-bg); color: var(--of-danger); }
+    .button.is-pressed { transform: scale(.98); }
+    .button:disabled { cursor: not-allowed; color: var(--of-text-secondary); background: var(--of-surface-secondary); }
+
+    .task-list { margin-top: 1rem; }
+    .task-row {
+      min-width: 0;
+      padding: 1rem 0;
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      gap: .8rem;
+      align-items: center;
+      border-top: 1px solid var(--of-border);
+    }
+    .task-icon {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--of-surface-secondary);
+      color: var(--of-accent);
+    }
+    .task-icon svg { width: 20px; height: 20px; }
+    .task-copy { min-width: 0; }
+    .task-copy h3 { margin: 0; overflow-wrap: anywhere; }
+    .task-copy p { margin: .12rem 0 0; color: var(--of-text-secondary); font-size: .8125rem; }
+    .progress-line { margin-top: .55rem; display: flex; align-items: center; gap: .65rem; }
+    progress { width: min(240px, 100%); height: 6px; accent-color: var(--of-accent); }
+    .numeric { font-variant-numeric: tabular-nums; }
+    .task-action { justify-self: end; }
+
+    .account-strip {
+      margin-bottom: 1rem;
+      padding: .8rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      border-radius: 14px;
+      background: var(--of-surface-secondary);
+    }
+    .account-strip strong { display: block; }
+    .account-strip small { color: var(--of-text-secondary); }
+    .inline-meta { gap: .5rem; color: var(--of-text-secondary); font-size: .8125rem; }
+    .inline-meta svg { width: 16px; height: 16px; flex: none; }
+    .confirm-card { margin-top: 1rem; }
+    .confirm-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+    .confirm-card dl {
+      margin: 1rem 0;
+      display: grid;
+      grid-template-columns: minmax(80px, .35fr) 1fr;
+      gap: .45rem .8rem;
+      font-size: .875rem;
+    }
+    .confirm-card dt { color: var(--of-text-secondary); }
+    .confirm-card dd { margin: 0; overflow-wrap: anywhere; }
+    .actions { gap: .5rem; flex-wrap: wrap; }
+    .safety-copy { margin: .8rem 0 0; color: var(--of-text-secondary); font-size: .8125rem; }
+
+    details {
+      margin-top: .9rem;
+      padding-top: .9rem;
+      border-top: 1px solid var(--of-border);
+      color: var(--of-text-secondary);
+      font-size: .8125rem;
+    }
+    summary { width: fit-content; min-height: 44px; padding: .65rem .2rem; color: var(--of-accent); cursor: pointer; font-weight: 600; }
+    details p { margin: .35rem 0 0; }
+
+    .specimen { padding: 1.25rem; position: sticky; top: 88px; }
+    .specimen section + section { margin-top: 1.35rem; padding-top: 1.35rem; border-top: 1px solid var(--of-border); }
+    .specimen-label { margin: 0 0 .65rem; color: var(--of-text-secondary); font-size: .75rem; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
+    .type-display { margin: 0; font-size: 2rem; line-height: 1.2; font-weight: 600; letter-spacing: 0; }
+    .type-body { margin: .45rem 0 0; color: var(--of-text-secondary); }
+    .type-detail { margin: .45rem 0 0; color: var(--of-text-secondary); font: 400 .8125rem/1.55 var(--of-font-mono); overflow-wrap: anywhere; }
+    .swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; }
+    .swatch { aspect-ratio: 1; border: 1px solid var(--of-border); border-radius: 10px; }
+    .swatch.canvas { background: var(--of-canvas); }
+    .swatch.ink { background: var(--of-text); }
+    .swatch.accent { background: var(--of-accent); }
+    .swatch.success { background: var(--of-success); }
+    .component-actions { display: grid; gap: .5rem; }
+    .component-actions .button { width: 100%; }
+    .theme-switch { width: 100%; justify-content: stretch; }
+    .theme-switch button { flex: 1; }
+
+    .toast {
+      position: fixed;
+      right: max(1rem, calc((100vw - 1200px) / 2));
+      bottom: 1.25rem;
+      z-index: 30;
+      max-width: min(360px, calc(100vw - 2rem));
+      padding: .85rem 1rem;
+      border: 1px solid var(--of-border);
+      border-radius: 16px;
+      background: var(--of-surface-raised);
+      color: var(--of-text);
+      box-shadow: var(--of-shadow);
+      backdrop-filter: blur(16px);
+      opacity: 0;
+      transform: translateY(6px);
+      pointer-events: none;
+      transition: opacity var(--of-medium) var(--of-ease),
+        transform var(--of-medium) var(--of-ease);
+    }
+    .toast.visible { opacity: 1; transform: translateY(0); }
+    .toast strong { display: block; font-size: .9375rem; }
+    .toast span { color: var(--of-text-secondary); font-size: .8125rem; }
+
+    [hidden] { display: none !important; }
+    .no-js .segment { display: none; }
+    .no-js .workspace-panel + .workspace-panel { border-top: 1px solid var(--of-border); }
+    .no-js .theme-switch { display: none; }
+    .no-js .toast { display: none; }
+    html[data-input="keyboard"] .button,
+    html[data-input="keyboard"] .segment button,
+    html[data-input="keyboard"] .theme-switch button,
+    html[data-input="keyboard"] .workspace-panel,
+    html[data-input="keyboard"] .toast { transition: none; }
+
+    @media (hover: hover) and (pointer: fine) {
+      .button:hover { background: var(--of-accent-hover); }
+      .button.secondary:hover { border-color: var(--of-control-border); background: var(--of-surface); }
+      .button.text:hover { background: var(--of-surface-secondary); color: var(--of-accent-hover); }
+      .button.danger:hover { border-color: var(--of-danger); background: var(--of-danger-bg); }
+      .preview-nav a:hover { color: var(--of-text); background: var(--of-surface-secondary); }
+    }
+
+    @media (max-width: 1023px) {
+      .preview-layout { grid-template-columns: 1fr; }
+      .specimen { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+      .specimen section + section { margin: 0; padding: 0 0 0 1.25rem; border: 0; border-left: 1px solid var(--of-border); }
+      .specimen section:nth-child(3) { padding: 1.25rem 0 0; border: 0; border-top: 1px solid var(--of-border); }
+    }
+
+    @media (max-width: 767px) {
+      .topbar-inner, main { width: min(100% - 2rem, 1200px); }
+      .topbar-inner { min-height: 58px; }
+      .preview-nav { display: none; }
+      main { padding: 2.5rem 0 4rem; }
+      .hero { margin-bottom: 2rem; }
+      .stage-head, .workspace-panel { padding: 1rem; }
+      .stage-head { align-items: stretch; flex-direction: column; }
+      .segment button { flex: 1; }
+      .field-grid { grid-template-columns: 1fr; }
+      .task-row { grid-template-columns: 42px minmax(0, 1fr); }
+      .task-action { grid-column: 1 / -1; justify-self: stretch; }
+      .task-action .button { width: 100%; }
+      .specimen { display: block; padding: 1rem; }
+      .specimen section + section, .specimen section:nth-child(3) { margin-top: 1.25rem; padding: 1.25rem 0 0; border: 0; border-top: 1px solid var(--of-border); }
+    }
+
+    @media (max-width: 420px) {
+      .brand span { font-size: .9375rem; }
+      .workspace-title, .confirm-card-head, .account-strip { align-items: flex-start; flex-direction: column; }
+      .confirm-card dl { grid-template-columns: 1fr; gap: .08rem; }
+      .confirm-card dd + dt { margin-top: .45rem; }
+      .actions { display: grid; width: 100%; }
+      .actions .button { width: 100%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+      .button, .segment button, .theme-switch button, .workspace-panel,
+      .status, .toast { transition-duration: .01ms !important; transform: none !important; }
+    }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .topbar, .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+    }
+
+    @media (prefers-contrast: more) {
+      .panel, .form-block, .confirm-card, input, select, .button.secondary { border-width: 2px; }
+      .topbar, .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .status { outline: 1px solid currentColor; }
+    }
+
+    @media (forced-colors: active) {
+      .topbar, .toast { background: Canvas; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .panel, .form-block, .confirm-card, .button, input, select { border: 1px solid CanvasText; }
+      .brand-mark, .status, .task-icon, .swatch { forced-color-adjust: none; border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+      .button:focus-visible, a:focus-visible, input:focus-visible,
+      select:focus-visible, summary:focus-visible { outline-color: Highlight; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M13.8 2.7c.5 3-1.4 4.5-3 6.1-1.6 1.7-2.9 3.4-2.1 5.8.4-1.5 1.4-2.5 2.6-3.4-.2 2.4 1.1 3.4 2.2 4.6.8.9 1.4 1.8 1.2 3.2 2.3-1.3 3.8-3.6 3.7-6.3-.1-3.6-2.2-6.3-4.6-10Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.2 20.5c-2-1.6-3-3.6-2.8-5.9.1-1.8.8-3.4 2-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </span>
+        <span>Open-Flame</span>
+      </div>
+      <nav class="preview-nav" aria-label="设计预览导航">
+        <a href="#preview" aria-current="page">工作台</a>
+        <a href="#components">组件</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="preview">
+    <header class="hero">
+      <p class="eyebrow">设计预览 · 合成示例，不连接平台</p>
+      <h1>Open-Flame 工作台</h1>
+      <p class="lead">下载、整理、核对草稿。清晰的层级，让每一步操作都从容。</p>
+      <p class="hero-note">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5v6M12 7.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>视觉基准 1.0 · 本页操作仅演示界面反馈。生产前端将在最终 T16 阶段迁移。</span>
+      </p>
+    </header>
+
+    <div class="preview-layout">
+      <section class="panel stage" aria-labelledby="stage-title">
+        <header class="stage-head">
+          <div>
+            <h2 id="stage-title">工作台片段</h2>
+            <p>切换查看同一设计语言下的两条核心路径。</p>
+          </div>
+          <div class="segment" role="tablist" aria-label="示例切换">
+            <button id="download-tab" type="button" role="tab" aria-selected="true" aria-controls="download-sample">下载</button>
+            <button id="upload-tab" type="button" role="tab" aria-selected="false" aria-controls="upload-sample" tabindex="-1">上传</button>
+          </div>
+        </header>
+
+        <section id="download-sample" class="workspace-panel" role="tabpanel" aria-labelledby="download-tab" data-selected="true">
+          <div class="workspace-title">
+            <div><p class="eyebrow">下载工作台</p><h2>创建下载任务</h2><p>常用操作靠前，运行诊断按需展开。</p></div>
+            <span class="status"><span class="status-dot"></span>合成状态 · 就绪</span>
+          </div>
+          <div class="form-block">
+            <div class="field-grid">
+              <div>
+                <label for="sample-link">分享链接或文本</label>
+                <input id="sample-link" value="https://example.invalid/synthetic-video" aria-describedby="sample-link-help">
+              </div>
+              <button class="button" type="button" data-preview-action="已预览创建任务" data-preview-detail="仅展示本地反馈，没有创建下载任务。">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                预览创建任务
+              </button>
+            </div>
+            <p id="sample-link-help" class="safety-copy">示例输入不可访问；此按钮只触发本页 toast。</p>
+          </div>
+          <div class="task-list" aria-label="合成下载任务">
+            <article class="task-row">
+              <span class="task-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="m10 9 5 3-5 3V9Z" fill="currentColor"/></svg>
+              </span>
+              <div class="task-copy">
+                <h3>合成演示视频 · Bilibili</h3>
+                <p>正在保存原始视频 · <span class="numeric">68%</span></p>
+                <div class="progress-line"><progress value="68" max="100" aria-label="合成任务进度 68%"></progress></div>
+              </div>
+              <div class="task-action"><span class="status warning"><span class="status-dot"></span>处理中</span></div>
+            </article>
+            <article class="task-row">
+              <span class="task-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5 9.2 17 19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div class="task-copy"><h3>合成成品已就绪</h3><p>MP4 · <span class="numeric">42.8 MB</span> · SHA-256 已核验</p></div>
+              <div class="task-action"><button class="button secondary" type="button" data-preview-action="已预览成品操作" data-preview-detail="没有读取或导入任何媒体。">预览成品操作</button></div>
+            </article>
+          </div>
+          <details>
+            <summary>查看预览运行详情</summary>
+            <p>合成工具状态：ready · 合成 Worker：在线。诊断只作为排版样例，不代表当前应用状态。</p>
+          </details>
+        </section>
+
+        <section id="upload-sample" class="workspace-panel" role="tabpanel" aria-labelledby="upload-tab" data-selected="false">
+          <div class="workspace-title">
+            <div><p class="eyebrow">上传工作台</p><h2>核对本地草稿</h2><p>账号、来源和最终动作在确认前保持可见。</p></div>
+            <span class="status warning"><span class="status-dot"></span>等待明确确认</span>
+          </div>
+          <div class="account-strip">
+            <div><strong>Bilibili · 合成账号 A</strong><small>仅为视觉示例，没有登录状态</small></div>
+            <span class="inline-meta">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6V10Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              本地草稿
+            </span>
+          </div>
+          <div class="form-block">
+            <label for="sample-title">标题</label>
+            <input id="sample-title" value="合成示例：海边的清晨" maxlength="80">
+            <p class="safety-copy">输入可编辑，但不会保存或发送。</p>
+          </div>
+          <article class="confirm-card">
+            <div class="confirm-card-head">
+              <div><h3>确认摘要</h3><p class="safety-copy">真正产品会逐项确认；登录成功不会触发上传。</p></div>
+              <span class="status warning"><span class="status-dot"></span>待核对</span>
+            </div>
+            <dl>
+              <dt>接收账号</dt><dd>Bilibili · 合成账号 A</dd>
+              <dt>视频来源</dt><dd>synthetic-morning.mp4 · <span class="numeric">42.8 MB</span></dd>
+              <dt>投稿模式</dt><dd>立即投稿 · 原创 · 分区 249（合成）</dd>
+              <dt>标题</dt><dd id="sample-title-summary">合成示例：海边的清晨</dd>
+            </dl>
+            <div class="actions">
+              <button class="button" type="button" data-preview-action="已预览确认投稿" data-preview-detail="没有发出确认请求，也没有连接任何平台。">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5 9.2 17 19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                预览确认投稿
+              </button>
+              <button class="button secondary" type="button" data-preview-action="已预览取消草稿" data-preview-detail="合成草稿保持不变。">预览取消</button>
+            </div>
+            <p class="safety-copy">预览按钮不等于平台已接收、审核通过或公开。</p>
+          </article>
+        </section>
+      </section>
+
+      <aside id="components" class="panel specimen" aria-labelledby="components-title">
+        <section>
+          <p class="specimen-label" id="components-title">Typography</p>
+          <p class="type-display">安静而清晰</p>
+          <p class="type-body">系统字体、舒展正文与克制字重共同建立层级。</p>
+          <p class="type-detail">SHA-256 · a3f2…9c10</p>
+        </section>
+        <section>
+          <p class="specimen-label">Color</p>
+          <div class="swatches" aria-label="画布、墨色、强调色和成功色">
+            <span class="swatch canvas" title="Canvas"></span><span class="swatch ink" title="Ink"></span><span class="swatch accent" title="Accent"></span><span class="swatch success" title="Success"></span>
+          </div>
+        </section>
+        <section>
+          <p class="specimen-label">Theme</p>
+          <div class="theme-switch" role="group" aria-label="预览主题">
+            <button type="button" data-theme-choice="system" aria-pressed="true">系统</button>
+            <button type="button" data-theme-choice="light" aria-pressed="false">浅色</button>
+            <button type="button" data-theme-choice="dark" aria-pressed="false">深色</button>
+          </div>
+        </section>
+        <section>
+          <p class="specimen-label">Buttons</p>
+          <div class="component-actions">
+            <button class="button" type="button" data-preview-action="主操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览主操作</button>
+            <button class="button secondary" type="button" data-preview-action="次操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览次操作</button>
+            <button class="button text" type="button" data-preview-action="文本操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览文本操作</button>
+            <button class="button danger" type="button" data-preview-action="危险操作预览" data-preview-detail="没有删除任何内容。">预览危险操作</button>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">
+    <strong id="toast-title">预览反馈</strong><span id="toast-detail">没有执行产品动作。</span>
+  </div>
+  <noscript><p style="margin:1rem">JavaScript 已关闭：下载与上传片段仍完整显示，主题跟随系统；所有按钮均为无操作预览。</p></noscript>
+
+  <script>
+    (() => {
+      'use strict';
+      const root = document.documentElement;
+      root.classList.remove('no-js');
+      root.classList.add('js');
+      document.addEventListener('keydown', () => { root.dataset.input = 'keyboard'; }, true);
+      const sampleTitle = document.getElementById('sample-title');
+      sampleTitle.addEventListener('input', () => {
+        document.getElementById('sample-title-summary').textContent = sampleTitle.value || '尚未填写（合成示例）';
+      });
+
+      const choices = [...document.querySelectorAll('[data-theme-choice]')];
+      let theme = 'system';
+      try {
+        const stored = localStorage.getItem('open-flame-design-preview-theme');
+        if (['system', 'light', 'dark'].includes(stored)) theme = stored;
+      } catch {}
+
+      function applyTheme(value, persist) {
+        theme = value;
+        root.dataset.theme = value;
+        for (const button of choices) {
+          button.setAttribute('aria-pressed', String(button.dataset.themeChoice === value));
+        }
+        if (persist) {
+          try { localStorage.setItem('open-flame-design-preview-theme', value); } catch {}
+        }
+      }
+      applyTheme(theme, false);
+      for (const button of choices) {
+        button.addEventListener('click', () => applyTheme(button.dataset.themeChoice, true));
+      }
+
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+      let panelFrame = 0;
+      for (const panel of panels) panel.hidden = panel.dataset.selected !== 'true';
+      function selectTab(tab, animate = false) {
+        if (tab.getAttribute('aria-selected') === 'true') return;
+        cancelAnimationFrame(panelFrame);
+        for (const candidate of tabs) {
+          const active = candidate === tab;
+          candidate.setAttribute('aria-selected', String(active));
+          candidate.tabIndex = active ? 0 : -1;
+        }
+        for (const panel of panels) {
+          const active = panel.id === tab.getAttribute('aria-controls');
+          panel.classList.remove('is-entering');
+          panel.hidden = !active;
+          panel.dataset.selected = String(active);
+          if (active && animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            panel.classList.add('is-entering');
+            panelFrame = requestAnimationFrame(() => panel.classList.remove('is-entering'));
+          }
+        }
+      }
+      for (const [index, tab] of tabs.entries()) {
+        tab.addEventListener('click', event => selectTab(tab, event.detail > 0));
+        tab.addEventListener('keydown', event => {
+          const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+          let target = null;
+          if (offset) target = tabs[(index + offset + tabs.length) % tabs.length];
+          if (event.key === 'Home') target = tabs[0];
+          if (event.key === 'End') target = tabs[tabs.length - 1];
+          if (!target) return;
+          event.preventDefault();
+          target.focus();
+          selectTab(target);
+        });
+      }
+
+      let toastTimer = 0;
+      const toast = document.getElementById('toast');
+      function showToast(title, detail) {
+        clearTimeout(toastTimer);
+        document.getElementById('toast-title').textContent = title;
+        document.getElementById('toast-detail').textContent = detail;
+        toast.classList.add('visible');
+        toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 2800);
+      }
+      for (const button of document.querySelectorAll('[data-preview-action]')) {
+        button.addEventListener('click', () => showToast(button.dataset.previewAction, button.dataset.previewDetail));
+      }
+
+      let pressed = null;
+      document.addEventListener('pointerdown', event => {
+        root.dataset.input = 'pointer';
+        const button = event.target.closest('button');
+        if (!button || button.disabled) return;
+        pressed = button;
+        button.classList.add('is-pressed');
+      });
+      function releasePress() {
+        if (pressed) pressed.classList.remove('is-pressed');
+        pressed = null;
+      }
+      document.addEventListener('pointerup', releasePress);
+      document.addEventListener('pointercancel', releasePress);
+      window.addEventListener('blur', releasePress);
+      window.addEventListener('pagehide', () => {
+        clearTimeout(toastTimer);
+        cancelAnimationFrame(panelFrame);
+        for (const panel of panels) panel.classList.remove('is-entering');
+        toast.classList.remove('visible');
+        releasePress();
+      });
+    })();
+  </script>
+</body>
+</html>

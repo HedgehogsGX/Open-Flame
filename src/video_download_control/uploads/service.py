@@ -21,35 +21,20 @@ from uuid import uuid4
 
 from .contracts import BackendResult, PLATFORMS, UploadBackend, UploadError, UploadRequest
 from .login_progress import validate_update
+from .schema import UploadSchemaError, initialize_upload_schema, validate_upload_schema
 
 MAX_SOURCE_BYTES = 2 * 1024**3
 TITLE_LIMITS = {"bilibili": 80, "douyin": 30, "tencent": 100}
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
-_DDL = """
-CREATE TABLE IF NOT EXISTS metadata(version INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS accounts(
- id TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL,
- auth_state TEXT NOT NULL DEFAULT 'unchecked', code TEXT NOT NULL DEFAULT '',
- created_at TEXT NOT NULL, UNIQUE(platform,name));
-CREATE TABLE IF NOT EXISTS sources(
- id TEXT PRIMARY KEY, name TEXT NOT NULL, suffix TEXT NOT NULL,
- size INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS jobs(
- id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
- source_id TEXT NOT NULL REFERENCES sources(id), title TEXT NOT NULL,
- description TEXT NOT NULL, tags TEXT NOT NULL, category_id INTEGER,
- mode TEXT NOT NULL, copyright INTEGER NOT NULL, source_credit TEXT NOT NULL,
- state TEXT NOT NULL DEFAULT 'draft', code TEXT NOT NULL DEFAULT '',
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- retry_of TEXT REFERENCES jobs(id));
-CREATE TABLE IF NOT EXISTS operations(
- id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
- action TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
- code TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS requests(
- id TEXT PRIMARY KEY, digest TEXT NOT NULL, job_ids TEXT NOT NULL);
-"""
+_PAGE_CURSOR = re.compile(r"^([0-3]):([1-9][0-9]*)$")
+_JOB_PRIORITY = "CASE WHEN j.state='running' THEN 0 WHEN j.state='queued' THEN 1 WHEN j.state IN ('draft','unknown','failed','canceled') THEN 2 ELSE 3 END"
+_SOURCE_PRIORITY = ("CASE WHEN EXISTS(SELECT 1 FROM jobs active WHERE active.source_id=s.id "
+                    "AND active.state='running') THEN 0 "
+                    "WHEN EXISTS(SELECT 1 FROM jobs queued WHERE queued.source_id=s.id "
+                    "AND queued.state='queued') THEN 1 "
+                    "WHEN EXISTS(SELECT 1 FROM jobs actionable WHERE actionable.source_id=s.id "
+                    "AND actionable.state IN ('draft','unknown','failed','canceled')) THEN 2 ELSE 3 END")
 
 
 def default_upload_root(data_root: Path) -> Path:
@@ -130,32 +115,25 @@ class UploadService:
         for ancestor in reversed((self.root, *self.root.parents)):
             if ancestor.exists():
                 _plain(ancestor, directory=True)
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        database_path = self.root / "uploads.sqlite3"
+        if database_path.exists():
+            _plain(database_path)
+            try:
+                validate_upload_schema(database_path)
+            except UploadSchemaError:
+                raise UploadError("upload_schema_unsupported") from None
+        else:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _plain(self.root, directory=True)
+            try:
+                initialize_upload_schema(database_path)
+            except UploadSchemaError:
+                raise UploadError("upload_schema_unsupported") from None
         for name in ("media", "incoming", "private"):
             path = self.root / name
             path.mkdir(exist_ok=True, mode=0o700)
             _plain(path, directory=True)
-        self.database_path = self.root / "uploads.sqlite3"
-        if self.database_path.exists():
-            _plain(self.database_path)
-            # Never apply our DDL to an unrelated or newer database.
-            try:
-                existing = sqlite3.connect(self.database_path)
-                try:
-                    versions = existing.execute("SELECT version FROM metadata").fetchall()
-                finally:
-                    existing.close()
-            except sqlite3.Error:
-                raise UploadError("upload_schema_unsupported") from None
-            if versions != [(1,)]:
-                raise UploadError("upload_schema_unsupported")
-        with self._db() as db:
-            db.executescript(_DDL)
-            versions = db.execute("SELECT version FROM metadata").fetchall()
-            if not versions:
-                db.execute("INSERT INTO metadata VALUES(1)")
-            elif len(versions) != 1 or versions[0][0] != 1:
-                raise UploadError("upload_schema_unsupported")
+        self.database_path = database_path
         if backend is None:
             from .backend import SauBackend
             backend = SauBackend(self.root)
@@ -168,14 +146,16 @@ class UploadService:
         self._login_presentations: dict[str, dict] = {}
         self._thread: threading.Thread | None = None
         self._lock = _SchedulerLock(self.root / ".worker.lock")
+        self._scheduler_state = "stopped"
+        self._scheduler_code = ""
 
     @contextmanager
-    def _db(self):
-        db = sqlite3.connect(self.database_path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA journal_mode=WAL")
+    def _db(self, *, timeout: float = 10):
+        db = sqlite3.connect(self.database_path, timeout=timeout)
         try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("PRAGMA journal_mode=WAL")
             with db:
                 yield db
         finally:
@@ -184,22 +164,28 @@ class UploadService:
     def start(self) -> None:
         with self._active_guard:
             if self._thread is not None and self._thread.is_alive():
-                return
+                if self._scheduler_state != "faulted":
+                    return
+                self._thread.join(timeout=1)
+                if self._thread.is_alive():
+                    raise UploadError("upload_worker_stopping")
             if not self._lock.acquire():
+                self._scheduler_state = "standby"
+                self._scheduler_code = "scheduler_owned_by_other_instance"
                 return  # Another application owns execution; read/queue still work.
             try:
+                was_faulted = self._scheduler_state == "faulted"
                 self._login_presentations.clear()
-                with self._db() as db:
-                    now = _now()
-                    db.execute("UPDATE jobs SET state='unknown',code='interrupted_result_unknown',updated_at=? WHERE state='running'", (now,))
-                    # Approval from a previous application run is not silently replayed.
-                    db.execute("UPDATE jobs SET state='draft',code='restart_confirmation_required',updated_at=? WHERE state='queued'", (now,))
-                    db.execute("UPDATE operations SET state='failed',code='operation_interrupted',updated_at=? WHERE state IN ('running','queued')", (now,))
-                    db.execute("UPDATE accounts SET auth_state='unchecked',code='operation_interrupted' WHERE auth_state='checking'")
+                self._recover_interrupted_records()
                 self._shutdown.clear()
+                self._scheduler_state = "running"
+                self._scheduler_code = "scheduler_recovered" if was_faulted else ""
                 self._thread = threading.Thread(target=self._run, name="open-flame-uploads", daemon=True)
                 self._thread.start()
-            except BaseException:
+            except BaseException as exc:
+                self._scheduler_state = "faulted"
+                self._scheduler_code = ("scheduler_database_unavailable"
+                                        if isinstance(exc, sqlite3.Error) else "scheduler_failed")
                 self._lock.release()
                 raise
 
@@ -214,10 +200,17 @@ class UploadService:
             thread.join(timeout=20)
             if thread.is_alive():
                 raise UploadError("upload_worker_stopping")
+        with self._active_guard:
+            if self._scheduler_state != "faulted":
+                self._scheduler_state = "stopped"
+                self._scheduler_code = ""
 
     def status(self) -> dict:
         return {"backend": self.backend.inspect(),
-                "worker_running": bool(self._thread and self._thread.is_alive()),
+                "worker_running": bool(self._thread and self._thread.is_alive()
+                                       and self._scheduler_state != "faulted"),
+                "scheduler_state": self._scheduler_state,
+                "scheduler_code": self._scheduler_code,
                 "platforms": [{"id": p, "name": name, "title_limit": TITLE_LIMITS[p],
                                "modes": ["publish", "draft"] if p == "tencent" else ["publish"]}
                               for p, name in PLATFORMS.items()],
@@ -347,9 +340,47 @@ class UploadService:
                     self._operation_stop.set()
             return dict(db.execute("SELECT * FROM operations WHERE id=?", (operation_id,)).fetchone())
 
-    def sources(self) -> list[dict]:
+    @staticmethod
+    def _page_key(cursor: str | None, limit: int) -> tuple[int, int] | None:
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise UploadError("invalid_page_limit")
+        if cursor is None:
+            return None
+        if not isinstance(cursor, str) or not (match := _PAGE_CURSOR.fullmatch(cursor)):
+            raise UploadError("invalid_page_cursor")
+        rowid = int(match.group(2))
+        if rowid > 9_223_372_036_854_775_807:
+            raise UploadError("invalid_page_cursor")
+        return int(match.group(1)), rowid
+
+    def source_page(self, *, cursor: str | None = None, limit: int = 50) -> dict:
+        key = self._page_key(cursor, limit)
+        query = ("SELECT * FROM (SELECT s.*,s.rowid AS _page_rowid," + _SOURCE_PRIORITY
+                 + " AS _page_bucket FROM sources s) page")
+        parameters: list[int] = []
+        if key is not None:
+            query += " WHERE (_page_bucket>? OR (_page_bucket=? AND _page_rowid<?))"
+            parameters.extend((key[0], key[0], key[1]))
+        query += " ORDER BY _page_bucket,_page_rowid DESC LIMIT ?"
+        parameters.append(limit + 1)
         with self._db() as db:
-            return [self._source_public(row) for row in db.execute("SELECT * FROM sources ORDER BY created_at DESC,rowid DESC LIMIT 200")]
+            rows = list(db.execute(query, parameters))
+        selected = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit and selected:
+            next_cursor = f"{selected[-1]['_page_bucket']}:{selected[-1]['_page_rowid']}"
+        return {"items": [self._source_public(row) for row in selected],
+                "next_cursor": next_cursor}
+
+    def sources(self) -> list[dict]:
+        return self.source_page(limit=200)["items"]
+
+    def source(self, source_id: str) -> dict:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM sources WHERE id=?", (_identifier(source_id),)).fetchone()
+        if row is None:
+            raise UploadError("source_not_found")
+        return self._source_public(row)
 
     @staticmethod
     def _source_public(row) -> dict:
@@ -429,16 +460,57 @@ class UploadService:
     @staticmethod
     def _job_public(row) -> dict:
         result = dict(row)
+        result.pop("_page_bucket", None)
+        result.pop("_page_rowid", None)
         result["tags"] = json.loads(result["tags"])
         return result
 
     @staticmethod
     def _job_query() -> str:
-        return "SELECT j.*,a.platform,a.name AS account_name FROM jobs j JOIN accounts a ON a.id=j.account_id"
+        return ("SELECT j.*,a.platform,a.name AS account_name,s.name AS source_name,"
+                "s.size AS source_size,s.sha256 AS source_sha256 FROM jobs j "
+                "JOIN accounts a ON a.id=j.account_id JOIN sources s ON s.id=j.source_id")
+
+    def job_page(self, *, cursor: str | None = None, limit: int = 50) -> dict:
+        key = self._page_key(cursor, limit)
+        query = ("SELECT * FROM (SELECT j.*,a.platform,a.name AS account_name,"
+                 "s.name AS source_name,s.size AS source_size,s.sha256 AS source_sha256,"
+                 "j.rowid AS _page_rowid," + _JOB_PRIORITY
+                 + " AS _page_bucket FROM jobs j JOIN accounts a ON a.id=j.account_id "
+                   "JOIN sources s ON s.id=j.source_id) page")
+        parameters: list[int] = []
+        if key is not None:
+            query += " WHERE (_page_bucket>? OR (_page_bucket=? AND _page_rowid<?))"
+            parameters.extend((key[0], key[0], key[1]))
+        query += " ORDER BY _page_bucket,_page_rowid DESC LIMIT ?"
+        parameters.append(limit + 1)
+        with self._db() as db:
+            rows = list(db.execute(query, parameters))
+        selected = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit and selected:
+            next_cursor = f"{selected[-1]['_page_bucket']}:{selected[-1]['_page_rowid']}"
+        return {"items": [self._job_public(row) for row in selected],
+                "next_cursor": next_cursor}
 
     def jobs(self) -> list[dict]:
+        return self.job_page(limit=200)["items"]
+
+    def job(self, job_id: str) -> dict:
         with self._db() as db:
-            return [self._job_public(row) for row in db.execute(self._job_query() + " ORDER BY j.created_at DESC,j.rowid DESC LIMIT 200")]
+            return self._get_job(db, job_id)
+
+    def jobs_by_ids(self, job_ids: list[str]) -> list[dict]:
+        if (not isinstance(job_ids, list) or not 1 <= len(job_ids) <= 64
+                or len(set(job_ids)) != len(job_ids)):
+            raise UploadError("invalid_job_ids")
+        for job_id in job_ids:
+            _identifier(job_id)
+        placeholders = ",".join("?" for _ in job_ids)
+        with self._db() as db:
+            rows = db.execute(self._job_query() + f" WHERE j.id IN ({placeholders})", job_ids)
+            records = {row["id"]: self._job_public(row) for row in rows}
+        return [records[job_id] for job_id in job_ids if job_id in records]
 
     def _get_job(self, db, job_id: str) -> dict:
         row = db.execute(self._job_query() + " WHERE j.id=?", (_identifier(job_id),)).fetchone()
@@ -575,17 +647,53 @@ class UploadService:
     def _run(self) -> None:
         try:
             while not self._shutdown.is_set():
-                claimed = self._claim()
-                if claimed is None:
-                    self._wake.wait(0.5)
-                    self._wake.clear()
-                    continue
-                kind, row = claimed
-                self._execute(kind, row)
-                with self._active_guard:
-                    self._active_id = None
+                try:
+                    claimed = self._claim()
+                    if claimed is None:
+                        self._wake.wait(0.5)
+                        self._wake.clear()
+                        continue
+                    kind, row = claimed
+                    self._execute(kind, row)
+                    with self._active_guard:
+                        self._active_id = None
+                except Exception as exc:
+                    with self._active_guard:
+                        self._active_id = None
+                        self._operation_stop.set()
+                    if self._shutdown.is_set() or not self._recover_scheduler_failure(exc):
+                        return
         finally:
             self._lock.release()
+
+    def _recover_interrupted_records(self, *, timeout: float = 10) -> None:
+        with self._db(timeout=timeout) as db:
+            now = _now()
+            db.execute("UPDATE jobs SET state='unknown',code='interrupted_result_unknown',updated_at=? WHERE state='running'", (now,))
+            # Approval from a previous application run is not silently replayed.
+            db.execute("UPDATE jobs SET state='draft',code='restart_confirmation_required',updated_at=? WHERE state='queued'", (now,))
+            db.execute("UPDATE operations SET state='failed',code='operation_interrupted',updated_at=? WHERE state IN ('running','queued')", (now,))
+            db.execute("UPDATE accounts SET auth_state='unchecked',code='operation_interrupted' WHERE auth_state='checking'")
+
+    def _recover_scheduler_failure(self, exc: Exception) -> bool:
+        with self._active_guard:
+            self._scheduler_state = "recovering"
+            self._scheduler_code = ("scheduler_database_unavailable"
+                                    if isinstance(exc, sqlite3.Error) else "scheduler_failed")
+        for delay in (0.0, 0.05, 0.15):
+            if delay and self._shutdown.wait(delay):
+                return False
+            try:
+                self._recover_interrupted_records(timeout=0.25)
+            except Exception:
+                continue
+            with self._active_guard:
+                self._scheduler_state = "running"
+                self._scheduler_code = "scheduler_recovered"
+            return True
+        with self._active_guard:
+            self._scheduler_state = "faulted"
+        return False
 
     def _execute(self, kind: str, row: dict) -> None:
         monitor_done = threading.Event()

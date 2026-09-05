@@ -2,13 +2,17 @@
 
 这是一个面向单机、单管理员、私有环境的媒体控制面，包含下载器和需要逐项确认的上传器。上传与下载使用独立任务库及账号状态。
 
-> 当前开发版本为 **0.24.2**，下载数据库仍为 **Schema 11**，上传库独立使用 **Schema 1**。首批上传支持 Bilibili、抖音和视频号：页面内扫码登录、本地视频或下载成品导入、多账号草稿预览、逐项确认、取消及结果不确定时的人工核对。Bilibili 已由用户扫码并通过账号检查；三平台真实投稿和审核结果由外部测试员分别验收；小红书等平台后续维护。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
+> 当前开发版本为 **0.24.3**，下载数据库仍为 **Schema 11**，上传库独立使用 **Schema 1**。首批上传支持 Bilibili、抖音和视频号：页面内扫码登录、本地视频或下载成品导入、多账号草稿预览、逐项确认、取消及结果不确定时的人工核对。Bilibili 已由用户扫码并通过账号检查；三平台真实投稿和审核结果由外部测试员分别验收；小红书等平台后续维护。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
-外部测试入口：[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)，包含 `codex/uploader-first-platforms` 分支的源码获取与安装步骤。从下载成品点击“用于上传”，导入后创建本地草稿，核对后才由测试员逐项确认。
+外部测试入口：[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)，包含固定提交/受控源码 ZIP 的获取、安装及三项构建身份记录步骤。从下载成品点击“用于上传”，导入后创建本地草稿，核对后才由测试员逐项确认。
+
+2026-09-05 的八项 Debug 发现已进入 0.24.3 修复：上传异常恢复、完整运行时校验、原件完整性与类型、Worker 状态、历史列表、上传库结构和运维文档。当前提交前复验及追加边界修复见[最终源码审查](validation/iteration-0.24.3-final-review.md)；[此前修复记录](validation/iteration-0.24.3-debug-fixes.md)和[原始核验报告](validation/full-debug-20260905.md)保留各自历史构建，[后续执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)跟踪剩余工作。旧上传运行时须按[升级步骤](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，账号和上传数据保留。
+
+前端升级安排在执行计划最后的 T16：Apple 风格、精致排版与克制动效，覆盖下载/上传完整界面。后续开发统一遵循[设计规范](docs/DESIGN_SYSTEM.md)；可打开[交互式视觉基准](docs/design-preview.html)查看合成示例。规范已建立，生产页面迁移尚未实施。
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。现有下载备份不包含上传目录。
 
-首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。本轮证据见 [0.24.2 下载上传集成验收](validation/iteration-0.24.2-integration-evidence.md)；[0.23.0 安装验收](validation/iteration-0.23.0-source-setup-evidence.md)及更早记录保持为历史。
+首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。此前证据见 [0.24.2 下载上传集成验收](validation/iteration-0.24.2-integration-evidence.md)；[0.23.0 安装验收](validation/iteration-0.23.0-source-setup-evidence.md)及更早记录保持为历史。
 
 上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
 

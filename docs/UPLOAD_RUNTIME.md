@@ -35,7 +35,26 @@ python -m video_download_control.uploads.runtime_setup `
   --root "$env:LOCALAPPDATA\Open-Flame\video-download-control\data-uploads" --check
 ```
 
-源码用户可在上面的 `try` 块内把 `--python ...` 改为 `--check`，保留临时 `PYTHONPATH` 和 `.venv` 解释器。`--check` 只检查已有运行时。重复安装会复核已有环境；不跟随 latest 更新。发现完整 manifest 已被改坏时会报告 `runtime_invalid_requires_new_root`，不会为未知修改重新签发通过标记。
+源码用户可在上面的 `try` 块内把 `--python ...` 改为 `--check`，保留临时 `PYTHONPATH` 和 `.venv` 解释器。`--check` 只检查已有运行时；重复安装复核已有环境，不跟随 latest 更新，也不为已有未知修改重新签发通过标记。
+
+## 从旧运行时升级
+
+0.24.3 使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。
+
+1. 正常停止使用该上传数据目录的所有 Open-Flame 实例，确认没有仍在运行的扫码或投稿。已经开始且结果不明的投稿须先核对远端。
+2. 核对实际 `--root`。仅把其中的 `runtime` 目录改名为一个尚不存在的留档名称，例如 `runtime-legacy-20260905`；保留 `uploads.sqlite3`、`media`、`private` 和其他数据原位。不要合并新旧运行时，也不要只删除 manifest。
+3. 使用上方安装命令，仍传入同一个 `--root`，创建新的 `runtime`。可重新下载固定组件；只有两份固定 SHA 已核验的 SAU/biliup 归档可预置在新 `runtime/archives`，不能复用旧源码树、venv 或浏览器树来生成新标记。
+4. `--check` 通过后启动应用。账号记录和本地登录文件保留；平台是否仍接受该登录态由本人发起“检查登录态”确认。重建运行时本身不会登录或上传。失败时保留固定错误码及旧目录，不修改旧 manifest 伪造通过。
+
+## 完整性检查边界
+
+Schema 2 比对运行时的完整文件集合与 SHA-256，包含 SAU 源码、biliup、venv 与依赖、实际 Chromium 文件，以及 venv 所依赖的外部 CPython 基目录。SAU/biliup 还与硬编码归档 hash 对齐，17 包的 wheel 与锁定 hash/安装内容对齐；新增可加载文件、缺失项、内容变化或符号链接/reparse 重定向使环境不可用。外部 CPython 更新后也须重新准备运行时。
+
+页面状态最多缓存 10 秒，显示最近检查的年龄；manifest 的文件身份变化立即使结果缓存失效。缓存到期后重新枚举集合，并按文件身份、大小和时间戳复用进程内的散列缓存；因此普通状态页对运行时漂移的反馈有界滞后，不作为执行授权。开始登录、检查账号或上传之前以及 CLI `--check` 都绕过这些缓存执行完整核验。`__pycache__` 中的普通 `.pyc` 允许存在，但桥接解释器使用 `-I -B` 和每次操作独立的空 `pycache_prefix`，避免读取相邻缓存；其他位置的 `.pyc` 拒绝。账号和浏览器 profile 写入私有操作目录。
+
+manifest 是本机运维完整性记录，未做数字签名。Chromium 与 CPython 以安装时的基线检测后续漂移；不能声称已独立验证其发行签名，或能够抵御同权限用户同时重写应用、锁和 manifest。页面缓存也不是执行授权。检测耗时与实际安装结果见 [本轮修复记录](../validation/iteration-0.24.3-debug-fixes.md)。
+
+执行入口和状态页面都保留 Windows 平台门禁；非 Windows 不因 manifest 完整而获得运行授权。CLI 安装及 `--check` 在创建目录或获取锁前拒绝 symlink/junction 重定向根目录，避免在被拒绝的目标留下锁文件。最终补修证据见 [源码审查记录](../validation/iteration-0.24.3-final-review.md)。
 
 ## 固定来源
 
@@ -52,7 +71,7 @@ python -m video_download_control.uploads.runtime_setup `
 
 | 路径 | 内容 |
 | --- | --- |
-| `root/runtime/` | 固定源码、17 包独立 venv、biliup、Chromium、散列 manifest |
+| `root/runtime/` | 固定归档、17 包 wheel 与独立 venv、源码、biliup、Chromium、Schema 2 散列 manifest |
 | `root/private/accounts/<platform>/<id>.json` | 独立上传账户状态；UI 不提供 Cookie 下载或原文 |
 | `root/private/operations/` | 单次操作参数、临时浏览器 profile、有限结果文件；结束后清理 |
 
@@ -75,5 +94,6 @@ Bilibili 使用已有 Segno 生成官方 TV 登录二维码，保存的真实 ap
 - `draft_saved/upstream_draft_saved`：视频号保存草稿后进入明确同源列表路由。
 - `unknown`：执行中断、平台返回缺少明确确认、取消或超时；先检查平台后台，再决定是否创建新任务。不会自动重发。
 - `runtime_missing`、`runtime_invalid`、`runtime_busy`：未安装、完整性检查失败或安装正在占用该环境。
+- `runtime_upgrade_required`：旧 Schema 1 环境需要按上节重建；保留账号及上传数据。
 
 2026-09-04 实测：独立 CPython 3.12 环境安装成功，九个 SAU CLI help、biliup upload help、同一固定浏览器的本地 DOM smoke 通过。边界测试包括 Cookie/路径不回显、缺账号不隐式登录、转载来源参数、发布单次点击、严格视频号回执、取消与超时终止真实 Windows 子孙进程。2026-09-05 补充：三平台真实二维码获取通过；用户已完成 Bilibili 扫码，随后账号检查返回 ready，本地导入、草稿创建、取消与重建通过。抖音和视频号真实扫码认证，以及三平台真实媒体传输、投稿和平台结果均未验收，交由外部测试员按 [测试计划](UPLOADER_TEST_PLAN.md) 执行。组件安装、账号检查与真实上传验收分开记录。

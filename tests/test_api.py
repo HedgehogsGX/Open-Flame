@@ -103,13 +103,14 @@ def test_health_and_web_page(settings: Settings) -> None:
     }
     assert page.status_code == 200
     assert openapi.status_code == 200
-    assert openapi.json()["info"]["version"] == "0.24.2"
+    assert openapi.json()["info"]["version"] == "0.24.3"
     assert remote_docs.status_code == 404
     assert remote_redoc.status_code == 404
     assert "多平台视频下载控制面" in page.text
-    assert "video-download-local-app supervisor" in page.text
+    assert "本次运行状态由应用心跳报告" in page.text
+    assert "/api/v1/operations/runtime" in page.text
     assert "TXT/CSV" in page.text
-    assert "迭代 0.24.2" in page.text
+    assert "迭代 0.24.3" in page.text
     assert "ready 原件、缩略图与字幕下载" in page.text
     assert "迭代 0.3" not in page.text
     assert r".split(/\r?\n/)" in page.text
@@ -154,7 +155,7 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert "本机工具链" in page.text
     assert "控制端启动时检查固定的 yt-dlp" in page.text
     assert "刷新显示不会重新校验整个工具包" in page.text
-    assert "工具链就绪不代表外部 Worker 当前在线" in page.text
+    assert "外部 Worker 状态保持未知" in page.text
     assert "无法据此判断独立本机 Worker 是否在线" in page.text
     assert "/api/v1/operations/tools" in page.text
     assert "refreshTools.addEventListener('click', loadToolchain)" in page.text

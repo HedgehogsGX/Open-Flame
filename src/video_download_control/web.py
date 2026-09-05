@@ -45,10 +45,12 @@ INDEX_HTML = """<!doctype html>
   <main>
     <h1>多平台视频下载控制面</h1>
     <p><a href="/uploads">打开上传器：Bilibili、抖音、视频号 →</a></p>
-    <p class="muted">迭代 0.24.2：新增 Bilibili、抖音和视频号上传入口，支持独立账号、草稿预览与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
-    <p class="notice">普通 Windows 使用可由 video-download-local-app supervisor 同时管理控制面与本机 Worker；页面本身不会启动进程或推断外部 Worker。若只单独启动控制面，任务会保持排队。</p>
+    <p class="muted">迭代 0.24.3：新增 Bilibili、抖音和视频号上传入口，支持独立账号、草稿预览与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
+    <p class="notice">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
     <section class="card">
       <h2>运行状态</h2>
+      <p id="worker-runtime-status" role="status" aria-live="polite">正在读取本次 Worker 状态…</p>
+      <p id="worker-runtime-detail" class="muted"></p>
       <div class="row">
         <span id="queue-status">正在读取队列状态…</span>
         <button id="resume-queue" type="button" hidden>确认磁盘恢复并继续队列</button>
@@ -73,7 +75,7 @@ INDEX_HTML = """<!doctype html>
       </div>
       <p id="tool-status" class="muted">正在读取启动检查结果…</p>
       <pre id="tool-output" class="log-output" aria-live="polite">尚无工具链检查结果。</pre>
-      <p id="tool-security-note" class="notice">工具链就绪不代表外部 Worker 当前在线；Windows 本机直连入口需要在独立进程中显式启动，完整平台能力仍未验证。</p>
+      <p id="tool-security-note" class="notice">工具链检查与本次运行状态分别展示；外部 Worker 状态保持未知，完整平台能力仍未验证。</p>
     </section>
     <section class="card" aria-labelledby="runtime-logs-heading">
       <div class="row row-spread">
@@ -144,6 +146,8 @@ INDEX_HTML = """<!doctype html>
     const assetList = document.querySelector('#asset-list');
     const refreshAssets = document.querySelector('#refresh-assets');
     const queueStatus = document.querySelector('#queue-status');
+    const workerRuntimeStatus = document.querySelector('#worker-runtime-status');
+    const workerRuntimeDetail = document.querySelector('#worker-runtime-detail');
     const resumeQueue = document.querySelector('#resume-queue');
     const circuitStatus = document.querySelector('#circuit-status');
     const capabilityStatus = document.querySelector('#capability-status');
@@ -174,6 +178,10 @@ INDEX_HTML = """<!doctype html>
     let currentBatchPayload = null;
     let pollTimer = null;
     let operationsTimer = null;
+    let runtimeTimer = null;
+    let runtimeExpiryTimer = null;
+    let runtimeRequestId = 0;
+    let runtimeStopped = false;
     const activeStatuses = new Set(['queued', 'probing', 'downloading', 'postprocessing', 'verifying']);
 
     async function fetchJson(url, options = {}, action = '请求') {
@@ -192,6 +200,62 @@ INDEX_HTML = """<!doctype html>
       }
       return payload;
     }
+
+    function renderWorkerRuntime(payload) {
+      if (runtimeExpiryTimer !== null) clearTimeout(runtimeExpiryTimer);
+      if (payload.mode === 'managed_direct' && ['online', 'paused'].includes(payload.state)
+          && Number(payload.heartbeat_age_seconds) >= Number(payload.heartbeat_timeout_seconds)) {
+        payload = {...payload, state: 'stale', network_download_enabled: null};
+      }
+      const labels = {starting: '正在启动', online: '运行中', paused: '运行中 · 队列已暂停',
+        stopping: '正在停止', stopped: '已停止', check_only: '仅检查模式', stale: '心跳已过期', unknown: '状态未知'};
+      const managed = payload.mode === 'managed_direct';
+      const state = labels[payload.state] || labels.unknown;
+      const text = `本次 Worker：${state}${managed ? '（本机托管直连）' : '（外部进程未观测）'}`;
+      if (workerRuntimeStatus.textContent !== text) workerRuntimeStatus.textContent = text;
+      workerRuntimeStatus.className = ['stale', 'unknown', 'stopped'].includes(payload.state) ? 'muted' : '';
+      workerRuntimeDetail.textContent = payload.network_download_enabled === true
+        ? '本机网络下载已启用；这不代表平台验证或投稿审核通过。'
+        : (payload.state === 'check_only' ? '本次只验证启动，不领取下载任务。'
+          : '当前无法确认可执行网络下载；工具链检查与进程运行状态分别展示。');
+      if (managed && ['online', 'paused'].includes(payload.state)) {
+        const validFor = Math.max(0, Number(payload.heartbeat_timeout_seconds) - Number(payload.heartbeat_age_seconds));
+        if (Number.isFinite(validFor)) runtimeExpiryTimer = setTimeout(() => {
+          renderWorkerRuntime({mode: 'managed_direct', state: 'stale', network_download_enabled: null});
+        }, Math.min(validFor, 3) * 1000);
+      }
+    }
+
+    async function loadWorkerRuntime() {
+      if (runtimeStopped) return;
+      const requestId = ++runtimeRequestId;
+      const clock = () => globalThis.performance?.now?.() ?? Date.now();
+      const started = clock();
+      try {
+        const payload = await fetchJson('/api/v1/operations/runtime', {}, '读取本次 Worker 状态');
+        if (runtimeStopped || requestId !== runtimeRequestId) return;
+        if (typeof payload.heartbeat_age_seconds === 'number') payload.heartbeat_age_seconds += Math.max(0, clock() - started) / 1000;
+        renderWorkerRuntime(payload);
+      } catch (_) {
+        if (!runtimeStopped && requestId === runtimeRequestId) renderWorkerRuntime({mode: 'external_unknown', state: 'unknown'});
+      } finally {
+        if (!runtimeStopped && requestId === runtimeRequestId) {
+          if (runtimeTimer !== null) clearTimeout(runtimeTimer);
+          runtimeTimer = setTimeout(loadWorkerRuntime, 1500);
+        }
+      }
+    }
+
+    globalThis.addEventListener?.('pagehide', () => {
+      runtimeStopped = true;
+      runtimeRequestId += 1;
+      clearTimeout(runtimeTimer);
+      clearTimeout(runtimeExpiryTimer);
+      renderWorkerRuntime({mode: 'external_unknown', state: 'unknown'});
+    });
+    globalThis.addEventListener?.('pageshow', event => {
+      if (event.persisted && runtimeStopped) { runtimeStopped = false; void loadWorkerRuntime(); }
+    });
 
     async function loadQueueState() {
       const requestId = ++queueRequestId;
@@ -384,8 +448,8 @@ INDEX_HTML = """<!doctype html>
         `离线 smoke: ${payload.offline_smoke_passed ? '通过' : '未通过'}`,
         `隔离 Worker: ${payload.isolated_worker_ready ? '已就绪' : '未就绪'}`,
         `真实平台下载: ${payload.platform_download_verified ? '已验证' : '未验证'}`,
-        `联网下载开关: ${payload.network_download_enabled ? '已启用' : '未启用'}`,
-        `本机直连 Worker: ${payload.local_direct_worker_available ? '可显式启动' : '当前不可用'}`,
+        `通用隔离 Worker 联网策略（静态）: ${payload.network_download_enabled ? '已启用' : '默认关闭'}`,
+        `本机直连入口（静态能力）: ${payload.local_direct_worker_available ? '具备启动条件' : '缺少启动条件'}`,
         `本机第三方工具包再分发状态: ${payload.redistribution_status || '未知'}`
       ].join('\\n');
       toolSecurityNote.textContent = payload.security_note;
@@ -858,6 +922,7 @@ INDEX_HTML = """<!doctype html>
     refreshCapabilities.addEventListener('click', loadCapabilityState);
     refreshCredentials.addEventListener('click', loadCredentialDefaults);
     loadCredentialDefaults();
+    loadWorkerRuntime();
     refreshOperations();
     loadCapabilityState();
     loadToolchain();

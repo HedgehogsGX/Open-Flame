@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -175,8 +177,12 @@ def test_ready_asset_import_checks_registered_hash(upload_client, settings, monk
     path = settings.data_root / "assets" / asset_id / "original" / "original.mp4"
     path.parent.mkdir(parents=True)
     path.write_bytes(b"synthetic-ready-video")
-    record = {"original_path": path.relative_to(settings.data_root).as_posix(), "size_bytes": path.stat().st_size,
-              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    record = {
+        "original_path": path.relative_to(settings.data_root).as_posix(),
+        "media_kind": "video",
+        "size_bytes": path.stat().st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
     monkeypatch.setattr(type(app.state.batch_service), "get_ready_original_asset", lambda self, value: record if value == asset_id else None)
     response = client.post(f"/api/v1/uploads/sources/assets/{asset_id}")
     assert response.status_code == 201
@@ -192,6 +198,52 @@ def test_shutdown_stops_only_created_upload_service(upload_client):
     app.state.upload_manager.stop()
     assert app.state.upload_manager.service.status()["worker_running"] is False
     assert client.get("/api/v1/uploads/status").status_code == 409
+
+
+def test_cached_upload_service_can_be_explicitly_recovered(upload_client):
+    client, app, _ = upload_client
+    assert client.get("/api/v1/uploads/status").json()["worker_running"] is True
+    service = app.state.upload_manager.service
+    service.stop()
+    assert service.status()["worker_running"] is False
+    response = client.post("/api/v1/uploads/recover")
+    assert response.status_code == 200
+    assert response.json()["worker_running"] is True
+    assert app.state.upload_manager.service is service
+
+
+def test_job_and_source_history_pages_are_bounded_and_records_are_addressable(upload_client):
+    client, _, _ = upload_client
+    account = _account(client, "douyin")
+    source = _source(client)
+    job, _ = _draft(client, account, source)
+
+    jobs = client.get("/api/v1/uploads/jobs/page?limit=1")
+    sources = client.get("/api/v1/uploads/sources/page?limit=1")
+    assert jobs.status_code == sources.status_code == 200
+    assert jobs.json() == {"items": [job], "next_cursor": None}
+    assert sources.json() == {"items": [source], "next_cursor": None}
+    assert client.get(f"/api/v1/uploads/jobs/{job['id']}").json() == job
+    assert client.get(f"/api/v1/uploads/sources/{source['id']}").json() == source
+    assert client.get("/api/v1/uploads/jobs/page?limit=201").status_code == 422
+    assert client.get("/api/v1/uploads/jobs/page?cursor=bad").status_code == 409
+
+
+def test_database_read_failure_is_a_safe_service_unavailable_response(upload_client, monkeypatch):
+    client, app, _ = upload_client
+    client.get("/api/v1/uploads/status")
+    service = app.state.upload_manager.service
+
+    @contextmanager
+    def unavailable_database(*args, **kwargs):
+        raise sqlite3.OperationalError("synthetic private database detail")
+        yield
+
+    monkeypatch.setattr(service, "_db", unavailable_database)
+    response = client.get("/api/v1/uploads/jobs/page?limit=200")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "upload_database_unavailable"}
+    assert "synthetic" not in response.text
 
 
 def test_unknown_account_is_404_and_validation_is_422(upload_client):

@@ -41,6 +41,33 @@ class _OfflineVideoAdapter(ScriptedFakeAdapter):
         return replace(result, files=tuple(files))
 
 
+class _OfflineNonVideoAdapter(_OfflineVideoAdapter):
+    """Register a non-video original with an upload-accepted suffix."""
+
+    def __init__(self, *, payload: bytes, media_kind: str = "audio") -> None:
+        super().__init__(payload=payload)
+        self.media_kind = media_kind
+
+    def probe(self, request, context):
+        result = super().probe(request, context)
+        return replace(
+            result,
+            items=tuple(
+                replace(item, media_kind=self.media_kind) for item in result.items
+            ),
+        )
+
+    def download(self, request, context, progress, cancellation):
+        result = super().download(request, context, progress, cancellation)
+        return replace(
+            result,
+            files=tuple(
+                replace(produced, media_kind=self.media_kind)
+                for produced in result.files
+            ),
+        )
+
+
 class _NoRemoteBackend:
     def __init__(self):
         self.actions = []
@@ -228,4 +255,53 @@ def test_changed_registered_download_cannot_enter_upload_sources(handoff_app, se
     assert client.get("/api/v1/uploads/sources").json() == []
     assert list((default_upload_root(settings.data_root) / "media").iterdir()) == []
     assert _download_snapshot(app) == download_before
+    assert backend.actions == []
+
+
+@pytest.mark.parametrize("media_kind", ["audio", "image", "unknown"])
+def test_nonvideo_ready_asset_cannot_create_an_upload_source(
+    handoff_app,
+    settings,
+    media_kind,
+):
+    client, app, backend = handoff_app
+    created = client.post(
+        "/api/v1/batches",
+        json={"name": "Offline non-video boundary", "inputs": [SOURCE_URL]},
+    )
+    assert created.status_code == 201
+    result = Worker(
+        worker_id="offline-nonvideo-boundary-worker",
+        repository=WorkerRepository(app.state.database),
+        adapter=_OfflineNonVideoAdapter(
+            payload=PAYLOAD,
+            media_kind="video" if media_kind == "unknown" else media_kind,
+        ),
+        asset_store=AssetStore(settings.data_root, min_free_bytes=0),
+        verifier=NonEmptyTestVerifier(),
+    ).run_once()
+    assert result is not None and result.status == "ready"
+    assets = client.get(
+        f"/api/v1/batches/{created.json()['id']}/assets"
+    ).json()
+    assert len(assets) == 1
+    if media_kind == "unknown":
+        with app.state.database.connect() as connection:
+            connection.execute(
+                "UPDATE media_assets SET media_kind = 'unknown' WHERE id = ?",
+                (assets[0]["asset_id"],),
+            )
+    else:
+        assert assets[0]["original"]["media_kind"] == media_kind
+    downloaded = client.get(assets[0]["download_url"])
+
+    rejected = client.post(
+        f"/api/v1/uploads/sources/assets/{assets[0]['asset_id']}"
+    )
+
+    assert downloaded.status_code == 200
+    assert downloaded.content == PAYLOAD
+    assert rejected.status_code == 404
+    assert rejected.json() == {"detail": "asset_not_found"}
+    assert not default_upload_root(settings.data_root).exists()
     assert backend.actions == []

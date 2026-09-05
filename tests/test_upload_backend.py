@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
 import importlib.util
 import json
 import os
@@ -24,7 +25,18 @@ from video_download_control.uploads.bridge import (
     tencent_create_response,
 )
 from video_download_control.uploads.contracts import UploadRequest
-from video_download_control.uploads.runtime_setup import SetupError, extract_zip, inspect_runtime, runtime_lock
+from video_download_control.uploads.runtime_setup import (
+    BILIUP_SHA256,
+    BILIUP_VERSION,
+    LOCK_PATH,
+    SAU_COMMIT,
+    SAU_SHA256,
+    SetupError,
+    extract_zip,
+    install,
+    inspect_runtime,
+    runtime_lock,
+)
 
 
 def request(tmp_path: Path, **overrides) -> UploadRequest:
@@ -38,7 +50,9 @@ def request(tmp_path: Path, **overrides) -> UploadRequest:
 
 def ready_backend(tmp_path: Path, monkeypatch) -> SauBackend:
     backend = SauBackend(tmp_path)
-    monkeypatch.setattr(backend, "inspect", lambda: {"ready": True, "code": "ready"})
+    ready = lambda: {"ready": True, "code": "ready"}
+    monkeypatch.setattr(backend, "inspect", ready)
+    monkeypatch.setattr(backend, "_inspect_for_execution", ready)
     return backend
 
 
@@ -65,12 +79,88 @@ def test_runtime_inspect_does_not_install_or_create_directories(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_legacy_runtime_requires_explicit_reinstall(tmp_path):
+    runtime = tmp_path / "runtime"
+    source = runtime / "source"
+    python = runtime / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    browser = runtime / "browsers" / "chromium-synthetic"
+    source.mkdir(parents=True)
+    python.parent.mkdir(parents=True)
+    browser.mkdir(parents=True)
+    (runtime / "biliup.exe").write_bytes(b"biliup")
+    (source / "sau_cli.py").write_bytes(b"source")
+    python.write_bytes(b"python")
+    artifacts = {
+        "biliup.exe": hashlib.sha256(b"biliup").hexdigest(),
+        "source/sau_cli.py": hashlib.sha256(b"source").hexdigest(),
+    }
+    (runtime / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "sau_commit": SAU_COMMIT,
+                "sau_archive_sha256": SAU_SHA256,
+                "biliup_version": BILIUP_VERSION,
+                "biliup_archive_sha256": BILIUP_SHA256,
+                "requirements_sha256": hashlib.sha256(LOCK_PATH.read_bytes()).hexdigest(),
+                "cli_help_verified": True,
+                "browser_launch_verified": True,
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert inspect_runtime(tmp_path) == {
+        "ready": False,
+        "code": "runtime_upgrade_required",
+    }
+
+
+def test_install_never_resigns_legacy_runtime(tmp_path, monkeypatch):
+    test_legacy_runtime_requires_explicit_reinstall(tmp_path)
+    monkeypatch.setattr(
+        "video_download_control.uploads.runtime_setup._private_acl", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "video_download_control.uploads.runtime_setup._command", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "video_download_control.uploads.runtime_setup._download",
+        lambda *_: pytest.fail("legacy runtime must stop before downloading"),
+    )
+
+    with pytest.raises(SetupError, match="runtime_upgrade_requires_reinstall"):
+        install(tmp_path, Path(sys.executable))
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows OS file lock")
 def test_setup_writer_excludes_live_backend_reader(tmp_path):
     backend = SauBackend(tmp_path)
     with runtime_lock(tmp_path, exclusive=True):
         assert backend.inspect()["code"] == "runtime_busy"
     assert backend.inspect()["code"] == "runtime_missing"
+
+
+def test_execution_integrity_check_preserves_windows_only_gate(
+    tmp_path, monkeypatch
+):
+    import video_download_control.uploads.backend as backend_module
+
+    backend = SauBackend(tmp_path)
+    monkeypatch.setattr(backend_module, "os", types.SimpleNamespace(name="posix"))
+    monkeypatch.setattr(
+        backend_module,
+        "inspect_runtime",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unsupported platforms must stop before inspecting or executing"
+        ),
+    )
+
+    result = backend.check("douyin", "account1", threading.Event())
+
+    assert (result.status, result.code) == ("failed", "unsupported_platform")
+    assert not (tmp_path / "private").exists()
 
 
 def test_bilibili_staging_cleans_only_its_operation_checkpoint(tmp_path, monkeypatch):

@@ -395,6 +395,7 @@ def test_api_qr_requires_header_nonce_and_same_origin_without_leaking_png(login_
 def test_backend_delivers_inline_progress_and_cleans_owned_process(tmp_path, monkeypatch, platform, cancel, capfd):
     backend = SauBackend(tmp_path, login_timeout=5)
     monkeypatch.setattr(backend, "inspect", lambda: {"ready": True, "code": "ready"})
+    monkeypatch.setattr(backend, "_inspect_for_execution", lambda: {"ready": True, "code": "ready"})
     monkeypatch.setattr(backend_module, "browser_view", lambda _: nullcontext(None))
     script = tmp_path / "synthetic_bridge.py"
     script.write_text(
