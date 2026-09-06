@@ -161,7 +161,14 @@ def test_registered_download_copies_to_upload_and_three_platform_local_drafts(ha
     assert source["sha256"] == asset["original"]["sha256"] == hashlib.sha256(PAYLOAD).hexdigest()
     assert source["size"] == asset["original"]["size_bytes"] == len(PAYLOAD)
     assert source["name"] == f"download-{asset['asset_id']}.mp4"
-    assert set(source) == {"id", "name", "size", "sha256"}
+    assert set(source) == {
+        "id", "name", "size", "sha256", "media_present", "media_state",
+        "media_deleted_at", "active_reference_count", "can_delete",
+    }
+    assert source["media_present"] is True
+    assert source["media_state"] == "present"
+    assert source["active_reference_count"] == 0
+    assert source["can_delete"] is True
     copied = upload_root / "media" / f"{source['id']}.mp4"
     assert copied.read_bytes() == PAYLOAD
     assert not os.path.samefile(original, copied)

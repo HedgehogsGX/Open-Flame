@@ -601,7 +601,7 @@ def test_validation_cli_reports_current_build_identity(
     assert code == 0
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["product_version"] == "0.24.3"
+    assert payload["product_version"] == "0.24.4"
     assert re.fullmatch(
         re.escape(payload["product_version"]) + r"\+build\.sha256\.[0-9a-f]{64}",
         payload["product_identity"],

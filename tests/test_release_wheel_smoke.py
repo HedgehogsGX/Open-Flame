@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -26,14 +27,15 @@ def release_fixture(tmp_path, monkeypatch):
     cache.mkdir()
     work = tmp_path / "new wheel run"
     runtime = "".join(f"{name}==1.0 \\\n    --hash=sha256:{'a' * 64}\n" for name in smoke.RUNTIME_MODULES).encode()
-    scripts = {f"video-download-example-{number}": "video_download_control.cli:main" for number in range(13)}
-    config = ("[project.scripts]\n" + "".join(f'{name} = "{value}"\n' for name, value in scripts.items())).encode()
+    config = (ROOT / "pyproject.toml").read_bytes()
+    project = tomllib.loads(config.decode("utf-8"))["project"]
+    version = project["version"]
     source = {"deployment/requirements.runtime.lock": runtime, "pyproject.toml": config}
-    wheel_name = "video_download_control-0.24.3-py3-none-any.whl"
+    wheel_name = f"video_download_control-{version}-py3-none-any.whl"
     wheel = b"synthetic verified project wheel"
     manifest = {
-        "version": "0.24.3", "product_identity": "0.24.3+build.sha256." + "b" * 64,
-        "source_zip": "Open-Flame-0.24.3-source.zip",
+        "version": version, "product_identity": f"{version}+build.sha256." + "b" * 64,
+        "source_zip": f"Open-Flame-{version}-source.zip",
         "source_files": {name: smoke.release.fingerprint(payload) for name, payload in source.items()},
         "artifacts": {wheel_name: smoke.release.fingerprint(wheel)},
     }
@@ -45,14 +47,21 @@ def release_fixture(tmp_path, monkeypatch):
         return manifest
 
     monkeypatch.setattr(smoke.release, "verify_release", verify)
-    monkeypatch.setattr(smoke.release, "archive_payloads", lambda path: {"Open-Flame-0.24.3-source/" + n: b for n, b in source.items()})
+    monkeypatch.setattr(smoke.release, "archive_payloads", lambda path: {f"Open-Flame-{version}-source/" + n: b for n, b in source.items()})
     monkeypatch.setattr(smoke.release, "read_plain", lambda root, name: wheel)
     monkeypatch.setattr(smoke.release, "command", lambda python, arguments, cwd: calls.append((python, arguments, cwd)))
-    return directory, cache, work, manifest, calls
+    return directory, cache, work, manifest, calls, source
+
+
+def _replace_source_config(source, manifest, old: bytes, new: bytes) -> None:
+    config = source["pyproject.toml"]
+    assert config.count(old) == 1
+    source["pyproject.toml"] = config.replace(old, new, 1)
+    manifest["source_files"]["pyproject.toml"] = smoke.release.fingerprint(source["pyproject.toml"])
 
 
 def test_requires_explicit_network_or_cache_before_any_work(release_fixture):
-    directory, _, work, _, calls = release_fixture
+    directory, _, work, _, calls, _ = release_fixture
     result = smoke.verify_wheel_release(directory, work)
     assert result["status"] == "failed" and result["error_code"] == "network_confirmation_required"
     assert not work.exists() and not calls
@@ -60,7 +69,7 @@ def test_requires_explicit_network_or_cache_before_any_work(release_fixture):
 
 @pytest.mark.parametrize("kind", ["directory", "file", "relative"])
 def test_existing_or_relative_work_target_is_preserved(release_fixture, kind):
-    directory, cache, work, _, calls = release_fixture
+    directory, cache, work, _, calls, _ = release_fixture
     if kind == "directory":
         work.mkdir()
         (work / "sentinel").write_bytes(b"synthetic existing content")
@@ -78,7 +87,7 @@ def test_existing_or_relative_work_target_is_preserved(release_fixture, kind):
 
 
 def test_work_cannot_mutate_release_directory(release_fixture):
-    directory, cache, _, _, calls = release_fixture
+    directory, cache, _, _, calls, _ = release_fixture
     work = directory / "new work"
     result = smoke.verify_wheel_release(directory, work, wheelhouse=cache)
     assert result["error_code"] == "work_overlaps_release"
@@ -86,7 +95,7 @@ def test_work_cannot_mutate_release_directory(release_fixture):
 
 
 def test_invalid_release_never_creates_environment_or_leaks_exception(release_fixture, monkeypatch, capsys):
-    directory, cache, work, _, calls = release_fixture
+    directory, cache, work, _, calls, _ = release_fixture
     def invalid(_path):
         raise smoke.release.ReleaseError("SYNTHETIC-private-release-error")
     monkeypatch.setattr(smoke.release, "verify_release", invalid)
@@ -99,9 +108,9 @@ def test_invalid_release_never_creates_environment_or_leaks_exception(release_fi
 
 
 def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release_fixture):
-    directory, cache, work, manifest, calls = release_fixture
+    directory, cache, work, manifest, calls, _ = release_fixture
     result = smoke.verify_wheel_release(directory, work, wheelhouse=cache, allow_network=True)
-    assert result["status"] == "passed" and result["console_scripts_verified"] == 13
+    assert result["status"] == "passed" and result["console_scripts_verified"] == 14
     assert result["runtime_dependencies_verified"] == 13
     assert calls[0] == ("verify",)
     commands = [call[1] for call in calls[1:]]
@@ -116,20 +125,21 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     assert any(command[-1] == "check" for command in commands)
     project_lock = (work / "requirements.project-wheel.lock").read_text()
     assert "file:///" in project_lock and "%20" in project_lock
-    assert manifest["artifacts"]["video_download_control-0.24.3-py3-none-any.whl"]["sha256"] in project_lock
+    assert manifest["artifacts"]["video_download_control-0.24.4-py3-none-any.whl"]["sha256"] in project_lock
     assert "pytest" not in (work / "requirements.runtime.lock").read_text()
     probe = commands[-1]
     assert probe[:2] == ["-c", smoke.INSTALLED_PROBE]
     expected = json.loads(probe[2])
     assert expected["product_identity"] == manifest["product_identity"]
-    assert len(expected["scripts"]) == len(expected["runtime"]) == 13
+    assert len(expected["scripts"]) == 14
+    assert len(expected["runtime"]) == 13
     assert all(call[2] == work for call in calls[1:])
     assert json.loads((work / smoke.REPORT_NAME).read_text()) == result
     assert str(work) not in json.dumps(result)
 
 
 def test_authorized_network_only_affects_runtime_install(release_fixture):
-    directory, _, work, _, calls = release_fixture
+    directory, _, work, _, calls, _ = release_fixture
     assert smoke.verify_wheel_release(directory, work, allow_network=True)["status"] == "passed"
     runtime, wheel = [call[1] for call in calls[1:] if "install" in call[1]]
     assert runtime[runtime.index("--index-url") + 1] == "https://pypi.org/simple"
@@ -138,7 +148,7 @@ def test_authorized_network_only_affects_runtime_install(release_fixture):
 
 @pytest.mark.parametrize("failure_at", [0, 1, 2, 3, 4, 5])
 def test_every_child_failure_produces_failed_saved_report(release_fixture, monkeypatch, failure_at):
-    directory, cache, work, _, _ = release_fixture
+    directory, cache, work, _, _, _ = release_fixture
     count = 0
     def command(*_args):
         nonlocal count
@@ -156,7 +166,7 @@ def test_every_child_failure_produces_failed_saved_report(release_fixture, monke
 
 
 def test_cancelled_child_is_not_reported_as_passed(release_fixture, monkeypatch):
-    directory, cache, work, _, _ = release_fixture
+    directory, cache, work, _, _, _ = release_fixture
     def cancelled(*_args):
         raise KeyboardInterrupt
     monkeypatch.setattr(smoke.release, "command", cancelled)
@@ -166,10 +176,42 @@ def test_cancelled_child_is_not_reported_as_passed(release_fixture, monkeypatch)
 
 
 def test_source_lock_and_wheel_are_rechecked_after_release_verification(release_fixture, monkeypatch):
-    directory, cache, work, _, calls = release_fixture
+    directory, cache, work, _, calls, _ = release_fixture
     monkeypatch.setattr(smoke.release, "read_plain", lambda *_: b"changed wheel")
     result = smoke.verify_wheel_release(directory, work, wheelhouse=cache)
     assert result["error_code"] == "release_changed" and not work.exists()
+    assert calls == [("verify",)]
+
+
+def test_real_project_scripts_are_the_exact_release_contract() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["scripts"] == smoke.release.PROJECT_SCRIPTS
+    assert len(smoke.release.PROJECT_SCRIPTS) == 14
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (b"video-download-worker =", b"video-download-renamed-worker ="),
+        (b'video-download-worker = "video_download_control.worker_cli:main"\n', b""),
+        (
+            b'video-download-worker = "video_download_control.worker_cli:main"',
+            b'video-download-worker = "video_download_control.cli:main"',
+        ),
+    ],
+    ids=("renamed-key", "deleted-key", "changed-target"),
+)
+def test_recomputed_source_metadata_cannot_change_entrypoint_contract(
+    release_fixture, old: bytes, new: bytes,
+) -> None:
+    directory, cache, work, manifest, calls, source = release_fixture
+    _replace_source_config(source, manifest, old, new)
+
+    result = smoke.verify_wheel_release(directory, work, wheelhouse=cache)
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "entrypoints_invalid"
+    assert not work.exists()
     assert calls == [("verify",)]
 
 

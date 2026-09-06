@@ -39,7 +39,7 @@ python -m video_download_control.uploads.runtime_setup `
 
 ## 从旧运行时升级
 
-0.24.3 使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。
+0.24.4 继续使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。这里的运行时 manifest Schema 2 与上传数据库 Schema 2 是两套独立版本，不应混用。
 
 1. 正常停止使用该上传数据目录的所有 Open-Flame 实例，确认没有仍在运行的扫码或投稿。已经开始且结果不明的投稿须先核对远端。
 2. 核对实际 `--root`。仅把其中的 `runtime` 目录改名为一个尚不存在的留档名称，例如 `runtime-legacy-20260905`；保留 `uploads.sqlite3`、`media`、`private` 和其他数据原位。不要合并新旧运行时，也不要只删除 manifest。

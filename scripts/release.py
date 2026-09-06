@@ -24,6 +24,22 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINTS = ("Setup-Open-Flame.cmd", "setup_open_flame.py", "Start-Open-Flame.cmd", "start_open_flame.py")
+PROJECT_SCRIPTS = {
+    "video-download-control": "video_download_control.cli:main",
+    "video-download-worker": "video_download_control.worker_cli:main",
+    "video-download-validation": "video_download_control.validation_cli:main",
+    "video-download-capabilities": "video_download_control.capability_cli:main",
+    "video-download-unix-relay": "video_download_control.relay_cli:main",
+    "video-download-egress-proxy": "video_download_control.egress_proxy_cli:main",
+    "video-download-short-link-egress": "video_download_control.short_link_transport_cli:main",
+    "video-download-candidate-worker": "video_download_control.candidate_worker_cli:main",
+    "video-download-credentials": "video_download_control.credential_cli:main",
+    "video-download-backup": "video_download_control.backup_cli:main",
+    "video-upload-backup": "video_download_control.upload_backup_cli:main",
+    "video-download-tools": "video_download_control.toolchain_cli:main",
+    "video-download-local-worker": "video_download_control.local_worker_cli:main",
+    "video-download-local-app": "video_download_control.local_app_cli:main",
+}
 MAX_FILE = 8 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_ENTRIES = 2000
@@ -134,7 +150,7 @@ def source_contract(files: dict[str, bytes]) -> tuple[dict, str]:
     require(set(legal) == {name for name in files if name.startswith("licenses/python/")}, "license_inventory")
     require(len(legal) == 29, "license_inventory")
     require(project["license-files"] == ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python/*/*"], "license_metadata")
-    require(len(project["scripts"]) == 13 and all(name.startswith("video-download-") for name in project["scripts"]), "entrypoint_metadata")
+    require(project.get("scripts") == PROJECT_SCRIPTS, "entrypoint_metadata")
     for name in ENTRYPOINTS:
         require(name in files and files[name], "missing_launcher")
     digest = hashlib.sha256()
@@ -221,6 +237,7 @@ def metadata_check(payload: bytes, project: dict, legal_names: set[str]) -> None
 
 
 def wheel_check(wheel: dict[str, bytes], source: dict[str, bytes], project: dict) -> None:
+    require(project.get("scripts") == PROJECT_SCRIPTS, "entrypoint_metadata")
     prefix = f"video_download_control-{project['version']}.dist-info/"
     legal = {n for n in source if n in {"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"} or n.startswith("licenses/python/")}
     expected = {n.removeprefix("src/"): b for n, b in source.items() if n.startswith("src/video_download_control/")}
@@ -233,7 +250,7 @@ def wheel_check(wheel: dict[str, bytes], source: dict[str, bytes], project: dict
     require(tags.get_all("Wheel-Version") == ["1.0"] and tags.get_all("Tag") == ["py3-none-any"] and tags.get_all("Root-Is-Purelib") == ["true"], "wheel_tag")
     entrypoints = configparser.ConfigParser(interpolation=None)
     entrypoints.read_string(wheel[prefix + "entry_points.txt"].decode())
-    require(entrypoints.sections() == ["console_scripts"] and dict(entrypoints["console_scripts"]) == project["scripts"], "wheel_entrypoints")
+    require(entrypoints.sections() == ["console_scripts"] and dict(entrypoints["console_scripts"]) == PROJECT_SCRIPTS, "wheel_entrypoints")
     rows = list(csv.reader(io.StringIO(wheel[prefix + "RECORD"].decode("utf-8"))))
     require(len(rows) == len(wheel) and all(len(row) == 3 for row in rows), "wheel_record")
     require({row[0] for row in rows} == set(wheel), "wheel_record")

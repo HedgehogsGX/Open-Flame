@@ -13,6 +13,8 @@ Open-Flame 的上传页面位于 `/uploads`，下载首页也有入口。首批�
 
 安装成功和账号检查通过仅说明对应本地步骤可运行，不代表该平台已完成真实投稿验收。
 
+账号卡片中的“断开本地账号”采用两步确认。断开会先保留历史任务所需的平台、账号备注和墓碑时间，撤回该账号尚未执行的排队确认，再移除本地登录文件；正在执行上传时会拒绝断开。若文件清理失败，账号仍保持不可用的墓碑状态，页面会明确显示残留风险并提供“重试清理本地登录”；应用重启也会再次清理。只有返回 `local_login_removed=true` 或账号显示 `account_disconnected` 时，才能声称本地登录已移除。取消后的迟到登录结果不能让墓碑账号恢复可用。这个动作不会撤销平台侧授权或平台会话；如需撤销，仍应在对应平台的账号安全设置中处理。
+
 ## 从视频到投稿
 
 1. 选择一个本地视频，导入 Open-Flame。支持 MP4、MOV、M4V、WebM、MKV、AVI，单文件上限 2 GiB；实际编码、时长、尺寸还受平台限制。也可以从下载成品的“用于上传”入口导入：服务端要求原件登记类型为 `video`，并经大小与 SHA-256 复核后复制。音频或图片不会因扩展名为 MP4 而被直导为视频。
@@ -42,15 +44,43 @@ Open-Flame 的上传页面位于 `/uploads`，下载首页也有入口。首批�
 
 任务与来源列表提供“加载更早任务”和“加载更多已导入视频”，活动任务优先，旧后继可单独定位。列表容量超过 200 时继续通过分页访问，不能仅凭首屏没有记录认定任务不存在。
 
+## 受管媒体生命周期
+
+上传页显示受管媒体总字节数、登记记录数量、在位/缺失/已删除/内容或记录状态变化/不安全记录、未登记文件、磁盘剩余空间和 64 MiB 上传预留线。高频列表轮询只做路径、普通文件和大小检查，避免反复读取最大 2 GiB 的媒体；创建草稿、确认、重试、删除和实际上传会重新核对 SHA-256。一次完整校验发现等长字节变化后，同一服务进程会把该文件显示为 `changed`。这里的未登记或异常提示是只读审计，不会自动清理文件。
+
+- 删除采用两步确认，只删除 Open-Flame 导入到上传目录的受管副本，不删除最初选择的文件或下载成品。
+- 仍被 `draft`、`queued` 或 `running` 任务引用的副本不能删除。删除成功后仍保留名称、大小、SHA-256、历史任务与删除时间。
+- 缺失或已删除的副本不能创建新草稿，也不能确认或重试旧任务。可选择同一个视频重新导入；只有大小和 SHA-256 与历史记录完全相同才恢复原 source ID。
+- 恢复媒体不会自动执行旧任务。旧任务仍按原状态要求手动确认，或显式创建新的重试草稿。
+- 内容变化、链接/重解析点、硬链接和其他不安全路径保持失败关闭；应用不会据此覆盖或“修好”用户文件。
+
 ## 本地数据与备份
 
 上传目录在下载数据目录的同级，名称为下载目录名加 `-uploads`。普通 Windows Start 的默认位置是 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-uploads`；开发控制面默认使用源码目录旁的 `data-uploads`。自定义 `--app-root` 会相应改变位置。
 
-上传目录包含 `uploads.sqlite3`、受管媒体 `media`、导入临时目录 `incoming`、账号等私有状态 `private` 和独立工具环境 `runtime`。上传库独立使用 Schema 1，不修改下载 Schema 11，也不复用下载 CredentialProfile 或 Cookie 文件。
+上传目录包含 `uploads.sqlite3`、受管媒体 `media`、导入临时目录 `incoming`、账号等私有状态 `private` 和独立工具环境 `runtime`。上传库独立使用 Schema 2，不修改下载 Schema 11，也不复用下载 CredentialProfile 或 Cookie 文件。
 
-启动时区分新库与已有库：新库原子建立；已有库将主库及 WAL 复制到独立临时目录，核对源文件稳定性后检查完整 Schema 1 的表、列、索引、外键和数据库状态。SQLite 的共享内存文件只在临时目录建立，不在源目录新建 SHM。复制使用固定小块和有界重试，需要约主库加 WAL 大小的临时空间；它只供结构核验，不是完整上传备份。结构不符、无法取得稳定快照或存储错误返回 `upload_schema_unsupported`，不会补建缺失表。保留原库并排查或从匹配的完整备份恢复，不能删除表或版本行绕过检查。
+启动时区分新库与已有库：新库原子建立；精确 Schema 1 以单次事务迁移到 Schema 2，加入账号生命周期和媒体生命周期字段及查询索引；Schema 2 直接核验。已有库的主库及 WAL 会先复制到独立临时目录并核对源文件稳定性，再检查完整表、列、索引、外键和数据库状态。SQLite 的共享内存文件只在临时目录建立，不在源目录新建 SHM。未知、损坏或更高版本返回 `upload_schema_unsupported`，不会补建缺失结构或修改原库。
 
-**现有下载备份不包含上传目录。** 上传服务没有单独的在线一致备份命令；需要保留上传记录时，先正常停止 Open-Flame，再在本机安全位置备份该上传目录。账号状态及日志、数据库、媒体、运行环境不得加入 Git 或公开交接包。
+**下载备份不包含上传目录，上传备份也不包含下载数据。** 上传数据使用独立的停机命令；先正常停止所有使用该上传根的 Open-Flame 应用和 active/standby 上传服务，并确认没有扫码、检查、导入或投稿仍在执行：
+
+```powershell
+uv run video-upload-backup create `
+  --source-upload-root C:\vdc\data-uploads `
+  --backup-target D:\vdc-backups\upload-backup-20260907
+
+uv run video-upload-backup restore `
+  --backup-root D:\vdc-backups\upload-backup-20260907 `
+  --restore-upload-root C:\vdc-upload-restore-drill
+```
+
+`create` 只接受精确 Upload Schema 2 和不存在的备份目标。当前应用 lifespan、started active/standby `UploadService` 和短事务在上传根旁的 `.<root-name>.activity.lock` 持 shared lease；备份在源上传根持 exclusive lease，并同时取得旧 `.worker.lock`，直到静态快照、媒体复制、审计和最终发布全部结束。任何当前应用或 standby 实例仍在运行时都会拒绝开始，因此“所有实例已停止”是明确前提。这个锁不会让未采用当前合同的旧版本、手工 SQLite 连接或自写文件 writer 自动停下；这些 writer 也必须由操作者另行停止。sibling activity lock 是协调文件，不属于备份 payload，不要把它改成普通数据文件或手工替换。
+
+备份从稳定的 main/WAL 字节快照生成静态数据库，只复制 `media_state=present` 且大小/SHA-256 一致的登记媒体；`private`、`runtime`、`incoming`、锁、账号登录秘密、操作临时文件和未登记媒体均排除。读取 WAL 时不会在源目录打开 SQLite 或生成新的 SHM；源文件在前后身份/大小/元数据不稳定时失败关闭。
+
+`restore` 在不存在的目标上传根旁持 exclusive activity lease，覆盖 staging、恢复策略、复核与一次 rename 发布；同一路径若已有当前应用持 shared lease会立即拒绝。它严格核对 manifest、路径、大小、SHA-256、链接/重解析点/硬链接、Schema、外键及账号/来源/任务/request/retry 业务语义，只写入不存在的新独立目录。恢复后 `running` 任务变为 `unknown / interrupted_result_unknown`，`queued` 任务回到 `draft / restart_confirmation_required`，未完成账号操作变为失败，活动账号的 ready/checking 状态变为 `unchecked / account_missing`。恢复不构造上传 backend、不登录、不上传，也不会把运行环境或账号登录秘密带到新根。
+
+备份目录、恢复目录、账号状态、日志、数据库、媒体和运行环境不得加入 Git 或公开交接包。应在受保护的本机或加密介质上保管备份，并用独立新根实际演练恢复；CLI 成功不证明真实平台状态或异机灾难恢复已经验收。
 
 ## 外部测试
 

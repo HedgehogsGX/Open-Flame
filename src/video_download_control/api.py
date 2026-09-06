@@ -92,7 +92,9 @@ from .short_link_transport import (
 )
 from .short_links import ControlledShortLinkResolver
 from .toolchain import inspect_toolchain
+from .uploads.activity_lock import UploadActivityLease
 from .uploads.api import install_upload_routes
+from .uploads.service import default_upload_root
 from .web import INDEX_HTML
 from .worker_runtime_status import ManagedWorkerRuntimeStatus, unknown_runtime_status
 from .worker_repository import (
@@ -975,25 +977,32 @@ def create_app(
     worker_repository = WorkerRepository(database)
     capability_repository = CapabilityEvidenceRepository(database)
     managed_product_identity = current_product_identity() if managed_worker_status is not None else None
+    upload_root = default_upload_root(resolved_settings.data_root)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        active_logger.emit(
-            "control.started",
-            app_version=__version__,
-            app_schema_version=SCHEMA_VERSION,
-            port=resolved_settings.port,
+        upload_activity = await run_in_threadpool(
+            lambda: UploadActivityLease.acquire(upload_root, exclusive=False)
         )
         try:
-            yield
-        finally:
+            active_logger.emit(
+                "control.started",
+                app_version=__version__,
+                app_schema_version=SCHEMA_VERSION,
+                port=resolved_settings.port,
+            )
             try:
-                await run_in_threadpool(app.state.upload_manager.stop)
+                yield
             finally:
-                if owns_local_short_link_transport:
-                    assert isinstance(short_link_resolver, ControlledShortLinkResolver)
-                    short_link_resolver.transport.close()
-                active_logger.emit("control.stopped")
+                try:
+                    await run_in_threadpool(app.state.upload_manager.stop)
+                finally:
+                    if owns_local_short_link_transport:
+                        assert isinstance(short_link_resolver, ControlledShortLinkResolver)
+                        short_link_resolver.transport.close()
+                    active_logger.emit("control.stopped")
+        finally:
+            upload_activity.release()
 
     app = FastAPI(
         title="Video Download Control",

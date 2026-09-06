@@ -16,14 +16,22 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from uuid import uuid4
 
+from .activity_lock import (
+    UploadActivityBusy,
+    UploadActivityLease,
+    canonical_activity_root,
+    upload_activity_lock,
+)
 from .contracts import BackendResult, PLATFORMS, UploadBackend, UploadError, UploadRequest
 from .login_progress import validate_update
-from .schema import UploadSchemaError, initialize_upload_schema, validate_upload_schema
+from .schema import UploadSchemaError, ensure_upload_schema
 
 MAX_SOURCE_BYTES = 2 * 1024**3
+UPLOAD_RESERVE_BYTES = 64 * 1024**2
 TITLE_LIMITS = {"bilibili": 80, "douyin": 30, "tencent": 100}
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
@@ -33,8 +41,9 @@ _SOURCE_PRIORITY = ("CASE WHEN EXISTS(SELECT 1 FROM jobs active WHERE active.sou
                     "AND active.state='running') THEN 0 "
                     "WHEN EXISTS(SELECT 1 FROM jobs queued WHERE queued.source_id=s.id "
                     "AND queued.state='queued') THEN 1 "
-                    "WHEN EXISTS(SELECT 1 FROM jobs actionable WHERE actionable.source_id=s.id "
-                    "AND actionable.state IN ('draft','unknown','failed','canceled')) THEN 2 ELSE 3 END")
+                     "WHEN EXISTS(SELECT 1 FROM jobs actionable WHERE actionable.source_id=s.id "
+                     "AND actionable.state IN ('draft','unknown','failed','canceled')) THEN 2 ELSE 3 END")
+_ACTIVE_SOURCE_STATES = ("draft", "queued", "running")
 
 
 def default_upload_root(data_root: Path) -> Path:
@@ -76,6 +85,17 @@ def _text(value: str, maximum: int, *, required: bool = False) -> str:
     return value.strip()
 
 
+def _requires_activity(method):
+    """Keep a shared lease across a complete public mutation."""
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._activity():
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class _SchedulerLock:
     def __init__(self, path: Path):
         self.path = path
@@ -110,29 +130,35 @@ class _SchedulerLock:
 
 class UploadService:
     def __init__(self, root: Path, backend: UploadBackend | None = None):
-        self.root = Path(os.path.abspath(root))
+        requested_root = Path(os.path.abspath(root))
         # Every existing ancestor must be a plain directory, including junctions.
-        for ancestor in reversed((self.root, *self.root.parents)):
+        for ancestor in reversed((requested_root, *requested_root.parents)):
             if ancestor.exists():
                 _plain(ancestor, directory=True)
-        database_path = self.root / "uploads.sqlite3"
-        if database_path.exists():
-            _plain(database_path)
-            try:
-                validate_upload_schema(database_path)
-            except UploadSchemaError:
-                raise UploadError("upload_schema_unsupported") from None
-        else:
-            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _plain(self.root, directory=True)
-            try:
-                initialize_upload_schema(database_path)
-            except UploadSchemaError:
-                raise UploadError("upload_schema_unsupported") from None
-        for name in ("media", "incoming", "private"):
-            path = self.root / name
-            path.mkdir(exist_ok=True, mode=0o700)
-            _plain(path, directory=True)
+        requested_root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.root = canonical_activity_root(requested_root)
+            with upload_activity_lock(self.root, exclusive=False):
+                for ancestor in reversed((self.root.parent, *self.root.parent.parents)):
+                    if ancestor.exists():
+                        _plain(ancestor, directory=True)
+                database_path = self.root / "uploads.sqlite3"
+                if not database_path.exists():
+                    self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    _plain(self.root, directory=True)
+                else:
+                    _plain(database_path)
+                if canonical_activity_root(self.root) != self.root:
+                    raise UploadActivityBusy("upload activity root changed during setup")
+                ensure_upload_schema(database_path)
+                for name in ("media", "incoming", "private"):
+                    path = self.root / name
+                    path.mkdir(exist_ok=True, mode=0o700)
+                    _plain(path, directory=True)
+        except UploadActivityBusy:
+            raise UploadError("upload_activity_busy") from None
+        except UploadSchemaError:
+            raise UploadError("upload_schema_unsupported") from None
         self.database_path = database_path
         if backend is None:
             from .backend import SauBackend
@@ -143,51 +169,94 @@ class UploadService:
         self._operation_stop = threading.Event()
         self._active_id: str | None = None
         self._active_guard = threading.RLock()
+        self._activity_lease_guard = threading.Lock()
         self._login_presentations: dict[str, dict] = {}
+        self._source_integrity_cache: dict[str, tuple[tuple, bool]] = {}
         self._thread: threading.Thread | None = None
+        self._activity_lease: UploadActivityLease | None = None
         self._lock = _SchedulerLock(self.root / ".worker.lock")
         self._scheduler_state = "stopped"
         self._scheduler_code = ""
 
+    def _acquire_activity_lease(self) -> UploadActivityLease:
+        try:
+            return UploadActivityLease.acquire(self.root, exclusive=False)
+        except UploadActivityBusy:
+            raise UploadError("upload_activity_busy") from None
+
+    @contextmanager
+    def _activity(self):
+        lease = self._acquire_activity_lease()
+        try:
+            yield
+        finally:
+            lease.release()
+
+    def _release_lifetime_activity(self) -> None:
+        with self._activity_lease_guard:
+            lease = self._activity_lease
+            self._activity_lease = None
+        if lease is not None:
+            lease.release()
+
     @contextmanager
     def _db(self, *, timeout: float = 10):
-        db = sqlite3.connect(self.database_path, timeout=timeout)
-        try:
-            db.row_factory = sqlite3.Row
-            db.execute("PRAGMA foreign_keys=ON")
-            db.execute("PRAGMA journal_mode=WAL")
-            with db:
-                yield db
-        finally:
-            db.close()
+        with self._activity():
+            db = sqlite3.connect(self.database_path, timeout=timeout)
+            try:
+                db.row_factory = sqlite3.Row
+                db.execute("PRAGMA foreign_keys=ON")
+                db.execute("PRAGMA journal_mode=WAL")
+                with db:
+                    yield db
+            finally:
+                db.close()
 
     def start(self) -> None:
-        with self._active_guard:
-            if self._thread is not None and self._thread.is_alive():
-                if self._scheduler_state != "faulted":
-                    return
-                self._thread.join(timeout=1)
-                if self._thread.is_alive():
-                    raise UploadError("upload_worker_stopping")
-            if not self._lock.acquire():
-                self._scheduler_state = "standby"
-                self._scheduler_code = "scheduler_owned_by_other_instance"
-                return  # Another application owns execution; read/queue still work.
-            try:
-                was_faulted = self._scheduler_state == "faulted"
-                self._login_presentations.clear()
-                self._recover_interrupted_records()
-                self._shutdown.clear()
-                self._scheduler_state = "running"
-                self._scheduler_code = "scheduler_recovered" if was_faulted else ""
-                self._thread = threading.Thread(target=self._run, name="open-flame-uploads", daemon=True)
-                self._thread.start()
-            except BaseException as exc:
-                self._scheduler_state = "faulted"
-                self._scheduler_code = ("scheduler_database_unavailable"
-                                        if isinstance(exc, sqlite3.Error) else "scheduler_failed")
-                self._lock.release()
-                raise
+        candidate = self._acquire_activity_lease()
+        try:
+            with self._active_guard:
+                if self._thread is not None and self._thread.is_alive():
+                    if self._scheduler_state != "faulted":
+                        return
+                    self._thread.join(timeout=1)
+                    if self._thread.is_alive():
+                        raise UploadError("upload_worker_stopping")
+                with self._activity_lease_guard:
+                    if self._activity_lease is None:
+                        self._activity_lease = candidate
+                        candidate = None
+                try:
+                    scheduler_owned = self._lock.acquire()
+                except BaseException:
+                    self._scheduler_state = "faulted"
+                    self._scheduler_code = "scheduler_failed"
+                    self._release_lifetime_activity()
+                    raise
+                if not scheduler_owned:
+                    self._scheduler_state = "standby"
+                    self._scheduler_code = "scheduler_owned_by_other_instance"
+                    return  # Another application owns execution; read/queue still work.
+                try:
+                    was_faulted = self._scheduler_state == "faulted"
+                    self._login_presentations.clear()
+                    self._recover_interrupted_records()
+                    self._scrub_disconnected_accounts()
+                    self._shutdown.clear()
+                    self._scheduler_state = "running"
+                    self._scheduler_code = "scheduler_recovered" if was_faulted else ""
+                    self._thread = threading.Thread(target=self._run, name="open-flame-uploads", daemon=True)
+                    self._thread.start()
+                except BaseException as exc:
+                    self._scheduler_state = "faulted"
+                    self._scheduler_code = ("scheduler_database_unavailable"
+                                            if isinstance(exc, sqlite3.Error) else "scheduler_failed")
+                    self._lock.release()
+                    self._release_lifetime_activity()
+                    raise
+        finally:
+            if candidate is not None:
+                candidate.release()
 
     def stop(self) -> None:
         self._shutdown.set()
@@ -200,6 +269,7 @@ class UploadService:
             thread.join(timeout=20)
             if thread.is_alive():
                 raise UploadError("upload_worker_stopping")
+        self._release_lifetime_activity()
         with self._active_guard:
             if self._scheduler_state != "faulted":
                 self._scheduler_state = "stopped"
@@ -220,6 +290,92 @@ class UploadService:
         with self._db() as db:
             return [dict(row) for row in db.execute("SELECT * FROM accounts ORDER BY created_at,id")]
 
+    def _remove_local_account_secret(self, platform: str, account_id: str) -> bool:
+        remove = getattr(self.backend, "disconnect_local", None)
+        if not callable(remove):
+            return True
+        try:
+            remove(platform, account_id)
+            return True
+        except Exception:
+            return False
+
+    def _scrub_disconnected_accounts(self) -> None:
+        with self._db() as db:
+            rows = list(db.execute(
+                "SELECT id,platform FROM accounts WHERE lifecycle_state='disconnected'"
+            ))
+        for row in rows:
+            removed = self._remove_local_account_secret(row["platform"], row["id"])
+            with self._db() as db:
+                db.execute(
+                    "UPDATE accounts SET code=? WHERE id=? AND lifecycle_state='disconnected'",
+                    ("account_disconnected" if removed else "account_disconnect_cleanup_failed",
+                     row["id"]),
+                )
+
+    @_requires_activity
+    def disconnect_account(self, account_id: str) -> dict:
+        """Disable a local session while keeping the account identity for history."""
+        account_id = _identifier(account_id)
+        with self._active_guard, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if account is None:
+                raise UploadError("account_not_found")
+            if db.execute(
+                "SELECT 1 FROM jobs WHERE account_id=? AND state='running' LIMIT 1",
+                (account_id,),
+            ).fetchone():
+                raise UploadError("account_upload_active")
+            now = _now()
+            operation_ids = [row["id"] for row in db.execute(
+                "SELECT id FROM operations WHERE account_id=? AND state IN ('queued','running')",
+                (account_id,),
+            )]
+            revoked_confirmation_count = db.execute(
+                "SELECT COUNT(*) FROM jobs WHERE account_id=? AND state='queued'",
+                (account_id,),
+            ).fetchone()[0]
+            db.execute(
+                "UPDATE operations SET state='canceled',code='account_disconnected',updated_at=? "
+                "WHERE account_id=? AND state IN ('queued','running')",
+                (now, account_id),
+            )
+            db.execute(
+                "UPDATE jobs SET state='draft',code='account_disconnected_confirmation_revoked',updated_at=? "
+                "WHERE account_id=? AND state='queued'",
+                (now, account_id),
+            )
+            db.execute(
+                "UPDATE accounts SET auth_state='unchecked',code='account_disconnected',"
+                "lifecycle_state='disconnected',disconnected_at=COALESCE(disconnected_at,?) "
+                "WHERE id=?",
+                (now, account_id),
+            )
+            if self._active_id in operation_ids:
+                self._operation_stop.set()
+            for operation_id in operation_ids:
+                self._login_presentations.pop(operation_id, None)
+            platform = account["platform"]
+        removed = self._remove_local_account_secret(platform, account_id)
+        with self._db() as db:
+            db.execute(
+                "UPDATE accounts SET code=? WHERE id=? AND lifecycle_state='disconnected'",
+                ("account_disconnected" if removed else "account_disconnect_cleanup_failed",
+                 account_id),
+            )
+            result = dict(db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone())
+        if not removed:
+            raise UploadError("account_disconnect_cleanup_failed")
+        return {
+            "account": result,
+            "revoked_confirmation_count": revoked_confirmation_count,
+            "canceled_operation_count": len(operation_ids),
+            "local_login_removed": True,
+        }
+
+    @_requires_activity
     def add_account(self, platform: str, name: str) -> dict:
         if platform not in PLATFORMS:
             raise UploadError("unsupported_upload_platform")
@@ -232,6 +388,7 @@ class UploadService:
         except sqlite3.IntegrityError:
             raise UploadError("account_name_exists") from None
 
+    @_requires_activity
     def account_action(self, account_id: str, action: str) -> dict:
         _identifier(account_id)
         if action not in ("login", "check"):
@@ -244,8 +401,11 @@ class UploadService:
         operation_id, now = uuid4().hex, _now()
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            if db.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone() is None:
+            account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if account is None:
                 raise UploadError("account_not_found")
+            if account["lifecycle_state"] != "active":
+                raise UploadError("account_disconnected")
             if db.execute("SELECT id FROM operations WHERE account_id=? AND state IN ('queued','running')", (account_id,)).fetchone():
                 raise UploadError("account_operation_active")
             db.execute("INSERT INTO operations(id,account_id,action,created_at,updated_at) VALUES(?,?,?,?,?)", (operation_id, account_id, action, now, now))
@@ -323,6 +483,7 @@ class UploadService:
                 "operation_deadline": operation_deadline, "seen": seen,
                 "revision": previous.get("revision", 0) + 1}
 
+    @_requires_activity
     def cancel_operation(self, operation_id: str) -> dict:
         _identifier(operation_id)
         with self._active_guard, self._db() as db:
@@ -353,9 +514,19 @@ class UploadService:
             raise UploadError("invalid_page_cursor")
         return int(match.group(1)), rowid
 
+    @staticmethod
+    def _active_reference_sql() -> str:
+        return ("(SELECT COUNT(*) FROM jobs active WHERE active.source_id=s.id "
+                "AND active.state IN ('draft','queued','running'))")
+
+    def _source_query(self) -> str:
+        return "SELECT s.*," + self._active_reference_sql() + " AS active_reference_count FROM sources s"
+
     def source_page(self, *, cursor: str | None = None, limit: int = 50) -> dict:
         key = self._page_key(cursor, limit)
-        query = ("SELECT * FROM (SELECT s.*,s.rowid AS _page_rowid," + _SOURCE_PRIORITY
+        query = ("SELECT * FROM (SELECT s.*,s.rowid AS _page_rowid,"
+                 + self._active_reference_sql() + " AS active_reference_count,"
+                 + _SOURCE_PRIORITY
                  + " AS _page_bucket FROM sources s) page")
         parameters: list[int] = []
         if key is not None:
@@ -377,15 +548,187 @@ class UploadService:
 
     def source(self, source_id: str) -> dict:
         with self._db() as db:
-            row = db.execute("SELECT * FROM sources WHERE id=?", (_identifier(source_id),)).fetchone()
+            row = db.execute(self._source_query() + " WHERE s.id=?",
+                             (_identifier(source_id),)).fetchone()
         if row is None:
             raise UploadError("source_not_found")
         return self._source_public(row)
 
-    @staticmethod
-    def _source_public(row) -> dict:
-        return {key: row[key] for key in ("id", "name", "size", "sha256", "created_at")}
+    def _source_media_path(self, row) -> Path:
+        return self.root / "media" / f"{row['id']}{row['suffix']}"
 
+    def _source_media_state(self, row) -> tuple[str, int]:
+        path = self._source_media_path(row)
+        try:
+            info = _plain(path)
+        except FileNotFoundError:
+            stored = row["media_state"] if "media_state" in row.keys() else "present"
+            return ("deleted" if stored == "deleted" else "missing"), 0
+        except (OSError, UploadError):
+            return "unsafe", 0
+        stored = row["media_state"] if "media_state" in row.keys() else "present"
+        if stored != "present":
+            return "changed", info.st_size
+        if info.st_size != row["size"]:
+            return "changed", info.st_size
+        cached = self._source_integrity_cache.get(row["id"])
+        if cached is not None and cached[0] == _signature(info) and not cached[1]:
+            return "changed", info.st_size
+        return "present", info.st_size
+
+    def _verified_source_media_path(self, row) -> Path:
+        """Return a source path only after checking its recorded bytes."""
+        if "media_state" in row.keys() and row["media_state"] != "present":
+            raise UploadError("source_reimport_required")
+        if row["suffix"] not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
+            raise UploadError("source_changed")
+        _plain(self.root / "media", directory=True)
+        path = self._source_media_path(row)
+        try:
+            before = _plain(path)
+            if before.st_size != row["size"]:
+                raise UploadError("source_changed")
+            with path.open("rb") as handle:
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError("source_changed")
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError("source_changed")
+            after = _plain(path)
+            valid = digest == row["sha256"] and _signature(after) == _signature(before)
+            self._source_integrity_cache[row["id"]] = (_signature(after), valid)
+            if not valid:
+                raise UploadError("source_changed")
+        except OSError:
+            raise UploadError("source_unavailable") from None
+        return path
+
+    def _source_public(self, row) -> dict:
+        state, _actual_size = self._source_media_state(row)
+        active = int(row["active_reference_count"]) if "active_reference_count" in row.keys() else 0
+        result = {key: row[key] for key in ("id", "name", "size", "sha256", "created_at")}
+        result.update(media_present=state == "present", media_state=state,
+                      media_deleted_at=(row["deleted_at"] if "deleted_at" in row.keys() else None),
+                      active_reference_count=active,
+                      can_delete=state == "present" and active == 0)
+        return result
+
+    def storage_usage(self) -> dict:
+        with self._db() as db:
+            rows = list(db.execute(self._source_query()))
+        registered_names = {self._source_media_path(row).name for row in rows}
+        present = missing = deleted = changed = unsafe = managed_bytes = 0
+        for row in rows:
+            state, actual_size = self._source_media_state(row)
+            if state == "missing":
+                missing += 1
+            elif state == "deleted":
+                deleted += 1
+            elif state == "unsafe":
+                unsafe += 1
+            elif state == "present":
+                present += 1
+                managed_bytes += actual_size
+            elif state == "changed":
+                changed += 1
+                managed_bytes += actual_size
+        orphan_count = orphan_bytes = unsafe_entries = 0
+        media_root = self.root / "media"
+        _plain(media_root, directory=True)
+        try:
+            entries = list(media_root.iterdir())
+        except OSError:
+            raise UploadError("source_storage_invalid") from None
+        for entry in entries:
+            if entry.name in registered_names:
+                continue
+            try:
+                info = _plain(entry)
+            except (OSError, UploadError):
+                unsafe_entries += 1
+            else:
+                orphan_count += 1
+                orphan_bytes += info.st_size
+        disk = shutil.disk_usage(self.root)
+        return {
+            "registered_source_count": len(rows),
+            "present_source_count": present,
+            "missing_source_count": missing,
+            "deleted_source_count": deleted,
+            "changed_source_count": changed,
+            "unsafe_source_count": unsafe,
+            "managed_bytes": managed_bytes,
+            "orphan_file_count": orphan_count,
+            "orphan_bytes": orphan_bytes,
+            "unsafe_entry_count": unsafe_entries,
+            "free_bytes": disk.free,
+            "reserve_bytes": UPLOAD_RESERVE_BYTES,
+            "low_space": disk.free < UPLOAD_RESERVE_BYTES,
+        }
+
+    @_requires_activity
+    def delete_source_media(self, source_id: str) -> dict:
+        source_id = _identifier(source_id)
+        quarantine: Path | None = None
+        target: Path | None = None
+        result: dict | None = None
+        with self._active_guard:
+            try:
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    row = db.execute(
+                        self._source_query() + " WHERE s.id=?", (source_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise UploadError("source_not_found")
+                    if row["active_reference_count"]:
+                        raise UploadError("source_in_use")
+                    state, _actual_size = self._source_media_state(row)
+                    if state in {"missing", "deleted"}:
+                        result = self._source_public(row)
+                    else:
+                        if state != "present":
+                            raise UploadError(
+                                "source_changed" if state == "changed" else "unsafe_upload_file"
+                            )
+                        target = self._source_path(source_id)
+                        before = _plain(target)
+                        quarantine = target.with_name(
+                            f".{source_id}.{uuid4().hex}.delete"
+                        )
+                        try:
+                            if _signature(_plain(target)) != _signature(before):
+                                raise UploadError("source_changed")
+                            target.rename(quarantine)
+                        except FileNotFoundError:
+                            raise UploadError("source_changed") from None
+                        except OSError:
+                            raise UploadError("source_delete_failed") from None
+                        db.execute(
+                            "UPDATE sources SET media_state='deleted',deleted_at=? WHERE id=?",
+                            (_now(), source_id),
+                        )
+                        updated = db.execute(
+                            self._source_query() + " WHERE s.id=?", (source_id,)
+                        ).fetchone()
+                        result = self._source_public(updated)
+            except BaseException as exc:
+                if quarantine is not None and quarantine.exists() and target is not None:
+                    try:
+                        os.link(quarantine, target)
+                        quarantine.unlink()
+                    except OSError:
+                        raise UploadError("source_delete_rollback_failed") from exc
+                raise
+            if quarantine is not None:
+                try:
+                    quarantine.unlink()
+                except OSError:
+                    raise UploadError("source_delete_cleanup_failed") from None
+        assert result is not None
+        return result
+
+    @_requires_activity
     def import_source(self, path: Path, name: str, expected_sha256: str | None = None) -> dict:
         name = _text(name, 180, required=True)
         if any(char in name for char in '/\\:\x00') or name in (".", ".."):
@@ -399,7 +742,7 @@ class UploadService:
             raise UploadError("source_unavailable") from None
         if not 0 < before.st_size <= MAX_SOURCE_BYTES:
             raise UploadError("source_size_invalid")
-        if shutil.disk_usage(self.root).free < before.st_size + 64 * 1024**2:
+        if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
             raise UploadError("upload_storage_full")
         source_id = uuid4().hex
         target = self.root / "media" / f"{source_id}{suffix}"
@@ -424,12 +767,88 @@ class UploadService:
             if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
                 raise UploadError("source_hash_mismatch")
             with self._db() as db:
-                db.execute("INSERT INTO sources VALUES(?,?,?,?,?,?)", (source_id, name, suffix, total, digest.hexdigest(), _now()))
-                return self._source_public(db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone())
+                db.execute("BEGIN IMMEDIATE")
+                db.execute(
+                    "INSERT INTO sources(id,name,suffix,size,sha256,created_at) VALUES(?,?,?,?,?,?)",
+                    (source_id, name, suffix, total, digest.hexdigest(), _now()),
+                )
+                row = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+                return self._source_public(row)
         except BaseException:
             if target.exists():
                 target.unlink()
             raise
+
+    @_requires_activity
+    def restore_source_media(self, source_id: str, path: Path) -> dict:
+        """Restore an existing source ID only after exact byte-level verification."""
+        source_id = _identifier(source_id)
+        with self._db() as db:
+            row = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+        if row is None:
+            raise UploadError("source_not_found")
+        state, _actual_size = self._source_media_state(row)
+        if state == "present":
+            raise UploadError("source_already_present")
+        if state not in {"missing", "deleted"}:
+            raise UploadError("source_changed")
+        try:
+            before = _plain(path)
+        except OSError:
+            raise UploadError("source_unavailable") from None
+        if before.st_size != row["size"]:
+            raise UploadError("source_restore_mismatch")
+        if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
+            raise UploadError("upload_storage_full")
+        media_root = self.root / "media"
+        _plain(media_root, directory=True)
+        stage = media_root / f".{source_id}.{uuid4().hex}.restore"
+        digest = hashlib.sha256()
+        total = 0
+        published: Path | None = None
+        try:
+            with path.open("rb") as src, stage.open("xb") as dst:
+                if _signature(os.fstat(src.fileno())) != _signature(before):
+                    raise UploadError("source_changed")
+                while chunk := src.read(1024 * 1024):
+                    total += len(chunk)
+                    digest.update(chunk)
+                    dst.write(chunk)
+                if _signature(os.fstat(src.fileno())) != _signature(before):
+                    raise UploadError("source_changed")
+                dst.flush()
+                os.fsync(dst.fileno())
+            if (total != row["size"] or digest.hexdigest() != row["sha256"]
+                    or _signature(_plain(path)) != _signature(before)):
+                raise UploadError("source_restore_mismatch")
+            with self._active_guard, self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                current = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+                if current is None:
+                    raise UploadError("source_not_found")
+                if self._source_media_state(current)[0] not in {"missing", "deleted"}:
+                    raise UploadError("source_restore_conflict")
+                target = self._source_media_path(current)
+                try:
+                    os.link(stage, target)
+                except FileExistsError:
+                    raise UploadError("source_restore_conflict") from None
+                except OSError:
+                    raise UploadError("source_restore_failed") from None
+                published = target
+                stage.unlink()
+                db.execute(
+                    "UPDATE sources SET media_state='present',deleted_at=NULL WHERE id=?",
+                    (source_id,),
+                )
+                restored = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+                result = self._source_public(restored)
+            published = None
+            return result
+        finally:
+            stage.unlink(missing_ok=True)
+            if published is not None:
+                published.unlink(missing_ok=True)
 
     def _source_path(self, source_id: str) -> Path:
         _identifier(source_id)
@@ -437,44 +856,38 @@ class UploadService:
             row = db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         if row is None:
             raise UploadError("source_not_found")
-        if row["suffix"] not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
-            raise UploadError("source_changed")
-        _plain(self.root / "media", directory=True)
-        path = self.root / "media" / f"{source_id}{row['suffix']}"
-        try:
-            before = _plain(path)
-            if before.st_size != row["size"]:
-                raise UploadError("source_changed")
-            with path.open("rb") as handle:
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
-                    raise UploadError("source_changed")
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
-                    raise UploadError("source_changed")
-            if digest != row["sha256"] or _signature(_plain(path)) != _signature(before):
-                raise UploadError("source_changed")
-        except OSError:
-            raise UploadError("source_unavailable") from None
-        return path
+        return self._verified_source_media_path(row)
 
-    @staticmethod
-    def _job_public(row) -> dict:
+    def _job_public(self, row) -> dict:
         result = dict(row)
         result.pop("_page_bucket", None)
         result.pop("_page_rowid", None)
+        suffix = result.pop("source_suffix", None)
+        recorded_media_state = result.pop("source_media_record_state", "present")
         result["tags"] = json.loads(result["tags"])
+        if suffix is not None:
+            state, _actual_size = self._source_media_state(
+                {"id": result["source_id"], "suffix": suffix, "size": result["source_size"],
+                 "media_state": recorded_media_state}
+            )
+            result["source_media_present"] = state == "present"
+            result["source_media_state"] = state
         return result
 
     @staticmethod
     def _job_query() -> str:
-        return ("SELECT j.*,a.platform,a.name AS account_name,s.name AS source_name,"
-                "s.size AS source_size,s.sha256 AS source_sha256 FROM jobs j "
+        return ("SELECT j.*,a.platform,a.name AS account_name,"
+                "a.lifecycle_state AS account_lifecycle_state,s.name AS source_name,"
+                "s.size AS source_size,s.sha256 AS source_sha256,s.suffix AS source_suffix,"
+                "s.media_state AS source_media_record_state FROM jobs j "
                 "JOIN accounts a ON a.id=j.account_id JOIN sources s ON s.id=j.source_id")
 
     def job_page(self, *, cursor: str | None = None, limit: int = 50) -> dict:
         key = self._page_key(cursor, limit)
         query = ("SELECT * FROM (SELECT j.*,a.platform,a.name AS account_name,"
+                 "a.lifecycle_state AS account_lifecycle_state,"
                  "s.name AS source_name,s.size AS source_size,s.sha256 AS source_sha256,"
+                 "s.suffix AS source_suffix,s.media_state AS source_media_record_state,"
                  "j.rowid AS _page_rowid," + _JOB_PRIORITY
                  + " AS _page_bucket FROM jobs j JOIN accounts a ON a.id=j.account_id "
                    "JOIN sources s ON s.id=j.source_id) page")
@@ -518,6 +931,7 @@ class UploadService:
             raise UploadError("job_not_found")
         return self._job_public(row)
 
+    @_requires_activity
     def create_jobs(self, *, source_id: str, account_ids: list[str], title: str,
                     description: str, tags: list[str], idempotency_key: str,
                     category_id: int | None = None, mode: str = "publish",
@@ -535,7 +949,17 @@ class UploadService:
         tags = [_text(tag, 20, required=True) for tag in tags]
         if len(set(tags)) != len(tags) or any(any(c in tag for c in ",\n\r\t") for tag in tags):
             raise UploadError("invalid_tags")
-        if mode not in ("publish", "draft") or (copyright is not None and (type(copyright) is not int or copyright not in (1, 2))):
+        if (
+            mode not in ("publish", "draft")
+            or (
+                category_id is not None
+                and (type(category_id) is not int or not 1 <= category_id <= 10000)
+            )
+            or (
+                copyright is not None
+                and (type(copyright) is not int or copyright not in (1, 2))
+            )
+        ):
             raise UploadError("invalid_metadata")
         if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key):
             raise UploadError("invalid_idempotency_key")
@@ -548,13 +972,17 @@ class UploadService:
                 if prior["digest"] != digest:
                     raise UploadError("idempotency_conflict")
                 return [self._get_job(db, job_id) for job_id in json.loads(prior["job_ids"])]
-            if db.execute("SELECT id FROM sources WHERE id=?", (source_id,)).fetchone() is None:
+            source = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+            if source is None:
                 raise UploadError("source_not_found")
+            self._verified_source_media_path(source)
             accounts = []
             for account_id in account_ids:
                 account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
                 if account is None:
                     raise UploadError("account_not_found")
+                if account["lifecycle_state"] != "active":
+                    raise UploadError("account_disconnected")
                 platform = account["platform"]
                 if platform not in PLATFORMS or len(title) > TITLE_LIMITS[platform]:
                     raise UploadError("title_too_long")
@@ -579,6 +1007,7 @@ class UploadService:
             db.execute("INSERT INTO requests VALUES(?,?,?)", (idempotency_key, digest, json.dumps(job_ids)))
             return [self._get_job(db, job_id) for job_id in job_ids]
 
+    @_requires_activity
     def confirm(self, job_id: str) -> dict:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -589,14 +1018,24 @@ class UploadService:
                 raise UploadError("job_requires_new_draft")
             if not self.backend.inspect().get("ready"):
                 raise UploadError("runtime_missing")
-            account = db.execute("SELECT auth_state FROM accounts WHERE id=?", (job["account_id"],)).fetchone()
+            account = db.execute(
+                "SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
+                (job["account_id"],),
+            ).fetchone()
+            if account["lifecycle_state"] != "active":
+                raise UploadError("account_disconnected")
             if account["auth_state"] != "ready":
                 raise UploadError("account_not_ready")
+            source = db.execute("SELECT * FROM sources WHERE id=?", (job["source_id"],)).fetchone()
+            if source is None:
+                raise UploadError("source_not_found")
+            self._verified_source_media_path(source)
             db.execute("UPDATE jobs SET state='queued',code='',updated_at=? WHERE id=?", (_now(), job_id))
             result = self._get_job(db, job_id)
         self._wake.set()
         return result
 
+    @_requires_activity
     def cancel(self, job_id: str) -> dict:
         with self._active_guard, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -609,6 +1048,7 @@ class UploadService:
                     self._operation_stop.set()
             return self._get_job(db, job_id)
 
+    @_requires_activity
     def retry(self, job_id: str, acknowledge_unknown: bool = False) -> dict:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -621,6 +1061,14 @@ class UploadService:
             successor = db.execute("SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid LIMIT 1", (job_id,)).fetchone()
             if successor:
                 return self._get_job(db, successor["id"])
+            account = db.execute("SELECT lifecycle_state FROM accounts WHERE id=?",
+                                 (job["account_id"],)).fetchone()
+            if account is None or account["lifecycle_state"] != "active":
+                raise UploadError("account_disconnected")
+            source = db.execute("SELECT * FROM sources WHERE id=?", (job["source_id"],)).fetchone()
+            if source is None:
+                raise UploadError("source_not_found")
+            self._verified_source_media_path(source)
             new_id, now = uuid4().hex, _now()
             db.execute("INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,mode,copyright,source_credit,created_at,updated_at,retry_of) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (new_id, job["account_id"], job["source_id"], job["title"], job["description"], json.dumps(job["tags"], ensure_ascii=False), job["category_id"], job["mode"], job["copyright"], job["source_credit"], now, now, job_id))
@@ -631,11 +1079,17 @@ class UploadService:
             if self._shutdown.is_set():
                 return None
             db.execute("BEGIN IMMEDIATE")
-            operation = db.execute("SELECT o.*,a.platform FROM operations o JOIN accounts a ON a.id=o.account_id WHERE o.state='queued' ORDER BY o.rowid LIMIT 1").fetchone()
+            operation = db.execute(
+                "SELECT o.*,a.platform FROM operations o JOIN accounts a ON a.id=o.account_id "
+                "WHERE o.state='queued' AND a.lifecycle_state='active' ORDER BY o.rowid LIMIT 1"
+            ).fetchone()
             if operation:
                 table, kind, row = "operations", "account", dict(operation)
             else:
-                job = db.execute(self._job_query() + " WHERE j.state='queued' ORDER BY j.rowid LIMIT 1").fetchone()
+                job = db.execute(
+                    self._job_query()
+                    + " WHERE j.state='queued' AND a.lifecycle_state='active' ORDER BY j.rowid LIMIT 1"
+                ).fetchone()
                 if job is None:
                     return None
                 table, kind, row = "jobs", "upload", self._job_public(job)
@@ -665,6 +1119,7 @@ class UploadService:
                         return
         finally:
             self._lock.release()
+            self._release_lifetime_activity()
 
     def _recover_interrupted_records(self, *, timeout: float = 10) -> None:
         with self._db(timeout=timeout) as db:
@@ -709,6 +1164,19 @@ class UploadService:
                 self._login_presentations.pop(row["id"], None)
             monitor_done.set()
             monitor.join(timeout=12)
+            if kind == "account":
+                with self._db() as db:
+                    account = db.execute(
+                        "SELECT lifecycle_state FROM accounts WHERE id=?", (row["account_id"],)
+                    ).fetchone()
+                if account is not None and account["lifecycle_state"] == "disconnected":
+                    removed = self._remove_local_account_secret(row["platform"], row["account_id"])
+                    with self._db() as db:
+                        db.execute(
+                            "UPDATE accounts SET code=? WHERE id=? AND lifecycle_state='disconnected'",
+                            ("account_disconnected" if removed
+                             else "account_disconnect_cleanup_failed", row["account_id"]),
+                        )
 
     def _watch_cancellation(self, kind: str, operation_id: str, done: threading.Event, stop: threading.Event) -> None:
         table = "operations" if kind == "account" else "jobs"
@@ -741,8 +1209,12 @@ class UploadService:
                     result = getattr(self.backend, row["action"])(row["platform"], row["account_id"], stop)
             else:
                 with self._db() as db:
-                    account = db.execute("SELECT auth_state FROM accounts WHERE id=?", (row["account_id"],)).fetchone()
-                if account is None or account["auth_state"] != "ready":
+                    account = db.execute(
+                        "SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
+                        (row["account_id"],),
+                    ).fetchone()
+                if (account is None or account["lifecycle_state"] != "active"
+                        or account["auth_state"] != "ready"):
                     raise UploadError("account_not_ready")
                 path = self._source_path(row["source_id"])
                 if self._operation_stop.is_set():
@@ -765,7 +1237,11 @@ class UploadService:
             if kind == "account":
                 db.execute("BEGIN IMMEDIATE")
                 current = db.execute("SELECT * FROM operations WHERE id=?", (row["id"],)).fetchone()
-                if current is None or current["state"] != "running" or current["account_id"] != row["account_id"]:
+                account = db.execute("SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
+                                     (row["account_id"],)).fetchone()
+                if (current is None or current["state"] != "running"
+                        or current["account_id"] != row["account_id"]
+                        or account is None or account["lifecycle_state"] != "active"):
                     return
                 if current["code"] == "cancellation_requested" or self._operation_stop.is_set():
                     result = BackendResult("canceled", "canceled")

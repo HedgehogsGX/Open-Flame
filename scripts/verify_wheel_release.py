@@ -111,7 +111,7 @@ identity = importlib.import_module('video_download_control.build_identity')
 installed_file(identity.__file__)
 assert identity.current_product_identity() == expected['product_identity']
 scripts = {entry.name: entry.value for entry in distribution.entry_points if entry.group == 'console_scripts'}
-assert scripts == expected['scripts'] and len(scripts) == 13
+assert scripts == expected['scripts'] and len(scripts) == 14
 
 # This import is from the verified installed wheel, never the verifier checkout.
 from video_download_control.subprocess_runner import CommandSpec, SecureSubprocessRunner
@@ -165,8 +165,7 @@ def verify_wheel_release(
             selected[name] = payload
         runtime = runtime_requirements(selected["deployment/requirements.runtime.lock"])
         scripts = tomllib.loads(selected["pyproject.toml"].decode("utf-8"))["project"]["scripts"]
-        require(len(scripts) == 13 and all(re.fullmatch(r"video-download-[a-z0-9-]+", name)
-                                         for name in scripts), "entrypoints_invalid")
+        require(scripts == release.PROJECT_SCRIPTS, "entrypoints_invalid")
         wheel_name = f"video_download_control-{manifest['version']}-py3-none-any.whl"
         wheel_payload = release.read_plain(release_dir, wheel_name)
         require(release.fingerprint(wheel_payload) == manifest["artifacts"][wheel_name], "release_changed")
@@ -207,7 +206,7 @@ def verify_wheel_release(
         }
         release.command(python, ["-c", INSTALLED_PROBE, json.dumps(expected)], work_dir)
         report.update(status="passed", stage="complete", runtime_dependencies_verified=13,
-                      console_scripts_verified=13)
+                      console_scripts_verified=len(release.PROJECT_SCRIPTS))
     except KeyboardInterrupt:
         report.update(status="cancelled", error_code="cancelled")
     except WheelSmokeError as error:

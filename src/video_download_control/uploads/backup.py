@@ -1,0 +1,1275 @@
+"""Offline, secret-free backup and restore for the upload data root.
+
+An exclusive upload activity lease and the legacy upload worker lock are held
+for the whole backup.  The database is copied from a stable byte snapshot, so
+reading a WAL database does not create a SHM file or otherwise open the source
+database through SQLite.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import stat
+import tempfile
+import time
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
+from typing import Iterator, Mapping
+from uuid import uuid4
+
+from .. import __version__
+from .. import backup as _common
+from . import schema as _schema
+from .activity_lock import UploadActivityBusy, UploadActivityLease, activity_lock_path
+from .contracts import PLATFORMS
+from .service import TITLE_LIMITS, _SAFE_CODE
+
+UPLOAD_BACKUP_FORMAT_VERSION = 1
+UPLOAD_BACKUP_METADATA_NAME = "backup-metadata.json"
+UPLOAD_BACKUP_MANIFEST_NAME = "backup-manifest.json"
+UPLOAD_BACKUP_MANIFEST_HASH_NAME = "backup-manifest.sha256"
+UPLOAD_DATABASE_PAYLOAD_PATH = "payload/uploads.sqlite3"
+UPLOAD_MEDIA_PAYLOAD_PREFIX = PurePosixPath("payload/media")
+UPLOAD_DATABASE_NAME = "uploads.sqlite3"
+UPLOAD_WORKER_LOCK_NAME = ".worker.lock"
+MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+MAX_METADATA_BYTES = 1024 * 1024
+MAX_BACKUP_ENTRIES = 1_000_000
+MAX_SOURCE_BYTES = 2 * 1024**3
+_CONSISTENCY = (
+    "exclusive_upload_activity_and_worker_plus_stable_sqlite_snapshot"
+)
+
+UploadBackupError = _common.BackupRestoreError
+
+_ID = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"})
+_EXCLUDED_PATHS = [
+    ".open-flame-setup.lock",
+    ".worker.lock",
+    "incoming",
+    "private",
+    "runtime",
+]
+_ACCOUNT_FIELDS = [
+    "id",
+    "platform",
+    "name",
+    "auth_state",
+    "code",
+    "created_at",
+    "lifecycle_state",
+    "disconnected_at",
+]
+_PRESERVED_TABLES = ["accounts", "sources", "jobs", "operations", "requests"]
+_RESTORE_POLICY = {
+    "ready_or_checking_account": "unchecked_account_missing",
+    "queued_job": "draft_restart_confirmation_required",
+    "running_job": "unknown_interrupted_result_unknown",
+    "queued_or_running_operation": "failed_operation_interrupted",
+}
+_MANIFEST_KEYS = {"algorithm", "entries", "format_version", "metadata_path"}
+_METADATA_KEYS = {
+    "account_fields",
+    "application_version",
+    "consistency",
+    "created_at",
+    "database_payload_path",
+    "excluded_paths",
+    "format_version",
+    "media_payload_prefix",
+    "media_scope",
+    "payload_file_count",
+    "payload_total_bytes",
+    "preserved_tables",
+    "restore_policy",
+    "schema_version",
+    "secret_material_included",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class UploadBackupResult:
+    backup_root: Path
+    schema_version: int
+    file_count: int
+    total_bytes: int
+    manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class UploadRestoreResult:
+    restore_root: Path
+    database_path: Path
+    schema_version: int
+    file_count: int
+    total_bytes: int
+    manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Entry:
+    path: str
+    size_bytes: int
+    sha256: str
+
+
+@contextmanager
+def _exclusive_upload_activity(root: Path) -> Iterator[None]:
+    """Map a nonblocking exclusive activity conflict to the backup API."""
+
+    try:
+        lease = UploadActivityLease.acquire(root, exclusive=True)
+    except UploadActivityBusy:
+        raise UploadBackupError("upload application or operation is active") from None
+    try:
+        yield
+    finally:
+        lease.release()
+
+
+def create_upload_backup(
+    *,
+    source_root: Path,
+    backup_target: Path,
+) -> UploadBackupResult:
+    """Create one atomic backup while all upload mutation is quiescent."""
+
+    root_candidate = _common._require_existing_directory(
+        source_root,
+        label="upload source root",
+    )
+    target_candidate = _common._require_new_target(
+        backup_target,
+        label="upload backup target",
+    )
+    if target_candidate == activity_lock_path(root_candidate):
+        raise UploadBackupError("upload backup target conflicts with activity lock")
+    try:
+        with _exclusive_upload_activity(root_candidate):
+            root = _common._require_existing_directory(
+                root_candidate,
+                label="upload source root",
+            )
+            target = _common._require_new_target(
+                target_candidate,
+                label="upload backup target",
+            )
+            if target == activity_lock_path(root):
+                raise UploadBackupError(
+                    "upload backup target conflicts with activity lock"
+                )
+            if _common._paths_overlap(root, target):
+                raise UploadBackupError("upload backup target overlaps its source")
+            with _exclusive_upload_worker(root):
+                return _create_upload_backup_locked(
+                    source_root=root,
+                    backup_target=target,
+                )
+    except UploadBackupError:
+        raise
+    except _schema.UploadSchemaError as exc:
+        raise UploadBackupError("upload database schema is invalid") from exc
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise UploadBackupError("upload backup operation failed") from exc
+
+
+def _create_upload_backup_locked(
+    *,
+    source_root: Path,
+    backup_target: Path,
+) -> UploadBackupResult:
+    """Create after the activity and worker leases have both been acquired."""
+
+    root = _common._require_existing_directory(source_root, label="upload source root")
+    database = _common._require_existing_regular_file(
+        root / UPLOAD_DATABASE_NAME,
+        label="upload source database",
+    )
+    media_root = _common._require_existing_directory(
+        root / "media",
+        label="upload media root",
+    )
+    target = _common._require_new_target(backup_target, label="upload backup target")
+    source_activity_path = activity_lock_path(root)
+    if target == source_activity_path:
+        raise UploadBackupError("upload backup target conflicts with activity lock")
+    if _common._paths_overlap(root, target):
+        raise UploadBackupError("upload backup target overlaps its source")
+
+    stage = target.parent / f".{target.name}.partial-{uuid4().hex}"
+    if stage == source_activity_path:
+        raise UploadBackupError("upload backup staging path conflicts with activity lock")
+    if os.path.lexists(stage):
+        raise UploadBackupError("upload backup staging path collision")
+    try:
+        stage.mkdir(mode=0o700)
+        payload_database = stage.joinpath(
+            *PurePosixPath(UPLOAD_DATABASE_PAYLOAD_PATH).parts
+        )
+        payload_database.parent.mkdir(parents=True)
+        payload_media = stage.joinpath(*UPLOAD_MEDIA_PAYLOAD_PREFIX.parts)
+        payload_media.mkdir(parents=True)
+
+        _snapshot_upload_database(database, payload_database)
+        payload_entries = [
+            _entry_for_file(
+                payload_database,
+                relative_path=UPLOAD_DATABASE_PAYLOAD_PATH,
+            )
+        ]
+        payload_entries.extend(
+            _copy_registered_media(
+                database_path=payload_database,
+                source_media_root=media_root,
+                destination_media_root=payload_media,
+            )
+        )
+        _audit_database_and_media(
+            database_path=payload_database,
+            media_root=payload_media,
+        )
+
+        payload_entries.sort(key=lambda entry: entry.path.casefold())
+        payload_total = sum(entry.size_bytes for entry in payload_entries)
+        metadata = {
+            "format_version": UPLOAD_BACKUP_FORMAT_VERSION,
+            "created_at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+            "application_version": __version__,
+            "schema_version": _schema.SCHEMA_VERSION,
+            "database_payload_path": UPLOAD_DATABASE_PAYLOAD_PATH,
+            "media_payload_prefix": UPLOAD_MEDIA_PAYLOAD_PREFIX.as_posix(),
+            "payload_file_count": len(payload_entries),
+            "payload_total_bytes": payload_total,
+            "consistency": _CONSISTENCY,
+            "excluded_paths": _EXCLUDED_PATHS,
+            "media_scope": "registered_present_media_only",
+            "secret_material_included": False,
+            "account_fields": _ACCOUNT_FIELDS,
+            "preserved_tables": _PRESERVED_TABLES,
+            "restore_policy": _RESTORE_POLICY,
+        }
+        metadata_path = stage / UPLOAD_BACKUP_METADATA_NAME
+        _common._write_json_exclusive(metadata_path, metadata)
+        entries = [
+            _entry_for_file(
+                metadata_path,
+                relative_path=UPLOAD_BACKUP_METADATA_NAME,
+            ),
+            *payload_entries,
+        ]
+        entries.sort(key=lambda entry: entry.path.casefold())
+        manifest = {
+            "format_version": UPLOAD_BACKUP_FORMAT_VERSION,
+            "algorithm": "sha256",
+            "metadata_path": UPLOAD_BACKUP_METADATA_NAME,
+            "entries": [
+                {
+                    "path": entry.path,
+                    "size_bytes": entry.size_bytes,
+                    "sha256": entry.sha256,
+                }
+                for entry in entries
+            ],
+        }
+        manifest_path = stage / UPLOAD_BACKUP_MANIFEST_NAME
+        _common._write_json_exclusive(manifest_path, manifest)
+        manifest_sha256 = _common._sha256_regular_file(manifest_path)
+        _common._write_text_exclusive(
+            stage / UPLOAD_BACKUP_MANIFEST_HASH_NAME,
+            manifest_sha256 + "\n",
+        )
+        _assert_no_windows_named_streams(stage)
+        _common._sync_tree(stage)
+        if os.path.lexists(target):
+            raise UploadBackupError("upload backup target already exists")
+        _common._publish_directory(stage, target)
+        return UploadBackupResult(
+            backup_root=target,
+            schema_version=_schema.SCHEMA_VERSION,
+            file_count=len(entries),
+            total_bytes=sum(entry.size_bytes for entry in entries),
+            manifest_sha256=manifest_sha256,
+        )
+    except UploadBackupError:
+        raise
+    except _schema.UploadSchemaError as exc:
+        raise UploadBackupError("upload database schema is invalid") from exc
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise UploadBackupError("upload backup operation failed") from exc
+    finally:
+        _common._cleanup_stage(stage)
+
+
+def restore_upload_backup(
+    *,
+    backup_root: Path,
+    restore_root: Path,
+) -> UploadRestoreResult:
+    """Verify and restore while exclusively reserving the new upload root."""
+
+    source_candidate = _common._require_existing_directory(
+        backup_root,
+        label="upload backup root",
+    )
+    target_candidate = _common._require_new_target(
+        restore_root,
+        label="upload restore target",
+    )
+    source_activity_path = activity_lock_path(source_candidate)
+    target_activity_path = activity_lock_path(target_candidate)
+    if _common._paths_overlap(source_candidate, target_candidate):
+        raise UploadBackupError("upload restore target overlaps its backup")
+    if (
+        source_candidate == target_activity_path
+        or target_candidate == source_activity_path
+    ):
+        raise UploadBackupError("upload restore path conflicts with activity lock")
+    try:
+        with _exclusive_upload_activity(target_candidate):
+            source = _common._require_existing_directory(
+                source_candidate,
+                label="upload backup root",
+            )
+            target = _common._require_new_target(
+                target_candidate,
+                label="upload restore target",
+            )
+            if (
+                source == activity_lock_path(target)
+                or target == activity_lock_path(source)
+            ):
+                raise UploadBackupError(
+                    "upload restore path conflicts with activity lock"
+                )
+            if _common._paths_overlap(source, target):
+                raise UploadBackupError("upload restore target overlaps its backup")
+            return _restore_upload_backup_locked(
+                backup_root=source,
+                restore_root=target,
+            )
+    except UploadBackupError:
+        raise
+    except _schema.UploadSchemaError as exc:
+        raise UploadBackupError("upload backup database schema is invalid") from exc
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise UploadBackupError("upload restore operation failed") from exc
+
+
+def _restore_upload_backup_locked(
+    *,
+    backup_root: Path,
+    restore_root: Path,
+) -> UploadRestoreResult:
+    """Restore after the destination activity lease has been acquired."""
+
+    source = _common._require_existing_directory(backup_root, label="upload backup root")
+    target = _common._require_new_target(restore_root, label="upload restore target")
+    source_activity_path = activity_lock_path(source)
+    target_activity_path = activity_lock_path(target)
+    if source == target_activity_path or target == source_activity_path:
+        raise UploadBackupError("upload restore path conflicts with activity lock")
+    if _common._paths_overlap(source, target):
+        raise UploadBackupError("upload restore target overlaps its backup")
+
+    stage = target.parent / f".{target.name}.partial-{uuid4().hex}"
+    if stage in {source_activity_path, target_activity_path}:
+        raise UploadBackupError("upload restore staging path conflicts with activity lock")
+    if os.path.lexists(stage):
+        raise UploadBackupError("upload restore staging path collision")
+    try:
+        manifest_sha256, entries, _metadata = _load_and_verify_backup(source)
+        payload_entries = [
+            entry for entry in entries if entry.path != UPLOAD_BACKUP_METADATA_NAME
+        ]
+        total_bytes = sum(entry.size_bytes for entry in payload_entries)
+        if shutil.disk_usage(target.parent).free < total_bytes:
+            raise UploadBackupError("insufficient free space for upload restore")
+        stage.mkdir(mode=0o700)
+        (stage / "media").mkdir()
+        restored_paths: set[str] = set()
+        for entry in payload_entries:
+            source_file = source.joinpath(*PurePosixPath(entry.path).parts)
+            if entry.path == UPLOAD_DATABASE_PAYLOAD_PATH:
+                relative = Path(UPLOAD_DATABASE_NAME)
+            else:
+                pure = PurePosixPath(entry.path)
+                try:
+                    media_relative = pure.relative_to(UPLOAD_MEDIA_PAYLOAD_PREFIX)
+                except ValueError as exc:
+                    raise UploadBackupError("upload backup payload path is unexpected") from exc
+                if len(media_relative.parts) != 1:
+                    raise UploadBackupError("upload backup media path is invalid")
+                relative = Path("media", *media_relative.parts)
+            key = _path_key(relative.as_posix())
+            if key in restored_paths:
+                raise UploadBackupError("upload restore destination path collision")
+            restored_paths.add(key)
+            destination = stage / relative
+            digest, size = _copy_regular_file(
+                source_file,
+                destination,
+                expected_size=entry.size_bytes,
+                expected_sha256=entry.sha256,
+            )
+            if digest != entry.sha256 or size != entry.size_bytes:
+                raise UploadBackupError("upload restored file verification failed")
+
+        restored_database = stage / UPLOAD_DATABASE_NAME
+        _audit_database_and_media(
+            database_path=restored_database,
+            media_root=stage / "media",
+        )
+        _apply_restore_state_policy(restored_database)
+        _audit_database_and_media(
+            database_path=restored_database,
+            media_root=stage / "media",
+        )
+        _assert_no_windows_named_streams(stage)
+        _common._sync_tree(stage)
+        if os.path.lexists(target):
+            raise UploadBackupError("upload restore target already exists")
+        _common._publish_directory(stage, target)
+        return UploadRestoreResult(
+            restore_root=target,
+            database_path=target / UPLOAD_DATABASE_NAME,
+            schema_version=_schema.SCHEMA_VERSION,
+            file_count=len(payload_entries),
+            total_bytes=total_bytes,
+            manifest_sha256=manifest_sha256,
+        )
+    except UploadBackupError:
+        raise
+    except _schema.UploadSchemaError as exc:
+        raise UploadBackupError("upload backup database schema is invalid") from exc
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise UploadBackupError("upload restore operation failed") from exc
+    finally:
+        _common._cleanup_stage(stage)
+
+
+@contextmanager
+def _exclusive_upload_worker(root: Path) -> Iterator[None]:
+    """Take the same lock byte/flock used by ``UploadService.start``."""
+
+    path = root / UPLOAD_WORKER_LOCK_NAME
+    _common._assert_existing_ancestors_no_links(path.parent)
+    try:
+        path = _common._require_existing_regular_file(
+            path,
+            label="upload worker lock",
+        )
+    except UploadBackupError as exc:
+        raise UploadBackupError("upload worker lock is unavailable") from exc
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        handle = os.fdopen(descriptor, "r+b", closefd=True)
+    except OSError as exc:
+        raise UploadBackupError("upload worker lock is unavailable") from exc
+    locked = False
+    try:
+        opened = os.fstat(handle.fileno())
+        current = _common._safe_lstat(path)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or _common._is_link_or_reparse(path, current)
+            or not _same_identity(opened, current)
+            or opened.st_size != 1
+        ):
+            raise UploadBackupError("upload worker lock is unsafe")
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise UploadBackupError("upload worker is active") from exc
+        locked = True
+        handle.seek(0)
+        if handle.read(1) != b"0":
+            raise UploadBackupError("upload worker lock is invalid")
+        yield
+    finally:
+        if locked:
+            with suppress(OSError):
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _snapshot_upload_database(source: Path, destination: Path) -> None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="open-flame-upload-backup-") as temporary:
+            snapshot = Path(temporary) / UPLOAD_DATABASE_NAME
+            for attempt in range(_schema._SNAPSHOT_ATTEMPTS):
+                try:
+                    _schema._copy_stable_snapshot(source, snapshot)
+                    break
+                except _schema._SnapshotChanged:
+                    snapshot.unlink(missing_ok=True)
+                    for suffix in ("-wal", "-shm"):
+                        Path(str(snapshot) + suffix).unlink(missing_ok=True)
+                    if attempt + 1 == _schema._SNAPSHOT_ATTEMPTS:
+                        raise UploadBackupError("upload database changed during snapshot") from None
+                    time.sleep(_schema._SNAPSHOT_RETRY_SECONDS)
+            _schema._validate_snapshot_wal(snapshot)
+            _schema.validate_upload_schema(snapshot)
+            _common._sqlite_online_backup(snapshot, destination)
+        _schema.validate_upload_schema(destination)
+    except (_schema.UploadSchemaError, sqlite3.Error) as exc:
+        raise UploadBackupError("upload database schema or snapshot is invalid") from exc
+
+
+def _copy_registered_media(
+    *,
+    database_path: Path,
+    source_media_root: Path,
+    destination_media_root: Path,
+) -> list[_Entry]:
+    entries: list[_Entry] = []
+    with _database(database_path) as db:
+        rows = list(db.execute(
+            "SELECT id,name,suffix,size,sha256,created_at,media_state,deleted_at "
+            "FROM sources ORDER BY id"
+        ))
+    seen: set[str] = set()
+    for row in rows:
+        name = _validate_source_row(row)
+        key = name.casefold()
+        if key in seen:
+            raise UploadBackupError("upload source media names collide")
+        seen.add(key)
+        source = source_media_root / name
+        if row["media_state"] != "present":
+            if os.path.lexists(source):
+                raise UploadBackupError("non-present upload media still exists")
+            continue
+        destination = destination_media_root / name
+        digest, size = _copy_regular_file(
+            source,
+            destination,
+            expected_size=row["size"],
+            expected_sha256=row["sha256"],
+        )
+        entries.append(_Entry(
+            path=(UPLOAD_MEDIA_PAYLOAD_PREFIX / name).as_posix(),
+            size_bytes=size,
+            sha256=digest,
+        ))
+    return entries
+
+
+def _audit_database_and_media(*, database_path: Path, media_root: Path) -> None:
+    _schema.validate_upload_schema(database_path)
+    _common._require_existing_directory(media_root, label="upload backup media root")
+    with _database(database_path) as db:
+        rows = list(db.execute(
+            "SELECT id,name,suffix,size,sha256,created_at,media_state,deleted_at "
+            "FROM sources ORDER BY id"
+        ))
+        if list(db.execute("PRAGMA foreign_key_check")):
+            raise UploadBackupError("upload backup foreign keys are invalid")
+        _audit_database_rows(db)
+    expected: set[str] = set()
+    for row in rows:
+        name = _validate_source_row(row)
+        path = media_root / name
+        if row["media_state"] == "present":
+            _common._verify_regular_file(
+                path,
+                expected_size=row["size"],
+                expected_sha256=row["sha256"],
+            )
+            expected.add(name.casefold())
+        elif os.path.lexists(path):
+            raise UploadBackupError("non-present upload media is included")
+    actual: set[str] = set()
+    for entry in os.scandir(media_root):
+        path = Path(entry.path)
+        info = _common._safe_lstat(path)
+        if _common._is_link_or_reparse(path, info) or not stat.S_ISREG(info.st_mode):
+            raise UploadBackupError("upload backup media contains an unsafe entry")
+        key = entry.name.casefold()
+        if key in actual:
+            raise UploadBackupError("upload backup media names collide")
+        actual.add(key)
+    if actual != expected:
+        raise UploadBackupError("upload backup media inventory does not match its database")
+
+
+def _validate_source_row(row: sqlite3.Row) -> str:
+    source_id = row["id"]
+    original_name = row["name"]
+    suffix = row["suffix"]
+    size = row["size"]
+    digest = row["sha256"]
+    state = row["media_state"]
+    deleted_at = row["deleted_at"]
+    if (
+        not isinstance(source_id, str)
+        or _ID.fullmatch(source_id) is None
+        or not _is_normalized_text(original_name, 180, required=True)
+        or any(character in original_name for character in "/\\:\x00")
+        or original_name in {".", ".."}
+        or not isinstance(suffix, str)
+        or suffix not in _SUFFIXES
+        or Path(original_name).suffix.lower() != suffix
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or not 0 < size <= MAX_SOURCE_BYTES
+        or not isinstance(digest, str)
+        or _SHA256.fullmatch(digest) is None
+        or not _is_timestamp(row["created_at"])
+        or state not in {"present", "missing", "deleted"}
+        or (state == "deleted" and not _is_timestamp(deleted_at))
+        or (state != "deleted" and deleted_at is not None)
+    ):
+        raise UploadBackupError("upload source metadata is invalid")
+    return source_id + suffix
+
+
+def _apply_restore_state_policy(database_path: Path) -> None:
+    _schema.validate_upload_schema(database_path)
+    now = datetime.now(UTC).isoformat()
+    db = sqlite3.connect(database_path)
+    try:
+        try:
+            mode = db.execute("PRAGMA journal_mode=DELETE").fetchone()
+            if mode is None or str(mode[0]).lower() != "delete":
+                raise UploadBackupError("restored upload database journal mode is unsafe")
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "UPDATE jobs SET state='unknown',code='interrupted_result_unknown',"
+                "updated_at=? WHERE state='running'",
+                (now,),
+            )
+            db.execute(
+                "UPDATE jobs SET state='draft',code='restart_confirmation_required',"
+                "updated_at=? WHERE state='queued'",
+                (now,),
+            )
+            db.execute(
+                "UPDATE operations SET state='failed',code='operation_interrupted',"
+                "updated_at=? WHERE state IN ('queued','running')",
+                (now,),
+            )
+            db.execute(
+                "UPDATE accounts SET auth_state='unchecked',code='account_missing' "
+                "WHERE lifecycle_state='active' AND auth_state IN ('ready','checking')"
+            )
+            if list(db.execute("PRAGMA foreign_key_check")):
+                raise UploadBackupError("restored upload database foreign keys are invalid")
+            db.commit()
+        except Exception:
+            with suppress(sqlite3.Error):
+                db.rollback()
+            raise
+    finally:
+        db.close()
+    _schema.validate_upload_schema(database_path)
+
+
+def _load_and_verify_backup(
+    root: Path,
+) -> tuple[str, tuple[_Entry, ...], Mapping[str, object]]:
+    _assert_no_windows_named_streams(root)
+    hash_path = root / UPLOAD_BACKUP_MANIFEST_HASH_NAME
+    manifest_path = root / UPLOAD_BACKUP_MANIFEST_NAME
+    try:
+        hash_text = _common._read_bounded_regular_file(hash_path, 128).decode(
+            "ascii", errors="strict"
+        )
+    except UnicodeDecodeError as exc:
+        raise UploadBackupError("upload manifest hash record is invalid") from exc
+    if re.fullmatch(r"[0-9a-f]{64}\n", hash_text) is None:
+        raise UploadBackupError("upload manifest hash record is invalid")
+    expected_hash = hash_text.strip()
+    if _common._sha256_regular_file(manifest_path) != expected_hash:
+        raise UploadBackupError("upload manifest hash mismatch")
+    manifest = _common._read_json_mapping(manifest_path, MAX_MANIFEST_BYTES)
+    if (
+        set(manifest) != _MANIFEST_KEYS
+        or type(manifest["format_version"]) is not int
+        or manifest["format_version"] != UPLOAD_BACKUP_FORMAT_VERSION
+        or manifest["algorithm"] != "sha256"
+        or manifest["metadata_path"] != UPLOAD_BACKUP_METADATA_NAME
+    ):
+        raise UploadBackupError("upload manifest header is invalid")
+    raw_entries = manifest["entries"]
+    if not isinstance(raw_entries, list) or not 1 <= len(raw_entries) <= MAX_BACKUP_ENTRIES:
+        raise UploadBackupError("upload manifest entry count is invalid")
+    entries: list[_Entry] = []
+    seen: set[str] = set()
+    for raw in raw_entries:
+        if not isinstance(raw, dict) or set(raw) != {"path", "sha256", "size_bytes"}:
+            raise UploadBackupError("upload manifest entry is invalid")
+        relative = _common._validated_relative_path(raw["path"])
+        _validate_manifest_entry_path(relative)
+        size = raw["size_bytes"]
+        digest = raw["sha256"]
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(digest, str)
+            or _SHA256.fullmatch(digest) is None
+        ):
+            raise UploadBackupError("upload manifest entry is invalid")
+        key = _path_key(relative)
+        if key in seen:
+            raise UploadBackupError("upload manifest paths collide")
+        seen.add(key)
+        candidate = root.joinpath(*PurePosixPath(relative).parts)
+        _common._verify_regular_file(
+            candidate,
+            expected_size=size,
+            expected_sha256=digest,
+        )
+        entries.append(_Entry(relative, size, digest))
+    if entries != sorted(entries, key=lambda entry: entry.path.casefold()):
+        raise UploadBackupError("upload manifest entries are not canonical")
+    expected_files = {
+        *(entry.path.casefold() for entry in entries),
+        UPLOAD_BACKUP_MANIFEST_NAME.casefold(),
+        UPLOAD_BACKUP_MANIFEST_HASH_NAME.casefold(),
+    }
+    actual_paths = _common._scan_backup_files(root)
+    actual_files = {path.casefold() for path in actual_paths}
+    if len(actual_files) != len(actual_paths):
+        raise UploadBackupError("upload backup paths collide")
+    if actual_files != expected_files:
+        raise UploadBackupError("upload backup contains untracked or missing files")
+    metadata_entry = next(
+        (entry for entry in entries if entry.path == UPLOAD_BACKUP_METADATA_NAME),
+        None,
+    )
+    if metadata_entry is None:
+        raise UploadBackupError("upload backup metadata is not covered by its manifest")
+    metadata = _common._read_json_mapping(
+        root / UPLOAD_BACKUP_METADATA_NAME,
+        MAX_METADATA_BYTES,
+    )
+    _validate_metadata(metadata, entries)
+    return expected_hash, tuple(entries), metadata
+
+
+def _assert_no_windows_named_streams(root: Path) -> None:
+    """Reject NTFS alternate data streams anywhere in a backup tree."""
+
+    if os.name != "nt":
+        return
+
+    def walk(directory: Path) -> None:
+        _assert_windows_path_has_only_default_stream(directory)
+        for entry in os.scandir(directory):
+            path = Path(entry.path)
+            info = _common._safe_lstat(path)
+            if _common._is_link_or_reparse(path, info):
+                raise UploadBackupError("upload backup contains a link or reparse point")
+            _assert_windows_path_has_only_default_stream(path)
+            if stat.S_ISDIR(info.st_mode):
+                walk(path)
+            elif not stat.S_ISREG(info.st_mode):
+                raise UploadBackupError("upload backup contains a special file")
+
+    walk(root)
+
+
+def _assert_windows_path_has_only_default_stream(path: Path) -> None:
+    from ctypes import wintypes
+
+    class _FindStreamData(ctypes.Structure):
+        _fields_ = [
+            ("stream_size", ctypes.c_longlong),
+            ("stream_name", wintypes.WCHAR * 296),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    find_first = kernel32.FindFirstStreamW
+    find_first.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(_FindStreamData),
+        wintypes.DWORD,
+    ]
+    find_first.restype = wintypes.HANDLE
+    find_next = kernel32.FindNextStreamW
+    find_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FindStreamData)]
+    find_next.restype = wintypes.BOOL
+    find_close = kernel32.FindClose
+    find_close.argtypes = [wintypes.HANDLE]
+    find_close.restype = wintypes.BOOL
+
+    absolute = os.path.abspath(path)
+    if not absolute.startswith("\\\\?\\"):
+        if absolute.startswith("\\\\"):
+            absolute = "\\\\?\\UNC\\" + absolute[2:]
+        else:
+            absolute = "\\\\?\\" + absolute
+    data = _FindStreamData()
+    handle = find_first(absolute, 0, ctypes.byref(data), 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        if ctypes.get_last_error() == 38:  # ERROR_HANDLE_EOF: no data streams.
+            return
+        raise UploadBackupError("upload backup alternate stream audit failed")
+    try:
+        while True:
+            if data.stream_name != "::$DATA":
+                raise UploadBackupError("upload backup contains an alternate data stream")
+            if find_next(handle, ctypes.byref(data)):
+                continue
+            if ctypes.get_last_error() in {18, 38}:  # NO_MORE_FILES / HANDLE_EOF.
+                break
+            raise UploadBackupError("upload backup alternate stream audit failed")
+    finally:
+        find_close(handle)
+
+
+def _validate_metadata(metadata: Mapping[str, object], entries: list[_Entry]) -> None:
+    payload = [entry for entry in entries if entry.path != UPLOAD_BACKUP_METADATA_NAME]
+    created_at = metadata.get("created_at")
+    format_version = metadata.get("format_version")
+    schema_version = metadata.get("schema_version")
+    payload_file_count = metadata.get("payload_file_count")
+    payload_total_bytes = metadata.get("payload_total_bytes")
+    try:
+        parsed = datetime.fromisoformat(created_at) if isinstance(created_at, str) else None
+    except ValueError:
+        parsed = None
+    if (
+        set(metadata) != _METADATA_KEYS
+        or type(format_version) is not int
+        or format_version != UPLOAD_BACKUP_FORMAT_VERSION
+        or type(schema_version) is not int
+        or schema_version != _schema.SCHEMA_VERSION
+        or metadata.get("database_payload_path") != UPLOAD_DATABASE_PAYLOAD_PATH
+        or metadata.get("media_payload_prefix") != UPLOAD_MEDIA_PAYLOAD_PREFIX.as_posix()
+        or type(payload_file_count) is not int
+        or payload_file_count != len(payload)
+        or type(payload_total_bytes) is not int
+        or payload_total_bytes != sum(entry.size_bytes for entry in payload)
+        or metadata.get("consistency") != _CONSISTENCY
+        or metadata.get("excluded_paths") != _EXCLUDED_PATHS
+        or metadata.get("media_scope") != "registered_present_media_only"
+        or metadata.get("secret_material_included") is not False
+        or metadata.get("account_fields") != _ACCOUNT_FIELDS
+        or metadata.get("preserved_tables") != _PRESERVED_TABLES
+        or metadata.get("restore_policy") != _RESTORE_POLICY
+        or not isinstance(metadata.get("application_version"), str)
+        or not metadata.get("application_version")
+        or parsed is None
+        or parsed.tzinfo is None
+    ):
+        raise UploadBackupError("upload backup metadata is invalid")
+    paths = {entry.path for entry in payload}
+    if UPLOAD_DATABASE_PAYLOAD_PATH not in paths:
+        raise UploadBackupError("upload database payload is missing")
+    if any(
+        path != UPLOAD_DATABASE_PAYLOAD_PATH
+        and not PurePosixPath(path).is_relative_to(UPLOAD_MEDIA_PAYLOAD_PREFIX)
+        for path in paths
+    ):
+        raise UploadBackupError("upload backup payload path is unexpected")
+
+
+@contextmanager
+def _database(path: Path) -> Iterator[sqlite3.Connection]:
+    db = sqlite3.connect(path)
+    try:
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA query_only=ON")
+        yield db
+    finally:
+        db.close()
+
+
+def _audit_database_rows(db: sqlite3.Connection) -> None:
+    accounts = list(db.execute(
+        "SELECT id,platform,name,auth_state,code,created_at,lifecycle_state,disconnected_at "
+        "FROM accounts"
+    ))
+    account_ids = set()
+    account_platforms: dict[str, str] = {}
+    account_lifecycles: dict[str, str] = {}
+    for row in accounts:
+        if (
+            not isinstance(row["id"], str)
+            or _ID.fullmatch(row["id"]) is None
+            or row["id"] in account_ids
+            or row["platform"] not in PLATFORMS
+            or not _is_normalized_text(row["name"], 60, required=True)
+            or row["auth_state"] not in {"unchecked", "checking", "ready", "invalid"}
+            or not _is_safe_code(row["code"])
+            or not _is_timestamp(row["created_at"])
+            or row["lifecycle_state"] not in {"active", "disconnected"}
+            or (
+                row["lifecycle_state"] == "active"
+                and row["disconnected_at"] is not None
+            )
+            or (
+                row["lifecycle_state"] == "disconnected"
+                and (
+                    not _is_timestamp(row["disconnected_at"])
+                    or row["auth_state"] != "unchecked"
+                )
+            )
+        ):
+            raise UploadBackupError("upload account metadata is invalid")
+        account_ids.add(row["id"])
+        account_platforms[row["id"]] = row["platform"]
+        account_lifecycles[row["id"]] = row["lifecycle_state"]
+
+    jobs = list(db.execute(
+        "SELECT id,account_id,source_id,title,description,tags,category_id,mode,"
+        "copyright,source_credit,state,code,created_at,updated_at,retry_of FROM jobs"
+    ))
+    source_states = dict(db.execute("SELECT id,media_state FROM sources"))
+    job_ids = {row["id"] for row in jobs}
+    if len(job_ids) != len(jobs) or any(
+        not isinstance(job_id, str) or _ID.fullmatch(job_id) is None for job_id in job_ids
+    ):
+        raise UploadBackupError("upload job identity is invalid")
+    retry_parent: dict[str, str | None] = {}
+    job_tags: dict[str, list[str]] = {}
+    successors: set[str] = set()
+    for row in jobs:
+        if not isinstance(row["tags"], str):
+            raise UploadBackupError("upload job tags are invalid")
+        try:
+            tags = json.loads(row["tags"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadBackupError("upload job tags are invalid") from exc
+        retry_of = row["retry_of"]
+        if (
+            row["account_id"] not in account_ids
+            or not isinstance(row["source_id"], str)
+            or _ID.fullmatch(row["source_id"]) is None
+            or row["mode"] not in {"publish", "draft"}
+            or type(row["copyright"]) is not int
+            or row["copyright"] not in {1, 2}
+            or row["state"]
+            not in {
+                "draft",
+                "queued",
+                "running",
+                "submitted",
+                "draft_saved",
+                "unknown",
+                "failed",
+                "canceled",
+            }
+            or not _is_safe_code(row["code"])
+            or not _is_timestamp(row["created_at"])
+            or not _is_timestamp(row["updated_at"])
+            or (retry_of is not None and retry_of not in job_ids)
+            or retry_of == row["id"]
+            or (retry_of is not None and retry_of in successors)
+        ):
+            raise UploadBackupError("upload job metadata or retry relation is invalid")
+        if not (
+            _is_normalized_text(row["title"], 100, required=True)
+            and _is_normalized_text(row["description"], 2000)
+            and _is_normalized_text(row["source_credit"], 200)
+        ):
+            raise UploadBackupError("upload job text metadata is invalid")
+        if (
+            not isinstance(tags, list)
+            or len(tags) > 10
+            or any(
+                not _is_normalized_text(tag, 20, required=True)
+                or any(character in tag for character in ",\n\r\t")
+                for tag in tags
+            )
+            or len(tags) != len(set(tags))
+        ):
+            raise UploadBackupError("upload job tags are invalid")
+        platform = account_platforms[row["account_id"]]
+        category_id = row["category_id"]
+        if (
+            len(row["title"]) > TITLE_LIMITS[platform]
+            or row["mode"] == "draft" and platform != "tencent"
+            or platform == "bilibili"
+            and (
+                type(category_id) is not int
+                or not 1 <= category_id <= 10000
+                or not tags
+                or row["copyright"] == 2
+                and not row["source_credit"]
+            )
+        ):
+            raise UploadBackupError("upload job platform metadata is invalid")
+        if category_id is not None and (
+            type(category_id) is not int or not 1 <= category_id <= 10000
+        ):
+            raise UploadBackupError("upload job category is invalid")
+        if (
+            row["state"] == "submitted" and row["mode"] != "publish"
+            or row["state"] == "draft_saved" and row["mode"] != "draft"
+        ):
+            raise UploadBackupError("upload job terminal state does not match its mode")
+        if (
+            row["state"] in {"draft", "queued", "running"}
+            and source_states.get(row["source_id"]) != "present"
+        ):
+            raise UploadBackupError("active upload job source is not present")
+        retry_parent[row["id"]] = retry_of
+        job_tags[row["id"]] = tags
+        if retry_of is not None:
+            successors.add(retry_of)
+    jobs_by_id = {row["id"]: row for row in jobs}
+    retry_fields = (
+        "account_id",
+        "source_id",
+        "title",
+        "description",
+        "category_id",
+        "mode",
+        "copyright",
+        "source_credit",
+    )
+    for job_id, parent_id in retry_parent.items():
+        if parent_id is None:
+            continue
+        job = jobs_by_id[job_id]
+        parent = jobs_by_id[parent_id]
+        if (
+            any(job[field] != parent[field] for field in retry_fields)
+            or job_tags[job_id] != job_tags[parent_id]
+        ):
+            raise UploadBackupError("upload retry payload differs from its parent")
+        if parent["state"] not in {"failed", "canceled", "unknown"}:
+            raise UploadBackupError("upload retry parent state is invalid")
+    for job_id in job_ids:
+        visited = set()
+        current: str | None = job_id
+        while current is not None:
+            if current in visited:
+                raise UploadBackupError("upload retry relation contains a cycle")
+            visited.add(current)
+            current = retry_parent[current]
+    root_job_ids = {
+        job_id for job_id, parent_id in retry_parent.items() if parent_id is None
+    }
+
+    operations = list(db.execute(
+        "SELECT id,account_id,action,state,code,created_at,updated_at FROM operations"
+    ))
+    active_operations: set[str] = set()
+    for row in operations:
+        if (
+            not isinstance(row["id"], str)
+            or _ID.fullmatch(row["id"]) is None
+            or row["account_id"] not in account_ids
+            or row["action"] not in {"login", "check"}
+            or row["state"] not in {"queued", "running", "ready", "failed", "canceled"}
+            or not _is_safe_code(row["code"])
+            or not _is_timestamp(row["created_at"])
+            or not _is_timestamp(row["updated_at"])
+        ):
+            raise UploadBackupError("upload operation metadata is invalid")
+        if row["state"] in {"queued", "running"}:
+            if (
+                row["account_id"] in active_operations
+                or account_lifecycles[row["account_id"]] != "active"
+            ):
+                raise UploadBackupError("active upload operation relation is invalid")
+            active_operations.add(row["account_id"])
+
+    requested_jobs: set[str] = set()
+    for row in db.execute("SELECT id,digest,job_ids FROM requests"):
+        if not isinstance(row["job_ids"], str):
+            raise UploadBackupError("upload request job list is invalid")
+        try:
+            request_jobs = json.loads(row["job_ids"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadBackupError("upload request job list is invalid") from exc
+        if (
+            not isinstance(row["id"], str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", row["id"]) is None
+            or not isinstance(row["digest"], str)
+            or _SHA256.fullmatch(row["digest"]) is None
+            or not isinstance(request_jobs, list)
+            or not 1 <= len(request_jobs) <= 20
+            or any(not isinstance(job_id, str) for job_id in request_jobs)
+            or len(request_jobs) != len(set(request_jobs))
+            or any(job_id not in job_ids for job_id in request_jobs)
+        ):
+            raise UploadBackupError("upload request metadata is invalid")
+        request_rows = [jobs_by_id[job_id] for job_id in request_jobs]
+        first = request_rows[0]
+        shared_fields = (
+            "source_id",
+            "title",
+            "description",
+            "category_id",
+            "mode",
+            "copyright",
+            "source_credit",
+        )
+        account_ids_for_request = [job["account_id"] for job in request_rows]
+        if (
+            any(job["retry_of"] is not None for job in request_rows)
+            or len(account_ids_for_request) != len(set(account_ids_for_request))
+            or any(job_id in requested_jobs for job_id in request_jobs)
+            or any(
+                job[field] != first[field]
+                for job in request_rows[1:]
+                for field in shared_fields
+            )
+            or any(job_tags[job["id"]] != job_tags[first["id"]] for job in request_rows[1:])
+        ):
+            raise UploadBackupError("upload request job relation is invalid")
+        payload = [
+            first["source_id"],
+            sorted(account_ids_for_request),
+            first["title"],
+            first["description"],
+            job_tags[first["id"]],
+            first["category_id"],
+            first["mode"],
+            first["copyright"],
+            first["source_credit"],
+        ]
+        expected_digests = {_request_digest(payload)}
+        request_platforms = {
+            account_platforms[account_id] for account_id in account_ids_for_request
+        }
+        if "bilibili" not in request_platforms and first["copyright"] == 1:
+            # ``create_jobs`` hashes an omitted copyright as null, then stores
+            # the non-Bilibili default as 1.  Both explicit and default forms
+            # are valid histories and are indistinguishable from the job rows.
+            payload_with_defaulted_copyright = [*payload]
+            payload_with_defaulted_copyright[7] = None
+            expected_digests.add(_request_digest(payload_with_defaulted_copyright))
+        if row["digest"] not in expected_digests:
+            raise UploadBackupError("upload request digest does not match its jobs")
+        requested_jobs.update(request_jobs)
+    if requested_jobs != root_job_ids:
+        raise UploadBackupError("upload request root job coverage is invalid")
+
+
+def _is_normalized_text(
+    value: object,
+    maximum: int,
+    *,
+    required: bool = False,
+) -> bool:
+    """Match the persisted result of ``UploadService._text`` exactly."""
+
+    return (
+        isinstance(value, str)
+        and len(value) <= maximum
+        and not any(
+            ord(character) < 32 and character not in "\n\t\r"
+            for character in value
+        )
+        and value == value.strip()
+        and (not required or bool(value))
+    )
+
+
+def _is_safe_code(value: object) -> bool:
+    return isinstance(value, str) and (not value or _SAFE_CODE.fullmatch(value) is not None)
+
+
+def _is_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _request_digest(payload: list[object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _entry_for_file(path: Path, *, relative_path: str) -> _Entry:
+    entry = _common._entry_for_file(path, relative_path=relative_path)
+    return _Entry(entry.path, entry.size_bytes, entry.sha256)
+
+
+def _validate_manifest_entry_path(relative: str) -> None:
+    if relative in {UPLOAD_BACKUP_METADATA_NAME, UPLOAD_DATABASE_PAYLOAD_PATH}:
+        return
+    pure = PurePosixPath(relative)
+    try:
+        media_relative = pure.relative_to(UPLOAD_MEDIA_PAYLOAD_PREFIX)
+    except ValueError as exc:
+        raise UploadBackupError("upload backup payload path is unexpected") from exc
+    if len(media_relative.parts) != 1:
+        raise UploadBackupError("upload backup media path is invalid")
+    name = media_relative.name
+    suffix = PurePosixPath(name).suffix
+    if suffix not in _SUFFIXES or _ID.fullmatch(name.removesuffix(suffix)) is None:
+        raise UploadBackupError("upload backup media path is invalid")
+
+
+def _copy_regular_file(
+    source: Path,
+    destination: Path,
+    *,
+    expected_size: int | None = None,
+    expected_sha256: str | None = None,
+) -> tuple[str, int]:
+    return _common._copy_regular_file(
+        source,
+        destination,
+        expected_size=expected_size,
+        expected_sha256=expected_sha256,
+    )
+
+
+def _same_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev == second.st_dev
+        and first.st_ino == second.st_ino
+        and first.st_mode == second.st_mode
+        and first.st_nlink == second.st_nlink
+        and first.st_size == second.st_size
+    )
+
+
+def _path_key(value: str) -> str:
+    return value.casefold()
+
+
+# Module-local aliases keep the upload API concise while retaining explicit names.
+create_backup = create_upload_backup
+restore_backup = restore_upload_backup
+BackupResult = UploadBackupResult
+RestoreResult = UploadRestoreResult
+BackupRestoreError = UploadBackupError

@@ -239,14 +239,26 @@ def restore_backup(
     """Verify and restore a backup into one nonexistent independent root."""
 
     source = _require_existing_directory(backup_root, label="backup root")
-    target = _require_new_target(restore_data_root, label="restore target")
-    database_target = _require_absolute_non_root(
+    requested_target = _require_absolute_non_root(
+        restore_data_root, label="restore target"
+    )
+    target = _require_new_target(requested_target, label="restore target")
+    requested_database_target = _require_absolute_non_root(
         restore_database_path, label="restore database"
     )
-    if not database_target.is_relative_to(target) or database_target == target:
+    database_relative: Path | None = None
+    for candidate_root in (requested_target, target):
+        if (
+            requested_database_target != candidate_root
+            and requested_database_target.is_relative_to(candidate_root)
+        ):
+            database_relative = requested_database_target.relative_to(candidate_root)
+            break
+    if database_relative is None:
         raise BackupRestoreError(
             "restore database must be inside the restore target"
         )
+    database_target = target / database_relative
     _assert_existing_ancestors_no_links(database_target)
     if _paths_overlap(source, target):
         raise BackupRestoreError("restore target overlaps the backup root")
@@ -1531,34 +1543,76 @@ def _validated_relative_path(value: object) -> str:
 
 def _require_existing_directory(path: Path, *, label: str) -> Path:
     absolute = _require_absolute_non_root(path, label=label)
-    _assert_existing_ancestors_no_links(absolute)
-    info = _safe_lstat(absolute)
-    if _is_link_or_reparse(absolute, info) or not stat.S_ISDIR(info.st_mode):
-        raise BackupRestoreError(f"{label} is not a plain directory")
-    return absolute
+    return _canonical_existing_entry(absolute, label=label, directory=True)
 
 
 def _require_existing_regular_file(path: Path, *, label: str) -> Path:
     absolute = _require_absolute_non_root(path, label=label)
-    _assert_existing_ancestors_no_links(absolute)
-    info = _safe_lstat(absolute)
-    if (
-        _is_link_or_reparse(absolute, info)
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_nlink != 1
-    ):
-        raise BackupRestoreError(f"{label} is not a plain regular file")
-    return absolute
+    return _canonical_existing_entry(absolute, label=label, directory=False)
 
 
 def _require_new_target(path: Path, *, label: str) -> Path:
     absolute = _require_absolute_non_root(path, label=label)
     if os.path.lexists(absolute):
         raise BackupRestoreError(f"{label} already exists")
-    if not absolute.parent.is_dir():
+    parent = absolute.parent
+    if not os.path.lexists(parent):
         raise BackupRestoreError(f"{label} parent does not exist")
-    _assert_existing_ancestors_no_links(absolute.parent)
-    return absolute
+    _assert_existing_ancestors_no_links(parent)
+    parent_info = _safe_lstat(parent)
+    if not stat.S_ISDIR(parent_info.st_mode):
+        raise BackupRestoreError(f"{label} parent does not exist")
+    canonical_parent = _canonical_existing_entry(
+        parent,
+        label=f"{label} parent",
+        directory=True,
+    )
+    canonical_target = canonical_parent / absolute.name
+    if os.path.lexists(absolute) or os.path.lexists(canonical_target):
+        raise BackupRestoreError(f"{label} already exists")
+    return canonical_target
+
+
+def _canonical_existing_entry(
+    absolute: Path,
+    *,
+    label: str,
+    directory: bool,
+) -> Path:
+    _assert_existing_ancestors_no_links(absolute)
+    initial = _safe_lstat(absolute)
+    _validate_plain_entry(absolute, initial, label=label, directory=directory)
+    try:
+        canonical = absolute.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BackupRestoreError("required filesystem entry is unavailable") from exc
+
+    for candidate in (absolute, canonical):
+        _assert_existing_ancestors_no_links(candidate)
+        current = _safe_lstat(candidate)
+        _validate_plain_entry(candidate, current, label=label, directory=directory)
+        if not _same_path_identity(initial, current):
+            raise BackupRestoreError(
+                "required filesystem entry changed during validation"
+            )
+    return canonical
+
+
+def _validate_plain_entry(
+    path: Path,
+    info: os.stat_result,
+    *,
+    label: str,
+    directory: bool,
+) -> None:
+    if directory:
+        valid = stat.S_ISDIR(info.st_mode)
+        kind = "directory"
+    else:
+        valid = stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+        kind = "regular file"
+    if _is_link_or_reparse(path, info) or not valid:
+        raise BackupRestoreError(f"{label} is not a plain {kind}")
 
 
 def _require_absolute_non_root(path: Path, *, label: str) -> Path:
@@ -1590,6 +1644,10 @@ def _paths_overlap(first: Path, second: Path) -> bool:
         or first.is_relative_to(second)
         or second.is_relative_to(first)
     )
+
+
+def _same_path_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return first.st_dev == second.st_dev and first.st_ino == second.st_ino
 
 
 def _safe_lstat(path: Path) -> os.stat_result:

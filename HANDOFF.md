@@ -1,17 +1,27 @@
 # 多平台视频下载项目开发交接
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
-> 最后更新：2026-09-05
-> 当前迭代：Iteration 0.24.3 — 八项 Debug 修复与最终源码审查
-> 当前版本：`0.24.3`；下载数据库：Schema `11`；上传数据库：独立 Schema `1`
+> 最后更新：2026-09-07
+> 当前迭代：Iteration 0.24.4 — 上传数据生命周期、停机恢复与离线交付门禁（T10 外测冻结源）
+> 当前版本：`0.24.4`；下载数据库：Schema `11`；上传数据库：独立 Schema `2`
 
 ## 本次交接入口
 
-当前用户要求在八项修复后完成最终源码审查，并直接提交到仓库。0.24.3 的交付内容包括上传调度恢复、runtime Schema 2、原件 SHA-256 快照与视频类型边界、同 run/build Worker 心跳、历史分页及来源定位、已有上传库结构校验，以及运维、测试和设计规范。最终审查还补修下载快照生成阶段的断连取消、WAL 校验在源目录生成 SHM、无缓存执行绕过 Windows 门禁、重定向安装目录被提前写入锁文件四处边界；当前验证与交付身份见 [最终源码审查记录](validation/iteration-0.24.3-final-review.md)。交付分支为 `codex/uploader-first-platforms`，源提交身份以 Git 提交记录为准；用户已有 runtime/账号未动，没有真实上传。
+用户要求按下一轮交接继续开发。当前 `codex/uploader-first-platforms` 的 0.24.4 冻结源已完成以下**本地范围**；精确 commit、product identity、制品 hash 与独立验收结果不写回包内，而由同批包外 release receipt 绑定：
 
-[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留当时未提交候选包的身份和安装结果。最终审查补修及 Git LF 换行规范改变了运行代码指纹，不把旧 ZIP/wheel 的安装证据改标为新提交验收。
+| 工作包 | 2026-09-07 本地状态 | 仍未完成的边界 |
+| --- | --- | --- |
+| T14 必要切片 | 已实现本地账号断开与墓碑、排队确认撤回、迟到登录/重启凭据 fencing、媒体占用与状态、活动引用删除保护、两步删除及同大小/同 SHA-256 恢复 | hash 去重、总配额、自动孤儿清理仍是后续；没有修改用户现有账号、媒体或 runtime |
+| T07 停机备份/恢复 | 已实现独立 `video-upload-backup`、Upload Schema 2、secret-free manifest、登记媒体复制、业务语义审计、新根恢复和恢复状态降级 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
+| T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
+| T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
+| T10～T16 | 0.24.4 版本号、精确 14 项 wheel 入口、Windows 上传 no-remote 探针与源码侧发行门禁已接线；新增生命周期控件采用既有 Apple 设计基础 | T10 是否通过须由 clean commit、五个制品与独立安装的包外 receipt 证明；T11/T12 真实平台与下载矩阵未执行，T13/T15/T16 保持原计划边界 |
 
-后续从[执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)的未完成门槛继续；上传完整备份恢复、真实平台实测等不能算作本轮八项修复已经完成。旧 runtime Schema 1 需保留数据后按 [升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
+上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
+
+当前源码证据见 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)。精确上传集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份、发行、CI、验证、部署与 API 组合为 **287 passed、4 skipped in 44.13s**，4 个 skip 是 Windows 上需要 root/POSIX/getfacl 的环境合同。这些定向结果不能单独证明 T10，冻结全量与制品身份须查看包外 receipt。真实登录、扫码、下载或上传均未在 0.24.4 执行。
+
+[0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 由当前应用按精确结构事务迁移为 Schema 2；未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
 ### 此前设计准备与 0.24.2 历史
 
@@ -37,7 +47,7 @@
 
 执行层采用固定 social-auto-upload 与 biliup，以及独立 CPython 3.12/浏览器环境。安装检查、模拟测试和实际本地网页操作都不能证明真实平台投稿已成功；登录和真实视频/投稿许可仍须由用户提供。代码与测试说明使用上述开发分支交付，具体远端提交以 Git 为准；本轮未新建 GitHub Release，0.23.0 的制品与旧平台记录保持历史身份。
 
-上一轮上传核心、浏览器操作与已安装运行环境的记录见 [0.24.0 上传开发证据](validation/iteration-0.24.0-upload-evidence.md)。下一步由外部测试员按测试计划完成三平台真实登录、媒体传输与平台结果核对；本轮不代为确认真实上传。
+上一轮上传核心、浏览器操作与已安装运行环境的记录见 [0.24.0 上传开发证据](validation/iteration-0.24.0-upload-evidence.md)。该轮当时指向外部三平台测试；当前已由顶部 0.24.4 数据生命周期与 T10 冻结入口取代，仍不代为确认真实上传。
 
 ### v0.23.0 交付历史入口
 
@@ -128,15 +138,15 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 |---|---|---|
 | 产品 | 单机/NAS、单管理员、私有自托管 | FastAPI 已实现；Windows 本机可独立使用；无认证且强制 loopback |
 | 批量/并发 | 每批 1–50；单 Worker 进程总执行槽 2；单平台活动 Job 1 | 0.18 Windows app 与 standalone drain/poll 已接入真实调度循环，并由无网络屏障回归证明跨平台重叠与连续补位；SQLite claim 事务仍强制上限；历史真实样本不能证明本轮并发 |
-| 数据 | Schema 11；旧 flat-v1/graph 保留 | Schema 10 治理模型继续保留；新增单例 run-scoped Worker claim gate，canonical DDL、无 trigger、singleton/state/timestamp 均 fail closed，prepare/activate/stop 与 claim 通过 SQLite writer 顺序 fencing |
+| 数据 | 下载 Schema 11；独立上传 Schema 2 | 下载继续保留旧 flat-v1/graph、Schema 10 治理和 run-scoped claim gate；上传精确 Schema 1 事务迁移到 Schema 2，新增账号/媒体生命周期，未知结构失败关闭；两个数据库、Cookie 与媒体根不混用 |
 | 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；0.17 固定脱敏 progress/phase 控制协议只在 download 启用，真实平台历史样本不等于本轮进度验收或平台整体验证 |
 | 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
 | 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
 | 资产 | 不可变原件 + 脱敏 manifest/sidecar | ready 列表含 thumbnail/caption DTO；原件与辅助产物分别由严格下载端点重验；API 不暴露本机路径或用户标题 |
-| 前端/API | 一体化入口自动打开 Batch、持久化阶段/估算进度、ready 原件/辅助产物、运行日志，以及 implementation/evidence/decision 三层能力视图 | 中文阶段、约百分比、原生 `<progress>` 与 ARIA 已通过 synthetic 隔离浏览器 QA；terminal failed flat Job 新代重试与 cooldown/manual reset 继续保留；没有网页能力审批按钮 |
+| 前端/API | 下载控制面及 Bilibili/抖音/视频号上传页 | 上传页新增本地账号断开、媒体状态/占用、受引用删除保护、精确恢复和两步确认，并保留轮询输入/选区/焦点；新增控件采用 Apple 设计基础，整站 T16 尚未完成；没有网页能力审批按钮 |
 | 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
 | 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
-| 备份 | DB 快照 + 已发布资产；秘密单独恢复 | 当前 0.23.0 沿用 Schema 11，无新增 migration；备份回归纳入最终全量。Schema 8/9/10 须先由匹配历史版本恢复，在副本上 forward-migrate 后另建并实际恢复 Schema 11 基线 |
+| 备份 | 下载与上传使用两套独立格式；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 保存 Upload Schema 2/登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock 并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。T07 本地 synthetic 完成，真实容量与异机灾备未做 |
 | Stage 0 | CSV v3；七字段精确 identity | `product_version` 为版本 + 完整包载荷 hash；规范 source identity 防别名充样本；最新 partial run fail closed；报告 aggregate-only，导入只追加 evidence，approve/revoke 另走 revision CAS |
 | 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 0.19 project-only 包预检已通过 source-equivalence、metadata、法律文件、依赖、build identity 与隐私复核；最终重建须匹配冻结契约，精确 archive hash 只在包外报告；旧包记录保留为历史，第三方 binary/container/tool bundle 仍 blocked |
 
@@ -384,6 +394,8 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
+当前主线以 T10 包外 receipt 为外部动作边界，不直接跳到真实平台：对冻结源运行全量、source snapshot、隐私/清单/链接/锁检查，固定 clean commit，再从 detached checkout 构建并独立安装源码 ZIP、sdist、wheel、`release-manifest.json` 和 `SHA256SUMS`。commit、完整 identity、制品摘要和实际结果只写入 `release` 目录外的 receipt，避免修改被打包字节。持有效 receipt 后才把同一身份交给 T11/T12；真实动作仍需用户另行明确授权。
+
 本地开发：
 
 ```powershell
@@ -453,6 +465,10 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 19. 0.9.1 Apache 迁移后全量回归为 `882 passed, 8 skipped`；独立 sdist/wheel 构建、隔离安装、`Apache-2.0` metadata、32 个法律文件与 11 个命令入口已复验。构建只写入 gitignored 验收目录，不覆盖 proprietary 0.9.0 制品。
 20. v0.16.0 已把一体化 run 的 stop 与新 lease/Attempt 领取线性化：以 SQLite writer transaction 的提交顺序为准，不能把 console 信号到达时刻当作线性化点。stop 不撤销已先提交的 active Attempt；强停后要等待 lease expiry，旧 Attempt 才会变为 `abandoned/worker_lost` 并由新 Attempt 重领。`run_once()` 在最终 claim 事务前仍可能执行有界的终态目录 reconciliation 或 asset-intent recovery，因此这里只承诺 stop commit 后不新增该 run 的 Job lease/Attempt，不宣称“停止后零文件系统副作用”或强制取消阻塞 I/O。当前 deterministic repository/cleanup 回归已覆盖此契约，真实平台 active-download 强停不属于本轮证据。
 21. v0.17.0 progress 是保守阶段估算，不是全任务精确 byte accounting。字幕/sidecar 不推动进度，未知总量不显示伪百分比，顺序双流最多按两个 slot 聚合，单流可能在后处理前停留于较低估算；浏览器约 2 秒轮询也可能错过很短阶段。为保持隐私，普通排障不得打开原始 stdout/stderr、argv、URL、source ID、标题、文件名或路径日志。
+22. 0.24.4 包内文档有意不嵌入自身 commit、build identity 或五件发行文件 hash；不得借用 0.24.3 或定向测试关闭 T10。只有同批包外 release receipt 同时绑定 clean commit、冻结全量、完整 identity、五件发行文件和源码/wheel 独立验收时，才可把对应外测包记为 T10 通过。
+23. 上传 activity lock 只协调采用当前 shared/exclusive 合同的应用、active/standby 服务与备份工具。旧版本、手工 SQLite 连接、自写文件 writer 或绕过锁的进程不在完整保证内；停机备份仍要求操作者确认它们全部停止。下载和上传备份必须分别创建与演练。
+24. T09 工作流目前只完成本地静态合同和负向测试。GitHub hosted 四格结果为 **NOT RUN**，required checks 与 branch protection 为 **NOT CONFIGURED**；Windows 上跳过的 root/POSIX/getfacl 合同仍归 T15。
+25. 0.24.4 没有执行真实登录、扫码、下载或上传。T11/T12 仍需绑定最终 T10 构建分别记录 PASS/FAIL/BLOCKED/NOT RUN；T13、T15 与整站 T16 不因本轮本地功能存在而完成。
 
 ## 7. 历史收尾与后续精确入口
 

@@ -13,10 +13,10 @@ from video_download_control.uploads.web import UPLOAD_HTML
 HARNESS = r"""
 const vm=require('node:vm');const ids=new Map();
 class Element{
- constructor(tag,attrs={},text=''){this.tagName=tag;this.children=[];this.listeners=new Map();this._text=text;this.value=attrs.value||'';this.hidden=Object.hasOwn(attrs,'hidden');this.disabled=false;this.checked=false;this.dataset={};this.type=attrs.type||'';this.files=[];if(attrs.id)ids.set(attrs.id,this);}
+ constructor(tag,attrs={},text=''){this.tagName=tag;this.children=[];this.listeners=new Map();this._text=text;this.value=attrs.value||'';this.hidden=Object.hasOwn(attrs,'hidden');this.disabled=Object.hasOwn(attrs,'disabled');this.checked=false;this.dataset={};this.attributes={...attrs};this.className=attrs.class||'';this.type=attrs.type||'';this.files=[];this.tabIndex=attrs.tabindex===undefined?0:Number(attrs.tabindex);if(attrs.id)ids.set(attrs.id,this);}
  get textContent(){return this._text+this.children.map(item=>item.textContent).join('');}set textContent(value){this._text=String(value);this.children=[];}
  set innerHTML(value){throw new Error('Unsafe innerHTML assignment');}
- removeAttribute(name){delete this[name];}focus(){this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
+ removeAttribute(name){delete this.attributes[name];delete this[name];}setAttribute(name,value){this.attributes[name]=String(value);}focus(){if(document.activeElement)document.activeElement.focused=false;document.activeElement=this;this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
  append(...items){for(const item of items)this.children.push(typeof item==='string'?new Element('#text',{},item):item);}
  replaceChildren(...items){this._text='';this.children=[];this.append(...items);}get firstChild(){return this.children[0];}
  querySelectorAll(selector){if(selector==='details[data-job-id]')return all(this).filter(item=>item.tagName==='details'&&item.dataset.jobId!==undefined);throw new Error('Unsupported selector '+selector);}
@@ -25,20 +25,23 @@ class Element{
 }
 function construct(node){const item=new Element(node.tag,node.attrs,node.text||'');for(const child of node.children||[])item.append(construct(child));if(node.tag==='select')item.value=item.children.find(child=>child.tagName==='option')?.value||'';return item;}
 const root=construct(fixture.page);function all(item){return [item,...item.children.flatMap(all)];}
-const document={getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),querySelectorAll(selector){if(selector==='button')return all(root).filter(item=>item.tagName==='button');if(selector==='#account-choices input:checked')return all(ids.get('account-choices')).filter(item=>item.tagName==='input'&&item.checked);throw new Error('Unsupported selector '+selector);}};
-const state={requests:[],accounts:[{id:'a'.repeat(32),platform:'bilibili',name:'Synthetic Bili',auth_state:'ready'},{id:'b'.repeat(32),platform:'tencent',name:'Synthetic Tencent',auth_state:'ready'}],sources:[{id:'c'.repeat(32),name:'synthetic.mp4',size:42,sha256:'d'.repeat(64)}],jobs:[],operations:[],turn:()=>new Promise(resolve=>setImmediate(resolve)),all};
+const document={activeElement:null,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),querySelectorAll(selector){if(selector==='button')return all(root).filter(item=>item.tagName==='button');if(selector==='#account-choices input:checked')return all(ids.get('account-choices')).filter(item=>item.tagName==='input'&&item.checked);throw new Error('Unsupported selector '+selector);}};
+const state={requests:[],accounts:[{id:'a'.repeat(32),platform:'bilibili',name:'Synthetic Bili',auth_state:'ready',lifecycle_state:'active',disconnected_at:null},{id:'b'.repeat(32),platform:'tencent',name:'Synthetic Tencent',auth_state:'ready',lifecycle_state:'active',disconnected_at:null}],sources:[{id:'c'.repeat(32),name:'synthetic.mp4',size:42,sha256:'d'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true}],storage:{managed_bytes:42,registered_source_count:1,present_source_count:1,missing_source_count:0,deleted_source_count:0,changed_source_count:0,unsafe_source_count:0,orphan_file_count:0,orphan_bytes:0,unsafe_entry_count:0,free_bytes:1073741824,reserve_bytes:67108864,low_space:false},jobs:[],operations:[],turn:()=>new Promise(resolve=>setImmediate(resolve)),all};
 async function fetch(url,options={}){state.requests.push({url,method:options.method||'GET',body:options.body,headers:Object.fromEntries(options.headers.entries())});if(state.requestHook)await state.requestHook(url,options);let payload;
  if(url.endsWith('/session'))payload={csrf_token:'synthetic-session-nonce'};
  else if(url.endsWith('/status'))payload={worker_running:true,backend:{ready:true},platforms:[{id:'bilibili',title_limit:80},{id:'tencent',title_limit:100}]};
- else if(options.method==='POST'&&url.endsWith('/accounts')){const body=JSON.parse(options.body);payload={id:'f'.repeat(32),...body,auth_state:'unchecked'};state.accounts.push(payload);}
+ else if(options.method==='POST'&&url.endsWith('/accounts')){const body=JSON.parse(options.body);payload={id:'f'.repeat(32),...body,auth_state:'unchecked',lifecycle_state:'active',disconnected_at:null};state.accounts.push(payload);}
+ else if(options.method==='POST'&&/\/accounts\/[0-9a-f]{32}\/disconnect$/.test(url)){const account=state.accounts.find(item=>url.includes(item.id));if(state.disconnectHandler){const response=await state.disconnectHandler(account,options);if(response)return response;}account.lifecycle_state='disconnected';account.auth_state='unchecked';account.code='account_disconnected';account.disconnected_at=account.disconnected_at||'2026-09-07T01:02:03+00:00';for(const job of state.jobs)if(job.account_id===account.id&&job.state==='queued'){job.state='draft';job.code='account_disconnected_confirmation_revoked';job.account_lifecycle_state='disconnected';}payload={account,revoked_confirmation_count:state.jobs.filter(item=>item.account_id===account.id&&item.code==='account_disconnected_confirmation_revoked').length,canceled_operation_count:0,local_login_removed:true};}
  else if(options.method==='POST'&&url.endsWith('/login')){payload={id:'e'.repeat(32),account_id:url.split('/').at(-2),action:'login',state:'running',login_phase:'preparing',qr_revision:0,qr_available:false};state.operations=[payload];}
+ else if(options.method==='DELETE'&&/\/sources\/[0-9a-f]{32}\/media$/.test(url)){const source=state.sources.find(item=>url.includes(item.id));source.media_present=false;source.media_state='deleted';source.media_deleted_at='2026-09-07T01:03:04+00:00';source.can_delete=false;state.storage.managed_bytes-=source.size;state.storage.present_source_count--;state.storage.deleted_source_count++;payload=source;}
+ else if(options.method==='POST'&&/\/sources\/[0-9a-f]{32}\/media$/.test(url)){const source=state.sources.find(item=>url.includes(item.id));if(state.restoreHandler){const response=await state.restoreHandler(source,options);if(response)return response;}const previous=source.media_state;source.media_present=true;source.media_state='present';source.media_deleted_at=null;source.can_delete=source.active_reference_count===0;state.storage.managed_bytes+=source.size;state.storage.present_source_count++;if(previous==='deleted')state.storage.deleted_source_count--;if(previous==='missing')state.storage.missing_source_count--;for(const job of state.jobs)if(job.source_id===source.id){job.source_media_present=true;job.source_media_state='present';}payload=source;}
  else if(options.method==='POST'&&url.endsWith('/cancel')){const op=state.operations.find(item=>url.includes(item.id));if(op)op.state='canceled';payload=op||{state:'canceled'};}
  else if(options.method==='POST')payload={state:'draft'};
  else if(url.endsWith('/qr')){if(state.qrHandler)return state.qrHandler();return {ok:true,status:200,headers:new Headers({'Content-Type':'image/png'}),blob:async()=>new Blob(['synthetic-png'],{type:'image/png'})};}
  else if(url.includes('/jobs/resolve?')){const wanted=new URL(url,'http://127.0.0.1').searchParams.get('ids').split(',');payload=state.jobs.filter(item=>wanted.includes(item.id));}
  else if(url.includes('/sources/page'))payload=state.sourcePageHandler?state.sourcePageHandler(url):{items:state.sources,next_cursor:null};else if(url.includes('/jobs/page'))payload=state.jobPageHandler?state.jobPageHandler(url):{items:state.jobs,next_cursor:null};
  else if(/\/sources\/[0-9a-f]{32}$/.test(url))payload=state.sources.find(item=>url.endsWith(item.id));else if(/\/jobs\/[0-9a-f]{32}$/.test(url))payload=state.jobs.find(item=>url.endsWith(item.id));
- else if(url.endsWith('/accounts'))payload=state.accounts;else if(url.endsWith('/sources'))payload=state.sources;else if(url.endsWith('/jobs'))payload=state.jobs;else if(url.endsWith('/operations'))payload=state.operations;
+ else if(url.endsWith('/accounts'))payload=state.accounts;else if(url.endsWith('/sources'))payload=state.sources;else if(url.endsWith('/jobs'))payload=state.jobs;else if(url.endsWith('/operations'))payload=state.operations;else if(url.endsWith('/storage'))payload=state.storage;
  else throw new Error('Unexpected fetch '+url);return {ok:true,status:200,json:async()=>payload};}
 let timer=0;const timers=new Map(),windowListeners=new Map();state.timers=timers;
 state.fireTimer=async id=>{const item=timers.get(id);if(!item)throw new Error('Missing timer');timers.delete(id);await item.callback();};
@@ -156,6 +159,214 @@ return {posts:__test.requests.filter(item=>item.method==='POST').map(item=>({url
         "/api/v1/uploads/accounts", "/api/v1/uploads/accounts/" + "f" * 32 + "/login"]
     assert result["posts"][0]["body"]["name"] == "Bilibili 账号 1"
     assert result["panelVisible"] and result["title"] == "正在获取二维码"
+
+
+def test_disconnect_is_two_step_preserves_focus_and_keeps_tombstone_out_of_compose():
+    result = run_upload_ui(r"""
+$('title').value='保留正在编辑的标题';
+let card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
+let open=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='断开本地账号');
+open.focus();await open.dispatch('click');
+card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
+let confirm=__test.all($('accounts')).find(item=>item.tagName==='button'&&item.textContent==='确认断开本地账号');
+const afterFirst={posts:__test.requests.filter(item=>item.method==='POST').length,focused:document.activeElement===confirm,copy:card.textContent};
+await poll();
+confirm=__test.all($('accounts')).find(item=>item.tagName==='button'&&item.textContent==='确认断开本地账号');
+const afterPoll={visible:!!confirm,focused:document.activeElement===confirm,title:$('title').value};
+await confirm.dispatch('click');for(let i=0;i<5;i++)await __test.turn();
+card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
+return {afterFirst,afterPoll,card:card.textContent,choiceIds:__test.all($('account-choices')).filter(item=>item.tagName==='input').map(item=>item.value),posts:__test.requests.filter(item=>item.method==='POST').map(item=>({url:item.url,nonce:item.headers['x-upload-csrf']})),message:$('message').textContent,title:$('title').value};
+""")
+    assert result["afterFirst"]["posts"] == 0
+    assert result["afterFirst"]["focused"] is True
+    assert "不会撤销平台侧授权" in result["afterFirst"]["copy"]
+    assert result["afterPoll"] == {
+        "visible": True,
+        "focused": True,
+        "title": "保留正在编辑的标题",
+    }
+    assert "已断开本地账号" in result["card"]
+    assert "a" * 32 not in result["choiceIds"]
+    assert result["posts"] == [{
+        "url": "/api/v1/uploads/accounts/" + "a" * 32 + "/disconnect",
+        "nonce": "synthetic-session-nonce",
+    }]
+    assert "已撤回" in result["message"]
+    assert result["title"] == "保留正在编辑的标题"
+
+
+def test_disconnect_cleanup_failure_is_visible_and_retryable():
+    result = run_upload_ui(r"""
+__test.disconnectHandler=account=>{account.lifecycle_state='disconnected';account.auth_state='unchecked';account.code='account_disconnect_cleanup_failed';account.disconnected_at='2026-09-07T01:02:03+00:00';__test.disconnectHandler=null;return {ok:false,status:409,json:async()=>({detail:'account_disconnect_cleanup_failed'})};};
+let card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
+let open=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='断开本地账号');await open.dispatch('click');
+let confirm=__test.all($('accounts')).find(item=>item.tagName==='button'&&item.textContent==='确认断开本地账号');await confirm.dispatch('click');for(let i=0;i<6;i++)await __test.turn();
+card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));let retry=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='重试清理本地登录');
+const failed={card:card.textContent,retry:!!retry,message:$('message').textContent,choices:__test.all($('account-choices')).filter(item=>item.tagName==='input').map(item=>item.value)};
+await retry.dispatch('click');for(let i=0;i<6;i++)await __test.turn();card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
+return {failed,after:{card:card.textContent,retry:__test.all(card).some(item=>item.tagName==='button'&&item.textContent==='重试清理本地登录'),message:$('message').textContent},posts:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/disconnect')).length};
+""")
+    assert "清理尚未完成" in result["failed"]["card"]
+    assert result["failed"]["retry"] is True
+    assert "清理未完成" in result["failed"]["message"]
+    assert "a" * 32 not in result["failed"]["choices"]
+    assert "本地登录已移除" in result["after"]["card"]
+    assert result["after"]["retry"] is False
+    assert result["after"]["message"] == "本地登录清理已完成。"
+    assert result["posts"] == 2
+
+
+def test_storage_summary_uses_real_counts_and_shows_low_space_without_mutating():
+    result = run_upload_ui(r"""
+const initial={summary:$('storage-summary').textContent,warning:$('storage-warning').textContent,hidden:$('storage-warning').hidden};
+__test.storage={managed_bytes:1572864,registered_source_count:6,present_source_count:2,missing_source_count:1,deleted_source_count:1,changed_source_count:1,unsafe_source_count:1,orphan_file_count:2,orphan_bytes:4096,unsafe_entry_count:1,free_bytes:33554432,reserve_bytes:67108864,low_space:true};
+await poll();
+return {initial,after:{summary:$('storage-summary').textContent,warning:$('storage-warning').textContent,hidden:$('storage-warning').hidden},posts:__test.requests.filter(item=>item.method==='POST'||item.method==='DELETE').length};
+""")
+    assert result["initial"]["hidden"] is True
+    assert "42 B" in result["initial"]["summary"]
+    assert result["after"]["hidden"] is False
+    assert "1.5 MiB" in result["after"]["summary"]
+    assert "2 份可用" in result["after"]["summary"]
+    assert "1 份缺失" in result["after"]["summary"]
+    assert "1 份内容变化" in result["after"]["summary"]
+    assert "1 份路径不安全" in result["after"]["summary"]
+    assert "2 份未登记文件（4.0 KiB）" in result["after"]["summary"]
+    assert "32.0 MiB" in result["after"]["warning"]
+    assert "64.0 MiB" in result["after"]["warning"]
+    assert "不会自动清理" in result["after"]["warning"]
+    assert result["posts"] == 0
+
+
+def test_source_with_active_references_explains_why_managed_copy_cannot_be_deleted():
+    result = run_upload_ui(r"""
+__test.sources[0].active_reference_count=2;__test.sources[0].can_delete=false;await refresh();
+const card=[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32));
+const remove=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='删除受管副本');
+return {copy:card.textContent,disabled:remove.disabled,deletes:__test.requests.filter(item=>item.method==='DELETE').length};
+""")
+    assert result["disabled"] is True
+    assert "2 个未完成任务" in result["copy"]
+    assert result["deletes"] == 0
+
+
+def test_media_delete_is_two_step_and_preserves_focus_input_and_selection_through_polling():
+    result = run_upload_ui(r"""
+$('title').value='删除确认期间继续编辑';const selectedBefore=$('source-id').value;
+let card=[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32));
+let open=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='删除受管副本');
+open.focus();await open.dispatch('click');
+card=[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32));
+let confirm=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='确认删除受管副本');
+const afterFirst={deletes:__test.requests.filter(item=>item.method==='DELETE').length,focused:document.activeElement===confirm,copy:card.textContent};
+await poll();
+confirm=__test.all($('source-library')).find(item=>item.tagName==='button'&&item.textContent==='确认删除受管副本');
+const afterPoll={visible:!!confirm,focused:document.activeElement===confirm,title:$('title').value,selected:$('source-id').value};
+await confirm.dispatch('click');for(let i=0;i<5;i++)await __test.turn();
+card=[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32));
+return {selectedBefore,afterFirst,afterPoll,selectedAfter:$('source-id').value,card:card.textContent,message:$('message').textContent,deletes:__test.requests.filter(item=>item.method==='DELETE').map(item=>({url:item.url,nonce:item.headers['x-upload-csrf']})),posts:__test.requests.filter(item=>item.method==='POST').length,title:$('title').value};
+""")
+    assert result["selectedBefore"] == "c" * 32
+    assert result["afterFirst"]["deletes"] == 0
+    assert result["afterFirst"]["focused"] is True
+    assert "原始文件和下载成品保持不变" in result["afterFirst"]["copy"]
+    assert result["afterPoll"] == {
+        "visible": True,
+        "focused": True,
+        "title": "删除确认期间继续编辑",
+        "selected": "c" * 32,
+    }
+    assert result["selectedAfter"] == ""
+    assert "已删除" in result["card"]
+    assert "受管副本已删除" in result["message"]
+    assert result["deletes"] == [{
+        "url": "/api/v1/uploads/sources/" + "c" * 32 + "/media",
+        "nonce": "synthetic-session-nonce",
+    }]
+    assert result["posts"] == 0
+    assert result["title"] == "删除确认期间继续编辑"
+
+
+def test_missing_media_blocks_retry_then_exact_restore_recovers_same_source():
+    result = run_upload_ui(r"""
+const source=__test.sources[0];source.media_present=false;source.media_state='deleted';source.media_deleted_at='2026-09-07T01:03:04+00:00';source.can_delete=false;
+__test.storage.managed_bytes=0;__test.storage.present_source_count=0;__test.storage.deleted_source_count=1;
+__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:source.id,source_media_present:false,source_media_state:'deleted',title:'Synthetic',tags:[],mode:'publish',state:'failed',code:'source_reimport_required'}];
+await refresh();let card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id),job=[...$('jobs').children].find(item=>item.dataset.jobId==='e'.repeat(32));
+const before={selected:$('source-id').value,card:card.textContent,job:job.textContent,retry:__test.all(job).some(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿')};
+let restore=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='重新导入相同视频');await restore.dispatch('click');
+$('source-restore-file').files=[new Blob(['x'.repeat(42)],{type:'video/mp4'})];$('source-restore-file').focus();await poll();
+const duringPoll={panel:!$('source-restore-panel').hidden,focused:document.activeElement===$('source-restore-file'),files:$('source-restore-file').files.length};
+__test.restoreHandler=()=>({ok:false,status:409,json:async()=>({detail:'source_restore_mismatch'})});
+await $('source-restore-form').dispatch('submit');for(let i=0;i<4;i++)await __test.turn();
+job=[...$('jobs').children].find(item=>item.dataset.jobId==='e'.repeat(32));
+const mismatch={state:__test.sources[0].media_state,panel:!$('source-restore-panel').hidden,message:$('message').textContent,retry:__test.all(job).some(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿')};
+__test.restoreHandler=null;await $('source-restore-form').dispatch('submit');for(let i=0;i<5;i++)await __test.turn();
+job=[...$('jobs').children].find(item=>item.dataset.jobId==='e'.repeat(32));card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id);
+return {before,duringPoll,mismatch,after:{state:__test.sources[0].media_state,selected:$('source-id').value,panel:$('source-restore-panel').hidden,card:card.textContent,retry:__test.all(job).some(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿'),message:$('message').textContent},restorePosts:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/media')).map(item=>({url:item.url,contentType:item.headers['content-type'],nonce:item.headers['x-upload-csrf']})),retryPosts:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/retry')).length};
+""")
+    assert result["before"]["selected"] == ""
+    assert "恢复受管副本" in result["before"]["card"]
+    assert "先恢复受管副本" in result["before"]["job"]
+    assert result["before"]["retry"] is False
+    assert result["duringPoll"] == {"panel": True, "focused": True, "files": 1}
+    assert result["mismatch"]["state"] == "deleted"
+    assert result["mismatch"]["panel"] is True
+    assert "历史记录不一致" in result["mismatch"]["message"]
+    assert result["mismatch"]["retry"] is False
+    assert result["after"]["state"] == "present"
+    assert result["after"]["selected"] == "c" * 32
+    assert result["after"]["panel"] is True
+    assert "副本可用" in result["after"]["card"]
+    assert result["after"]["retry"] is True
+    assert "受管副本已恢复" in result["after"]["message"]
+    assert result["restorePosts"] == [{
+        "url": "/api/v1/uploads/sources/" + "c" * 32 + "/media",
+        "contentType": "application/octet-stream",
+        "nonce": "synthetic-session-nonce",
+    }] * 2
+    assert result["retryPosts"] == 0
+
+
+def test_canceling_media_restore_returns_focus_to_the_same_source_action():
+    result = run_upload_ui(r"""
+const source=__test.sources[0];source.media_present=false;source.media_state='deleted';source.media_deleted_at='2026-09-07T01:03:04+00:00';source.can_delete=false;
+await refresh();let card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id);
+let restore=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='重新导入相同视频');await restore.dispatch('click');
+await $('source-restore-cancel').dispatch('click');
+card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id);restore=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='重新导入相同视频');
+return {panelHidden:$('source-restore-panel').hidden,focused:document.activeElement===restore,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert result == {"panelHidden": True, "focused": True, "posts": 0}
+
+
+def test_disconnected_account_blocks_draft_confirmation_and_retry():
+    result = run_upload_ui(r"""
+__test.accounts[0].lifecycle_state='disconnected';__test.accounts[0].disconnected_at='2026-09-07T01:02:03+00:00';
+const base={platform:'bilibili',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'disconnected',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Synthetic',tags:['x'],mode:'publish'};
+__test.jobs=[{...base,id:'1'.repeat(32),state:'draft'},{...base,id:'2'.repeat(32),state:'failed'}];await refresh();
+return {cards:[...$('jobs').children].map(item=>({text:item.textContent,confirm:__test.all(item).some(child=>child.tagName==='button'&&child.textContent==='确认立即上传投稿'),retry:__test.all(item).some(child=>child.tagName==='button'&&child.textContent==='重新创建本地草稿')})),posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert all("账号已断开" in card["text"] for card in result["cards"])
+    assert not any(card["confirm"] or card["retry"] for card in result["cards"])
+    assert result["posts"] == 0
+
+
+def test_poll_preserves_focus_for_rebuilt_account_and_job_controls():
+    result = run_upload_ui(r"""
+__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Synthetic',tags:[],mode:'publish',state:'failed'}];await refresh();
+let choice=__test.all($('account-choices')).find(item=>item.tagName==='input'&&item.value==='a'.repeat(32));choice.focus();await poll();
+choice=__test.all($('account-choices')).find(item=>item.tagName==='input'&&item.value==='a'.repeat(32));const choiceKept=document.activeElement===choice;
+let summary=__test.all($('jobs')).find(item=>item.tagName==='summary');summary.focus();await poll();summary=__test.all($('jobs')).find(item=>item.tagName==='summary');const summaryKept=document.activeElement===summary;
+let retry=__test.all($('jobs')).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');retry.focus();await poll();retry=__test.all($('jobs')).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');
+return {choiceKept,summaryKept,retryKept:document.activeElement===retry,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert result == {
+        "choiceKept": True,
+        "summaryKept": True,
+        "retryKept": True,
+        "posts": 0,
+    }
 
 
 def test_inline_qr_uses_nonce_header_and_hides_after_scan():

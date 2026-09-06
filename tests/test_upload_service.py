@@ -12,7 +12,7 @@ import pytest
 
 from video_download_control.uploads.contracts import BackendResult, UploadError
 from video_download_control.uploads import service as upload_service_module
-from video_download_control.uploads.schema import SCHEMA_DDL
+from video_download_control.uploads.schema import SCHEMA_DDL, SCHEMA_VERSION
 from video_download_control.uploads.service import UploadService, default_upload_root
 
 
@@ -152,10 +152,35 @@ def test_mutated_source_fails_before_platform_is_called(service, tmp_path):
     job = drafts(service, tmp_path)[0]
     path = next((service.root / "media").iterdir())
     path.write_bytes(b"different video!!!")
-    service.confirm(job["id"])
-    wait_for(lambda: service.jobs()[0]["state"] == "failed")
-    assert service.jobs()[0]["code"] == "source_changed"
+    assert service.source(job["source_id"])["media_state"] == "present"
+
+    with pytest.raises(UploadError, match="^source_changed$"):
+        service.confirm(job["id"])
+
+    assert service.jobs()[0]["state"] == "draft"
+    assert service.source(job["source_id"])["media_state"] == "changed"
     assert service.backend.uploads == []
+
+
+def test_same_size_source_mutation_is_rejected_before_draft_creation(service, tmp_path):
+    imported = source(service, tmp_path)
+    acct = account(service, "douyin")
+    path = next((service.root / "media").iterdir())
+    original = path.read_bytes()
+    path.write_bytes(b"x" * len(original))
+
+    with pytest.raises(UploadError, match="^source_changed$"):
+        service.create_jobs(
+            source_id=imported["id"],
+            account_ids=[acct["id"]],
+            title="校验内容",
+            description="",
+            tags=[],
+            idempotency_key="same_size_changed",
+        )
+
+    assert service.jobs() == []
+    assert service.source(imported["id"])["media_state"] == "changed"
 
 
 def test_import_checks_registered_hash_and_preserves_original(service, tmp_path):
@@ -322,6 +347,25 @@ def test_bilibili_metadata_is_not_invented(service, tmp_path):
     assert service.jobs() == []
 
 
+@pytest.mark.parametrize("category_id", [True, False, 249.0, "249", 0, 10001])
+def test_category_id_requires_an_in_range_plain_integer(service, tmp_path, category_id):
+    douyin = account(service, "douyin")
+    imported = source(service, tmp_path)
+
+    with pytest.raises(UploadError, match="^invalid_metadata$"):
+        service.create_jobs(
+            source_id=imported["id"],
+            account_ids=[douyin["id"]],
+            title="分类校验",
+            description="",
+            tags=[],
+            category_id=category_id,
+            idempotency_key="invalid_category",
+        )
+
+    assert service.jobs() == []
+
+
 def test_private_upload_root_is_outside_download_backup(tmp_path):
     data = tmp_path / "data"
     assert default_upload_root(data) == tmp_path / "data-uploads"
@@ -460,7 +504,7 @@ def test_version_one_incomplete_database_is_rejected_without_any_mutation(tmp_pa
     assert {item.name: item.read_bytes() if item.is_file() else None for item in root.iterdir()} == before_entries
 
 
-def test_valid_schema_one_and_records_are_opened_without_mutation(tmp_path):
+def test_valid_current_schema_and_records_are_opened_without_mutation(tmp_path):
     root = tmp_path / "uploads"
     original = UploadService(root, FakeBackend())
     acct = original.add_account("douyin", "现有账号")
@@ -481,7 +525,7 @@ def test_valid_schema_one_and_records_are_opened_without_mutation(tmp_path):
     assert reader.sources()[0]["id"] == src["id"]
 
 
-def test_valid_schema_one_wal_is_opened_without_creating_a_shm_sidecar(tmp_path):
+def test_valid_current_schema_wal_is_opened_without_creating_a_shm_sidecar(tmp_path):
     source_path = tmp_path / "wal-source.sqlite3"
     target_root = tmp_path / "uploads"
     target_root.mkdir()
@@ -493,7 +537,9 @@ def test_valid_schema_one_wal_is_opened_without_creating_a_shm_sidecar(tmp_path)
     try:
         assert source.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
         source.execute("PRAGMA wal_autocheckpoint=0")
-        source.executescript(SCHEMA_DDL + "\nINSERT INTO metadata VALUES(1);")
+        source.executescript(
+            SCHEMA_DDL + f"\nINSERT INTO metadata VALUES({SCHEMA_VERSION});"
+        )
         source.commit()
         source_wal = Path(str(source_path) + "-wal")
         assert source_wal.is_file()
@@ -520,7 +566,7 @@ def test_valid_schema_one_wal_is_opened_without_creating_a_shm_sidecar(tmp_path)
     assert after == before
 
 
-def test_malformed_schema_one_wal_is_rejected_without_mutation(tmp_path):
+def test_malformed_current_schema_wal_is_rejected_without_mutation(tmp_path):
     root = tmp_path / "uploads"
     service = UploadService(root, FakeBackend())
     with sqlite3.connect(service.database_path) as db:
@@ -554,7 +600,7 @@ def test_malformed_schema_one_wal_is_rejected_without_mutation(tmp_path):
     assert after == before
 
 
-def test_schema_one_wal_reset_tail_is_accepted_without_mutation(tmp_path):
+def test_current_schema_wal_reset_tail_is_accepted_without_mutation(tmp_path):
     source_root = tmp_path / "wal-reset-source"
     source_service = UploadService(source_root, FakeBackend())
     source_path = source_service.database_path
@@ -609,7 +655,7 @@ def test_schema_one_wal_reset_tail_is_accepted_without_mutation(tmp_path):
     assert after == before
 
 
-def test_schema_one_wal_hardlink_is_rejected_without_mutation(tmp_path):
+def test_current_schema_wal_hardlink_is_rejected_without_mutation(tmp_path):
     root = tmp_path / "uploads"
     service = UploadService(root, FakeBackend())
     with sqlite3.connect(service.database_path) as db:
@@ -665,7 +711,7 @@ def test_concurrent_new_database_initialization_publishes_only_complete_schema(t
     assert len(services) == 2
     with sqlite3.connect(root / "uploads.sqlite3") as db:
         assert db.execute("PRAGMA quick_check").fetchall() == [("ok",)]
-        assert db.execute("SELECT version FROM metadata").fetchall() == [(1,)]
+        assert db.execute("SELECT version FROM metadata").fetchall() == [(SCHEMA_VERSION,)]
         assert {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")} == {
             "metadata", "accounts", "sources", "jobs", "operations", "requests",
         }
@@ -673,7 +719,7 @@ def test_concurrent_new_database_initialization_publishes_only_complete_schema(t
 
 
 @pytest.mark.parametrize("damage", ["extra_table", "extra_index", "second_version", "orphan"])
-def test_schema_one_drift_and_broken_foreign_keys_are_rejected_read_only(tmp_path, damage):
+def test_current_schema_drift_and_broken_foreign_keys_are_rejected_read_only(tmp_path, damage):
     root = tmp_path / "uploads"
     service = UploadService(root, FakeBackend())
     path = service.database_path
@@ -707,7 +753,7 @@ def test_actionable_jobs_and_sources_are_prioritized_and_all_history_is_pageable
             job_id = f"{index + 1000:032x}"
             state = "running" if index == 0 else "draft"
             db.execute(
-                "INSERT INTO sources VALUES(?,?,?,?,?,?)",
+                "INSERT INTO sources(id,name,suffix,size,sha256,created_at) VALUES(?,?,?,?,?,?)",
                 (source_id, f"source-{index}.mp4", ".mp4", index + 1, "a" * 64, f"time-{index:03d}"),
             )
             db.execute(

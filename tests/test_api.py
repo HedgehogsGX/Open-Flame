@@ -103,14 +103,14 @@ def test_health_and_web_page(settings: Settings) -> None:
     }
     assert page.status_code == 200
     assert openapi.status_code == 200
-    assert openapi.json()["info"]["version"] == "0.24.3"
+    assert openapi.json()["info"]["version"] == "0.24.4"
     assert remote_docs.status_code == 404
     assert remote_redoc.status_code == 404
     assert "多平台视频下载控制面" in page.text
     assert "本次运行状态由应用心跳报告" in page.text
     assert "/api/v1/operations/runtime" in page.text
     assert "TXT/CSV" in page.text
-    assert "迭代 0.24.3" in page.text
+    assert "迭代 0.24.4" in page.text
     assert "ready 原件、缩略图与字幕下载" in page.text
     assert "迭代 0.3" not in page.text
     assert r".split(/\r?\n/)" in page.text

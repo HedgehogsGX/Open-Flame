@@ -21,14 +21,21 @@ from .contracts import UploadError
 from .web import UPLOAD_HTML
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
-_ACCOUNT_FIELDS = ("id", "platform", "name", "auth_state", "code")
-_SOURCE_FIELDS = ("id", "name", "size", "sha256")
+_ACCOUNT_FIELDS = (
+    "id", "platform", "name", "auth_state", "code", "lifecycle_state",
+    "disconnected_at",
+)
+_SOURCE_FIELDS = (
+    "id", "name", "size", "sha256", "media_present", "media_state",
+    "media_deleted_at", "active_reference_count", "can_delete",
+)
 _OPERATION_FIELDS = ("id", "account_id", "action", "state", "code", "login_phase", "qr_available", "qr_revision", "expires_at")
 _JOB_FIELDS = (
     "id", "platform", "account_id", "account_name", "source_id", "title",
     "description", "tags", "category_id", "mode", "copyright", "source_credit",
     "state", "code", "created_at", "updated_at", "retry_of", "source_name",
-    "source_size", "source_sha256",
+    "source_size", "source_sha256", "account_lifecycle_state",
+    "source_media_present", "source_media_state",
 )
 
 
@@ -166,15 +173,18 @@ def install_upload_routes(
         response.headers["X-Frame-Options"] = "DENY"
         return response
 
-    async def invoke(method: str, *args, **kwargs):
-        def work():
-            return getattr(manager.get(), method)(*args, **kwargs)
+    async def run_guarded(work):
         try:
             return await run_in_threadpool(work)
         except UploadError as exc:
             raise _safe_error(exc) from None
         except sqlite3.Error:
             raise HTTPException(status_code=503, detail="upload_database_unavailable") from None
+
+    async def invoke(method: str, *args, **kwargs):
+        def work():
+            return getattr(manager.get(), method)(*args, **kwargs)
+        return await run_guarded(work)
 
     @app.get("/uploads", response_class=HTMLResponse, include_in_schema=False)
     def page():
@@ -192,10 +202,7 @@ def install_upload_routes(
 
     @router.post("/recover")
     async def recover():
-        try:
-            return await run_in_threadpool(manager.recover)
-        except UploadError as exc:
-            raise _safe_error(exc) from None
+        return await run_guarded(manager.recover)
 
     @router.get("/accounts")
     async def accounts():
@@ -204,6 +211,14 @@ def install_upload_routes(
     @router.post("/accounts", status_code=201)
     async def add_account(payload: AccountRequest):
         return _public(await invoke("add_account", **payload.model_dump()), _ACCOUNT_FIELDS)
+
+    @router.post("/accounts/{account_id}/disconnect")
+    async def disconnect_account(account_id: str):
+        result = await invoke("disconnect_account", account_id)
+        return {
+            **result,
+            "account": _public(result["account"], _ACCOUNT_FIELDS),
+        }
 
     @router.post("/accounts/{account_id}/{action}", status_code=202)
     async def account_action(account_id: str, action: Literal["login", "check"]):
@@ -225,6 +240,10 @@ def install_upload_routes(
     async def sources():
         return [_public(record, _SOURCE_FIELDS) for record in await invoke("sources")]
 
+    @router.get("/storage")
+    async def storage_usage():
+        return await invoke("storage_usage")
+
     @router.get("/sources/page")
     async def source_page(cursor: str | None = Query(default=None, max_length=64),
                           limit: int = Query(default=50, ge=1, le=200)):
@@ -235,6 +254,45 @@ def install_upload_routes(
     @router.get("/sources/{source_id}")
     async def source(source_id: str):
         return _public(await invoke("source", source_id), _SOURCE_FIELDS)
+
+    @router.delete("/sources/{source_id}/media")
+    async def delete_source_media(source_id: str):
+        return _public(await invoke("delete_source_media", source_id), _SOURCE_FIELDS)
+
+    @router.post("/sources/{source_id}/media")
+    async def restore_source_media(source_id: str, request: Request):
+        if request.headers.get("content-type", "").split(";")[0] != "application/octet-stream":
+            raise HTTPException(status_code=415, detail="binary_source_required")
+        lengths = request.headers.getlist("content-length")
+        if len(lengths) > 1 or (lengths and (
+                not lengths[0].isdigit() or int(lengths[0]) > MAX_SOURCE_BYTES)):
+            raise HTTPException(status_code=413, detail="source_too_large")
+        await run_guarded(manager.get)
+        incoming = root / "incoming"
+        incoming.mkdir(exist_ok=True)
+        if incoming.is_symlink() or incoming.resolve() != incoming:
+            raise HTTPException(status_code=409, detail="source_storage_invalid")
+        descriptor, temporary = tempfile.mkstemp(prefix="restore-", suffix=".media", dir=incoming)
+        source = Path(temporary)
+        try:
+            total = 0
+            with os.fdopen(descriptor, "wb") as handle:
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > MAX_SOURCE_BYTES:
+                        raise HTTPException(status_code=413, detail="source_too_large")
+                    for offset in range(0, len(chunk), 64 * 1024):
+                        await run_in_threadpool(
+                            handle.write, memoryview(chunk)[offset:offset + 64 * 1024]
+                        )
+                if total == 0:
+                    raise HTTPException(status_code=422, detail="source_empty")
+                await run_in_threadpool(handle.flush)
+                await run_in_threadpool(os.fsync, handle.fileno())
+            result = await invoke("restore_source_media", source_id, source)
+            return _public(result, _SOURCE_FIELDS)
+        finally:
+            source.unlink(missing_ok=True)
 
     @router.post("/sources", status_code=201)
     async def import_source(request: Request, name: str = Query(min_length=1, max_length=180)):
@@ -247,10 +305,7 @@ def install_upload_routes(
         lengths = request.headers.getlist("content-length")
         if len(lengths) > 1 or (lengths and (not lengths[0].isdigit() or int(lengths[0]) > MAX_SOURCE_BYTES)):
             raise HTTPException(status_code=413, detail="source_too_large")
-        try:
-            await run_in_threadpool(manager.get)
-        except UploadError as exc:
-            raise _safe_error(exc) from None
+        await run_guarded(manager.get)
         incoming = root / "incoming"
         incoming.mkdir(exist_ok=True)
         if incoming.is_symlink() or incoming.resolve() != incoming:

@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -65,6 +66,19 @@ def _private_directory(path: Path) -> None:
         current = current.parent
     if os.name != "nt":
         path.chmod(0o700)
+
+
+def _existing_private_directory(path: Path) -> bool:
+    if not path.exists():
+        return False
+    current = path
+    while current != current.parent:
+        metadata = current.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or current.is_symlink()
+                or getattr(metadata, "st_file_attributes", 0) & 0x400):
+            raise ValueError("unsafe_private_directory")
+        current = current.parent
+    return True
 
 
 @contextmanager
@@ -174,6 +188,29 @@ class SauBackend:
 
     def check(self, platform: str, account_id: str, stop: Event) -> BackendResult:
         return self._run("check", platform, account_id, {}, stop, self.check_timeout)
+
+    def disconnect_local(self, platform: str, account_id: str) -> None:
+        """Remove only this application's exact local account-state file."""
+        if platform not in _PLATFORMS or not _ACCOUNT.fullmatch(account_id):
+            raise ValueError("invalid_account")
+        private = self.root / "private"
+        accounts = private / "accounts"
+        platform_root = accounts / platform
+        if not _existing_private_directory(private):
+            return
+        if not _existing_private_directory(accounts):
+            return
+        if not _existing_private_directory(platform_root):
+            return
+        account_file = platform_root / f"{account_id}.json"
+        if not os.path.lexists(account_file):
+            return
+        metadata = account_file.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or account_file.is_symlink()
+                or getattr(metadata, "st_file_attributes", 0) & 0x400
+                or metadata.st_nlink != 1):
+            raise ValueError("invalid_account")
+        account_file.unlink()
 
     def upload(self, request: UploadRequest, stop: Event) -> BackendResult:
         if request.mode not in {"publish", "draft"} or (

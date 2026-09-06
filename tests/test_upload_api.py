@@ -131,7 +131,14 @@ def test_explicit_preview_confirm_and_idempotency(upload_client, platform, mode,
     client, app, backend = upload_client
     account = _account(client, platform)
     source = _source(client)
-    assert set(source) == {"id", "name", "size", "sha256"}
+    assert set(source) == {
+        "id", "name", "size", "sha256", "media_present", "media_state",
+        "media_deleted_at", "active_reference_count", "can_delete",
+    }
+    assert source["media_present"] is True
+    assert source["media_state"] == "present"
+    assert source["active_reference_count"] == 0
+    assert source["can_delete"] is True
     assert source["sha256"] == hashlib.sha256(b"synthetic-video-only").hexdigest()
     job, payload = _draft(client, account, source, mode=mode)
     assert job["state"] == "draft"
@@ -222,9 +229,15 @@ def test_job_and_source_history_pages_are_bounded_and_records_are_addressable(up
     sources = client.get("/api/v1/uploads/sources/page?limit=1")
     assert jobs.status_code == sources.status_code == 200
     assert jobs.json() == {"items": [job], "next_cursor": None}
-    assert sources.json() == {"items": [source], "next_cursor": None}
+    current_source = sources.json()["items"][0]
+    assert sources.json()["next_cursor"] is None
+    assert {key: current_source[key] for key in ("id", "name", "size", "sha256")} == {
+        key: source[key] for key in ("id", "name", "size", "sha256")
+    }
+    assert current_source["active_reference_count"] == 1
+    assert current_source["can_delete"] is False
     assert client.get(f"/api/v1/uploads/jobs/{job['id']}").json() == job
-    assert client.get(f"/api/v1/uploads/sources/{source['id']}").json() == source
+    assert client.get(f"/api/v1/uploads/sources/{source['id']}").json() == current_source
     assert client.get("/api/v1/uploads/jobs/page?limit=201").status_code == 422
     assert client.get("/api/v1/uploads/jobs/page?cursor=bad").status_code == 409
 
@@ -246,7 +259,113 @@ def test_database_read_failure_is_a_safe_service_unavailable_response(upload_cli
     assert "synthetic" not in response.text
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/api/v1/uploads/recover"),
+        ("post", "/api/v1/uploads/sources?name=synthetic.mp4"),
+        ("post", "/api/v1/uploads/sources/" + "a" * 32 + "/media"),
+    ],
+)
+def test_database_failure_during_manager_preflight_is_safe_503(
+    upload_client, monkeypatch, method, path
+):
+    client, app, _ = upload_client
+
+    def unavailable(*args, **kwargs):
+        raise sqlite3.OperationalError("synthetic private database detail")
+
+    target = "recover" if path.endswith("/recover") else "get"
+    monkeypatch.setattr(app.state.upload_manager, target, unavailable)
+    response = getattr(client, method)(
+        path,
+        content=b"synthetic-video-only",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "upload_database_unavailable"}
+    assert "synthetic private" not in response.text
+
+
 def test_unknown_account_is_404_and_validation_is_422(upload_client):
     client, _, _ = upload_client
     assert client.post("/api/v1/uploads/accounts/" + uuid4().hex + "/check").status_code == 404
     assert client.post("/api/v1/uploads/accounts", json={"platform": "youtube", "name": "unsupported"}).status_code == 422
+
+
+def test_disconnect_api_keeps_tombstone_and_revokes_queued_confirmation(upload_client):
+    client, app, _ = upload_client
+    account = _account(client, "douyin")
+    source = _source(client)
+    job, _ = _draft(client, account, source)
+    app.state.upload_manager.service.stop()
+    assert client.post(f"/api/v1/uploads/jobs/{job['id']}/confirm").json()["state"] == "queued"
+
+    response = client.post(f"/api/v1/uploads/accounts/{account['id']}/disconnect")
+
+    assert response.status_code == 200
+    account_result = response.json()["account"]
+    assert account_result == {
+        "id": account["id"], "platform": "douyin", "name": "synthetic account",
+        "auth_state": "unchecked", "code": "account_disconnected",
+        "lifecycle_state": "disconnected", "disconnected_at": account_result["disconnected_at"],
+    }
+    assert response.json()["revoked_confirmation_count"] == 1
+    assert response.json()["canceled_operation_count"] == 0
+    assert response.json()["local_login_removed"] is True
+    assert client.get("/api/v1/uploads/accounts").json() == [account_result]
+    current = client.get(f"/api/v1/uploads/jobs/{job['id']}").json()
+    assert current["state"] == "draft"
+    assert current["code"] == "account_disconnected_confirmation_revoked"
+    assert client.post(f"/api/v1/uploads/jobs/{job['id']}/confirm").status_code == 409
+
+
+def test_storage_and_media_delete_api_preserve_source_history(upload_client):
+    client, app, _ = upload_client
+    source = _source(client)
+    usage = client.get("/api/v1/uploads/storage")
+    assert usage.status_code == 200
+    assert usage.json()["registered_source_count"] == 1
+    assert usage.json()["present_source_count"] == 1
+    assert usage.json()["managed_bytes"] == len(b"synthetic-video-only")
+
+    deleted = client.delete(f"/api/v1/uploads/sources/{source['id']}/media")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["media_present"] is False
+    assert deleted.json()["media_state"] == "deleted"
+    assert deleted.json()["sha256"] == source["sha256"]
+    assert not list((app.state.upload_manager.root / "media").iterdir())
+    assert client.get("/api/v1/uploads/storage").json()["deleted_source_count"] == 1
+
+    mismatch = client.post(
+        f"/api/v1/uploads/sources/{source['id']}/media",
+        content=b"different-video-only",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json() == {"detail": "source_restore_mismatch"}
+    assert not list((app.state.upload_manager.root / "media").iterdir())
+
+    restored = client.post(
+        f"/api/v1/uploads/sources/{source['id']}/media",
+        content=b"synthetic-video-only",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["media_present"] is True
+    assert restored.json()["media_state"] == "present"
+    assert restored.json()["media_deleted_at"] is None
+
+
+def test_media_delete_api_rejects_active_draft_without_removing_file(upload_client):
+    client, app, _ = upload_client
+    source = _source(client)
+    _draft(client, _account(client, "douyin"), source)
+
+    response = client.delete(f"/api/v1/uploads/sources/{source['id']}/media")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "source_in_use"}
+    assert len(list((app.state.upload_manager.root / "media").iterdir())) == 1

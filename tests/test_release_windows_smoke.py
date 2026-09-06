@@ -6,8 +6,10 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import stat
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -87,7 +89,16 @@ def _fake_commands(monkeypatch: pytest.MonkeyPatch, *, failure=None, mutation=No
         source = entry.parent
         observed.append((label, list(arguments), dict(environment)))
         assert cwd == work / "外部 working !"
-        assert source == work / "source 中文 !"
+        if label == "upload":
+            assert entry == work / "upload-release-probe.cmd"
+            assert arguments == [
+                str(work / "source 中文 !/.venv/Scripts/python.exe"),
+                str(work / "upload-release-probe.py"),
+                str(work / "source 中文 !"),
+                str(work / "upload probe data"),
+            ]
+        else:
+            assert source == work / "source 中文 !"
         assert all(Path(environment[key]).is_relative_to(work) for key in ("USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP"))
         assert not any(key.upper().startswith(("VDC_", "PIP_")) or key.upper().endswith("_PROXY") for key in environment)
         step = {"label": label, "return_code": 0, "duration_seconds": 0,
@@ -109,6 +120,8 @@ def _fake_commands(monkeypatch: pytest.MonkeyPatch, *, failure=None, mutation=No
                 with (app / "data/logs/runtime-local-app.jsonl").open("a") as stream:
                     stream.write(json.dumps({"event": "local_app.claim_gate_activated"}) + "\n")
             return step, b'{"status":"checked"}\n', b""
+        elif label == "upload":
+            return step, (json.dumps(smoke._UPLOAD_EXPECTED, sort_keys=True).encode() + b"\n"), b""
         return step, b'{"status":"ready"}\n', b""
 
     monkeypatch.setattr(smoke, "_run_owned_cmd", run)
@@ -149,7 +162,11 @@ def test_clean_flow_uses_manifest_identity_and_scoped_profile(release_fixture, t
     assert report["network_mode"] == "offline_cache"
     assert report["runtime_components"] == 3 and report["runtime_run_count"] == 1
     assert report["business_database_created_only_by_start"]
-    assert [entry[0] for entry in observed] == ["setup", "repeat", "check"]
+    assert report["upload_runtime_code"] == "runtime_missing"
+    assert report["upload_platform_drafts"] == 3
+    assert report["upload_explicit_confirmations"] == 3
+    assert report["upload_backend_calls"] == report["upload_network_calls"] == 0
+    assert [entry[0] for entry in observed] == ["setup", "repeat", "check", "upload"]
     assert observed[0][1] == ["--yes", "--wheelhouse", str(wheels), "--artifact-cache", str(tools)]
     assert "--app-root" not in observed[2][1]
     text = (work / "report.json").read_text()
@@ -185,13 +202,57 @@ def test_archive_changed_after_initial_verification_is_not_executed(release_fixt
     assert report["stage"] == "source_archive_changed"
 
 
-@pytest.mark.parametrize(("failure", "stage"), (("setup", "initial_install"), ("repeat", "repeat_install"), ("check", "start_check")))
+@pytest.mark.parametrize(("failure", "stage"), (("setup", "initial_install"), ("repeat", "repeat_install"),
+                                                  ("check", "start_check"), ("upload", "upload_offline_gate")))
 def test_failed_command_never_reports_pass_or_raw_output(release_fixture, tmp_path, monkeypatch, failure, stage):
     release, _, wheels, tools = release_fixture
     _fake_commands(monkeypatch, failure=failure)
     report = smoke.verify_windows_release(release, tmp_path / "work", wheelhouse=wheels, artifact_cache=tools)
     assert report["status"] == "failed" and report["stage"] == stage
     assert PRIVATE not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("runtime_code", "runtime_invalid"),
+        ("queue_counts", [1, 1, 3]),
+        ("independent_changes", [1, 2, 0]),
+        ("backend_calls", 1),
+        ("network_calls", 1),
+        ("account_id", "a" * 32),
+        ("source_path", PRIVATE),
+    ),
+)
+def test_upload_evidence_rejects_wrong_behavior_or_extra_identifiers(field, value):
+    payload = dict(smoke._UPLOAD_EXPECTED)
+    payload[field] = value
+    with pytest.raises(smoke.VerificationFailure, match="^upload_offline_gate$"):
+        smoke._upload_evidence(json.dumps(payload).encode() + b"\n")
+
+
+def test_actual_upload_probe_uses_packaged_source_and_emits_only_fixed_evidence(tmp_path):
+    work = tmp_path / "probe work"
+    source = work / "source 中文 !"
+    shutil.copytree(ROOT / "src", source / "src")
+    probe = work / "upload-release-probe.py"
+    probe.write_text(smoke._UPLOAD_PROBE, encoding="utf-8", newline="\n")
+    upload_root = work / "upload probe data"
+
+    result = subprocess.run(
+        [sys.executable, "-I", str(probe), str(source), str(upload_root)],
+        cwd=work,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+
+    assert result.returncode == 0 and result.stderr == b""
+    assert smoke._upload_evidence(result.stdout)["upload_network_calls"] == 0
+    assert str(tmp_path).encode() not in result.stdout
+    assert not any(upload_root.rglob("runtime"))
 
 
 @pytest.mark.parametrize(("tree", "stage"), ((".venv", "repeat_environment_changed"), ("runtime-tools", "repeat_tools_changed")))

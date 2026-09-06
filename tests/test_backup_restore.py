@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import csv
+import ctypes
+import hashlib
 import io
 import json
 import os
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+import video_download_control.backup as backup_module
 from video_download_control.adapters.fake import (
     ScriptedFakeAdapter,
     ScriptedGraphFakeAdapter,
@@ -22,6 +24,10 @@ from video_download_control.backup import (
     BACKUP_MANIFEST_NAME,
     BACKUP_METADATA_NAME,
     BackupRestoreError,
+    _paths_overlap,
+    _require_existing_directory,
+    _require_existing_regular_file,
+    _require_new_target,
     create_backup,
     restore_backup,
 )
@@ -35,6 +41,30 @@ from video_download_control.worker import Worker
 from video_download_control.worker_repository import WorkerRepository
 
 NOW = datetime(2026, 9, 3, 8, 0, tzinfo=UTC)
+
+
+def windows_short_path(path: Path) -> Path:
+    if os.name != "nt":
+        pytest.skip("Windows 8.3 short paths are Windows-only")
+
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_short_path_name = kernel32.GetShortPathNameW
+    get_short_path_name.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    get_short_path_name.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = get_short_path_name(str(path), buffer, len(buffer))
+    if length == 0 or length >= len(buffer):
+        pytest.skip("Windows 8.3 short names are unavailable on this volume")
+    short_path = Path(buffer.value)
+    if os.path.normcase(str(short_path)) == os.path.normcase(str(path)):
+        pytest.skip("Windows 8.3 short names are disabled for this directory")
+    return short_path
 
 
 def populate_ready_asset(service, settings, database) -> tuple[str, Path]:
@@ -648,6 +678,109 @@ def test_restore_rejects_symlinked_backup_payload(
             restore_database_path=restore_root / "control.sqlite3",
         )
     assert not restore_root.exists()
+
+
+def test_path_helpers_return_physical_canonical_paths(tmp_path: Path) -> None:
+    existing_directory = tmp_path / "Canonical Existing Directory"
+    existing_directory.mkdir()
+    existing_file = existing_directory / "Canonical Existing File.txt"
+    existing_file.write_text("canonical", encoding="utf-8")
+    new_target = existing_directory / "New Backup Target"
+
+    canonical_directory = existing_directory.resolve(strict=True)
+    canonical_file = existing_file.resolve(strict=True)
+
+    assert _require_existing_directory(
+        existing_directory, label="existing directory"
+    ) == canonical_directory
+    assert _require_existing_regular_file(
+        existing_file, label="existing file"
+    ) == canonical_file
+    assert _require_new_target(new_target, label="new target") == (
+        canonical_directory / new_target.name
+    )
+    assert not new_target.exists()
+    assert _paths_overlap(canonical_directory, canonical_directory / "child")
+
+
+def test_new_target_rechecks_nonexistence_after_canonicalizing_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "Canonical Target Parent"
+    parent.mkdir()
+    target = parent / "appears-during-validation"
+    real_lexists = os.path.lexists
+    target_checks = 0
+
+    def lexists_with_race(path: os.PathLike[str] | str) -> bool:
+        nonlocal target_checks
+        if Path(path) == target:
+            target_checks += 1
+            return target_checks > 1
+        return real_lexists(path)
+
+    monkeypatch.setattr(backup_module.os.path, "lexists", lexists_with_race)
+
+    with pytest.raises(BackupRestoreError, match="already exists"):
+        _require_new_target(target, label="new target")
+    assert target_checks == 2
+
+
+def test_existing_file_helper_keeps_rejecting_hardlinks(tmp_path: Path) -> None:
+    original = tmp_path / "hardlinked-database.sqlite3"
+    linked = tmp_path / "hardlinked-database-copy.sqlite3"
+    original.write_bytes(b"database")
+    try:
+        os.link(original, linked)
+    except (NotImplementedError, OSError):
+        pytest.skip("hardlink creation is unavailable on this filesystem")
+
+    for candidate in (original, linked):
+        with pytest.raises(BackupRestoreError, match="plain regular file"):
+            _require_existing_regular_file(candidate, label="database")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 8.3 paths are Windows-only")
+def test_windows_short_paths_cannot_hide_backup_or_restore_overlap(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "Canonical Download Source Directory"
+    source_root.mkdir()
+    database_path = source_root / "Canonical Download Database.sqlite3"
+    Database(database_path).initialize()
+    short_source_root = windows_short_path(source_root)
+    short_database_path = windows_short_path(database_path)
+
+    assert _require_existing_directory(
+        short_source_root, label="source data root"
+    ) == source_root.resolve(strict=True)
+    assert _require_existing_regular_file(
+        short_database_path, label="source database"
+    ) == database_path.resolve(strict=True)
+    with pytest.raises(BackupRestoreError, match="overlaps"):
+        create_backup(
+            source_data_root=source_root,
+            source_database_path=database_path,
+            backup_target=short_source_root / "nested-backup",
+        )
+
+    backup_root = tmp_path / "Canonical Download Backup Directory"
+    create_backup(
+        source_data_root=source_root,
+        source_database_path=database_path,
+        backup_target=backup_root,
+    )
+    short_backup_root = windows_short_path(backup_root)
+    short_restore_root = short_backup_root / "nested-restore"
+
+    with pytest.raises(BackupRestoreError, match="overlaps"):
+        restore_backup(
+            backup_root=backup_root,
+            restore_data_root=short_restore_root,
+            restore_database_path=short_restore_root / "control.sqlite3",
+        )
+    assert not short_restore_root.exists()
 
 
 def test_backup_and_restore_reject_existing_targets_and_overlap(

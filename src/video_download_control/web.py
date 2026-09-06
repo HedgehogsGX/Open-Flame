@@ -45,7 +45,7 @@ INDEX_HTML = """<!doctype html>
   <main>
     <h1>多平台视频下载控制面</h1>
     <p><a href="/uploads">打开上传器：Bilibili、抖音、视频号 →</a></p>
-    <p class="muted">迭代 0.24.3：新增 Bilibili、抖音和视频号上传入口，支持独立账号、草稿预览与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
+    <p class="muted">迭代 0.24.4：上传账号断开、受管媒体生命周期与停机备份/恢复已加入；Bilibili、抖音和视频号仍采用独立账号、本地草稿与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
     <p class="notice">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
     <section class="card">
       <h2>运行状态</h2>

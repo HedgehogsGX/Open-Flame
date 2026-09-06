@@ -3,6 +3,7 @@
 .dockerignore
 .env.example
 .gitattributes
+.github/workflows/ci.yml
 .gitignore
 .python-version
 AGENTS.md
@@ -30,6 +31,7 @@ deployment/requirements.runtime.lock
 deployment/run-linux-acceptance.sh
 deployment/validate_tool_bundle.py
 docs/DESIGN_SYSTEM.md
+docs/CI.md
 docs/FOLLOW_UP_EXECUTION_PLAN.md
 docs/OPEN_SOURCE_DOWNLOADER_REVIEW.md
 docs/OPEN_SOURCE_UPLOADER_REVIEW.md
@@ -74,6 +76,7 @@ licenses/python/uvicorn-0.52.4/LICENSE.md
 pyproject.toml
 release-files.txt
 scripts/release.py
+scripts/verify_ci_contract.py
 scripts/verify_wheel_release.py
 scripts/verify_windows_release.py
 setup_open_flame.py
@@ -134,9 +137,12 @@ src/video_download_control/subprocess_runner.py
 src/video_download_control/toolchain.py
 src/video_download_control/toolchain_cli.py
 src/video_download_control/toolchains/windows-x64.json
+src/video_download_control/upload_backup_cli.py
 src/video_download_control/uploads/__init__.py
+src/video_download_control/uploads/activity_lock.py
 src/video_download_control/uploads/api.py
 src/video_download_control/uploads/backend.py
+src/video_download_control/uploads/backup.py
 src/video_download_control/uploads/bilibili_login.py
 src/video_download_control/uploads/bridge.py
 src/video_download_control/uploads/browser_login.py
@@ -184,6 +190,7 @@ tests/test_capability_api.py
 tests/test_capability_cli.py
 tests/test_capability_evidence.py
 tests/test_capability_schema10.py
+tests/test_ci_contract.py
 tests/test_concurrent_worker_integration.py
 tests/test_config.py
 tests/test_control_cli.py
@@ -250,10 +257,16 @@ tests/test_toolchain.py
 tests/test_toolchain_api.py
 tests/test_toolchain_cli.py
 tests/test_unix_relay.py
+tests/test_upload_activity_lock.py
 tests/test_upload_api.py
+tests/test_upload_backup_cli.py
+tests/test_upload_backup_restore.py
 tests/test_upload_backend.py
+tests/test_upload_lifecycle.py
 tests/test_upload_login.py
+tests/test_upload_resilience.py
 tests/test_upload_runtime_integrity.py
+tests/test_upload_schema2.py
 tests/test_upload_service.py
 tests/test_upload_ui.py
 tests/test_validation.py
@@ -297,6 +310,7 @@ validation/iteration-0.24.1-qr-login-evidence.md
 validation/iteration-0.24.2-integration-evidence.md
 validation/iteration-0.24.3-debug-fixes.md
 validation/iteration-0.24.3-final-review.md
+validation/iteration-0.24.4-upload-data-lifecycle-evidence.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

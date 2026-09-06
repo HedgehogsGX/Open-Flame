@@ -63,6 +63,30 @@ def account(tmp_path: Path, platform="douyin") -> Path:
     return path
 
 
+def test_disconnect_local_removes_only_the_exact_account_file(tmp_path):
+    target = account(tmp_path)
+    sibling = target.with_name("other-account.json")
+    sibling.write_text('{"keep":true}', encoding="utf-8")
+    backend = SauBackend(tmp_path)
+
+    backend.disconnect_local("douyin", "account1")
+    backend.disconnect_local("douyin", "account1")
+
+    assert not target.exists()
+    assert sibling.read_text(encoding="utf-8") == '{"keep":true}'
+
+
+def test_disconnect_local_rejects_hardlinked_account_state(tmp_path):
+    target = account(tmp_path)
+    other = tmp_path / "linked-secret.json"
+    os.link(target, other)
+
+    with pytest.raises(ValueError, match="invalid_account"):
+        SauBackend(tmp_path).disconnect_local("douyin", "account1")
+
+    assert target.exists() and other.exists()
+
+
 def dummy_bridge(tmp_path: Path, backend: SauBackend, monkeypatch, body: str) -> None:
     script = tmp_path / "dummy.py"
     script.write_text(

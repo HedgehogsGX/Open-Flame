@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.24.3"
+version = "0.24.4"
 description = "Local-first media downloads and explicitly confirmed multi-platform uploads"
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,6 +32,7 @@ video-download-short-link-egress = "video_download_control.short_link_transport_
 video-download-candidate-worker = "video_download_control.candidate_worker_cli:main"
 video-download-credentials = "video_download_control.credential_cli:main"
 video-download-backup = "video_download_control.backup_cli:main"
+video-upload-backup = "video_download_control.upload_backup_cli:main"
 video-download-tools = "video_download_control.toolchain_cli:main"
 video-download-local-worker = "video_download_control.local_worker_cli:main"
 video-download-local-app = "video_download_control.local_app_cli:main"

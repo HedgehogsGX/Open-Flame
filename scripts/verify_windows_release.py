@@ -40,6 +40,139 @@ _HELPER = (
     "sys.exit(71 if gate != b'G' else subprocess.call(sys.argv[1],"
     "stdin=subprocess.DEVNULL,shell=False,creationflags=subprocess.CREATE_NO_WINDOW))"
 )
+_UPLOAD_EXPECTED = {
+    "status": "passed",
+    "runtime_ready": False,
+    "runtime_code": "runtime_missing",
+    "platforms": ["bilibili", "douyin", "tencent"],
+    "initial_draft_count": 3,
+    "queue_counts": [1, 2, 3],
+    "remaining_draft_counts": [2, 1, 0],
+    "independent_changes": [1, 1, 1],
+    "backend_calls": 0,
+    "network_calls": 0,
+}
+_UPLOAD_PROBE = r'''from __future__ import annotations
+import json
+from pathlib import Path
+import socket
+import sys
+
+
+def main():
+    try:
+        source = Path(sys.argv[1]).resolve(strict=True)
+        root = Path(sys.argv[2]).resolve()
+        sys.path.insert(0, str(source / "src"))
+
+        network_calls = []
+        original_socket = socket.socket
+
+        class OfflineSocket(original_socket):
+            def connect(self, *args, **kwargs):
+                network_calls.append("connect")
+                raise RuntimeError("network_disabled")
+
+            def connect_ex(self, *args, **kwargs):
+                network_calls.append("connect_ex")
+                raise RuntimeError("network_disabled")
+
+        def deny_connection(*args, **kwargs):
+            network_calls.append("create_connection")
+            raise RuntimeError("network_disabled")
+
+        socket.socket = OfflineSocket
+        socket.create_connection = deny_connection
+
+        from video_download_control.uploads.service import UploadService
+
+        missing = UploadService(root / "missing-runtime")
+        try:
+            runtime = missing.status()["backend"]
+        finally:
+            missing.stop()
+        assert runtime.get("ready") is False
+        assert runtime.get("code") == "runtime_missing"
+
+        class ZeroRemoteBackend:
+            def __init__(self):
+                self.calls = []
+
+            def inspect(self):
+                return {"ready": True, "code": "synthetic_ready",
+                        "backend": "zero-remote-synthetic",
+                        "platforms": ["bilibili", "douyin", "tencent"]}
+
+            def _unexpected(self, *args, **kwargs):
+                self.calls.append("unexpected")
+                raise RuntimeError("remote_backend_disabled")
+
+            login = check = upload = _unexpected
+
+        backend = ZeroRemoteBackend()
+        service = UploadService(root / "synthetic", backend)
+        try:
+            accounts = {
+                platform: service.add_account(platform, "synthetic-" + platform)
+                for platform in ("bilibili", "douyin", "tencent")
+            }
+            with service._db() as database:
+                database.execute("UPDATE accounts SET auth_state='ready',code='synthetic_ready'")
+            media = root / "synthetic-input.mp4"
+            media.parent.mkdir(parents=True, exist_ok=True)
+            media.write_bytes(b"offline release upload probe")
+            source_row = service.import_source(media, "synthetic-input.mp4")
+            jobs = []
+            for platform in ("bilibili", "douyin", "tencent"):
+                jobs.extend(service.create_jobs(
+                    source_id=source_row["id"],
+                    account_ids=[accounts[platform]["id"]],
+                    title="synthetic release draft",
+                    description="",
+                    tags=["synthetic"] if platform == "bilibili" else [],
+                    category_id=249 if platform == "bilibili" else None,
+                    mode="draft" if platform == "tencent" else "publish",
+                    copyright=1,
+                    idempotency_key="release_" + platform,
+                ))
+            identifiers = [job["id"] for job in jobs]
+            initial = service.jobs_by_ids(identifiers)
+            assert all(job["state"] == "draft" for job in initial)
+            assert {job["platform"] for job in initial} == set(accounts)
+            queue_counts, draft_counts, changes = [], [], []
+            previous = {job["id"]: job["state"] for job in initial}
+            for job in jobs:
+                assert service.confirm(job["id"])["state"] == "queued"
+                current_rows = service.jobs_by_ids(identifiers)
+                current = {row["id"]: row["state"] for row in current_rows}
+                queue_counts.append(sum(state == "queued" for state in current.values()))
+                draft_counts.append(sum(state == "draft" for state in current.values()))
+                changes.append(sum(previous[key] != current[key] for key in identifiers))
+                previous = current
+            result = {
+                "status": "passed",
+                "runtime_ready": runtime["ready"],
+                "runtime_code": runtime["code"],
+                "platforms": sorted(job["platform"] for job in initial),
+                "initial_draft_count": sum(job["state"] == "draft" for job in initial),
+                "queue_counts": queue_counts,
+                "remaining_draft_counts": draft_counts,
+                "independent_changes": changes,
+                "backend_calls": len(backend.calls),
+                "network_calls": len(network_calls),
+            }
+            assert result == ''' + repr(_UPLOAD_EXPECTED) + r'''
+        finally:
+            service.stop()
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
+    except BaseException:
+        print('{"code":"upload_gate_failed","status":"failed"}')
+        return 2
+
+
+raise SystemExit(main())
+'''
 
 
 class VerificationFailure(Exception):
@@ -298,6 +431,23 @@ def _runtime_evidence(app: Path, version: str) -> dict:
             "runtime_run_count": 1, "runtime_event_count": len(events)}
 
 
+def _upload_evidence(stdout: bytes) -> dict:
+    """Accept only the fixed, identifier-free result from the extracted source probe."""
+    try:
+        lines = stdout.splitlines()
+        payload = json.loads(lines[0]) if len(lines) == 1 else None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    _require(payload == _UPLOAD_EXPECTED, "upload_offline_gate")
+    return {
+        "upload_runtime_code": payload["runtime_code"],
+        "upload_platform_drafts": payload["initial_draft_count"],
+        "upload_explicit_confirmations": payload["queue_counts"][-1],
+        "upload_backend_calls": payload["backend_calls"],
+        "upload_network_calls": payload["network_calls"],
+    }
+
+
 def verify_windows_release(release_dir: Path, work_dir: Path, *, wheelhouse: Path | None = None,
                            artifact_cache: Path | None = None, allow_network: bool = False) -> dict:
     _require(sys.platform == "win32", "windows_required")
@@ -374,6 +524,23 @@ def verify_windows_release(release_dir: Path, work_dir: Path, *, wheelhouse: Pat
         _free_port(port)
         report["port_released"] = True
         report.update(_runtime_evidence(app, version))
+        stage = "upload_offline_gate"
+        probe = work_dir / "upload-release-probe.py"
+        probe.write_text(_UPLOAD_PROBE, encoding="utf-8", newline="\n")
+        launcher = work_dir / "upload-release-probe.cmd"
+        launcher.write_bytes(
+            b'@echo off\r\nsetlocal DisableDelayedExpansion\r\n'
+            b'"%~1" -I "%~2" "%~3" "%~4"\r\nexit /b %errorlevel%\r\n'
+        )
+        step, stdout, stderr = _run_owned_cmd(
+            launcher,
+            [str(source / ".venv/Scripts/python.exe"), str(probe), str(source),
+             str(work_dir / "upload probe data")],
+            cwd=working, environment=environment, work=work_dir, label="upload", timeout=60,
+        )
+        report["steps"].append(step)
+        _require(step["return_code"] == 0 and not stderr, stage)
+        report.update(_upload_evidence(stdout))
         _require(not list((profile / "local/Open-Flame/diagnostics").glob("*.jsonl*")), "unexpected_diagnostic")
         _require(not (working / "data").exists() and not (source / "data").exists(), "business_data_location")
         _require(initial_hash == package_payload_sha256(source / "src/video_download_control"), "source_identity")
