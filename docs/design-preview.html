@@ -5,177 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Open-Flame · 设计预览</title>
+  <link rel="stylesheet" href="../src/video_download_control/static/open-flame.css">
   <style>
-    :root {
-      color-scheme: light;
-      --of-canvas: #f5f5f7;
-      --of-surface: #fff;
-      --of-surface-raised: rgb(255 255 255 / .88);
-      --of-surface-secondary: #ededf0;
-      --of-text: #1d1d1f;
-      --of-text-secondary: #616167;
-      --of-border: #d8d8de;
-      --of-control-border: #85858e;
-      --of-accent: #0066cc;
-      --of-accent-hover: #0055ad;
-      --of-on-accent: #fff;
-      --of-success: #18794e;
-      --of-success-bg: #eaf7ef;
-      --of-warning: #8a5000;
-      --of-warning-bg: #fff4df;
-      --of-danger: #b42318;
-      --of-danger-bg: #fff0ee;
-      --of-focus: #0066cc;
-      --of-shadow: 0 12px 40px rgb(0 0 0 / .08);
-      --of-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
-        "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC",
-        sans-serif;
-      --of-font-mono: ui-monospace, "SFMono-Regular", Consolas,
-        "Liberation Mono", monospace;
-      --of-ease: cubic-bezier(.23, 1, .32, 1);
-      --of-fast: 120ms;
-      --of-medium: 180ms;
-      --of-slow: 240ms;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      :root:not([data-theme="light"]) {
-        color-scheme: dark;
-        --of-canvas: #151517;
-        --of-surface: #202023;
-        --of-surface-raised: rgb(32 32 35 / .9);
-        --of-surface-secondary: #2b2b30;
-        --of-text: #f5f5f7;
-        --of-text-secondary: #b5b5bd;
-        --of-border: #45454d;
-        --of-control-border: #85858e;
-        --of-accent: #8abeff;
-        --of-accent-hover: #add2ff;
-        --of-on-accent: #11243b;
-        --of-success: #88dbb1;
-        --of-success-bg: #17362a;
-        --of-warning: #ffd18a;
-        --of-warning-bg: #3b2d16;
-        --of-danger: #ffb4ab;
-        --of-danger-bg: #421f20;
-        --of-focus: #8abeff;
-        --of-shadow: 0 16px 48px rgb(0 0 0 / .34);
-      }
-    }
-
-    :root[data-theme="dark"] {
-      color-scheme: dark;
-      --of-canvas: #151517;
-      --of-surface: #202023;
-      --of-surface-raised: rgb(32 32 35 / .9);
-      --of-surface-secondary: #2b2b30;
-      --of-text: #f5f5f7;
-      --of-text-secondary: #b5b5bd;
-      --of-border: #45454d;
-      --of-control-border: #85858e;
-      --of-accent: #8abeff;
-      --of-accent-hover: #add2ff;
-      --of-on-accent: #11243b;
-      --of-success: #88dbb1;
-      --of-success-bg: #17362a;
-      --of-warning: #ffd18a;
-      --of-warning-bg: #3b2d16;
-      --of-danger: #ffb4ab;
-      --of-danger-bg: #421f20;
-      --of-focus: #8abeff;
-      --of-shadow: 0 16px 48px rgb(0 0 0 / .34);
-    }
-
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      background: var(--of-canvas);
-      color: var(--of-text);
-      font: 400 1rem/1.65 var(--of-font-sans);
-      text-rendering: optimizeLegibility;
-      font-optical-sizing: auto;
-      -webkit-font-smoothing: antialiased;
-    }
-    button, input, select { font: inherit; }
-    button, a, input, select, summary { -webkit-tap-highlight-color: transparent; }
-    a { color: var(--of-accent); text-underline-offset: .18em; }
-    a:focus-visible, button:focus-visible, input:focus-visible,
-    select:focus-visible, summary:focus-visible {
-      outline: 3px solid var(--of-focus);
-      outline-offset: 3px;
-    }
-
-    .topbar {
-      position: sticky;
-      top: 0;
-      z-index: 20;
-      border-bottom: 1px solid var(--of-border);
-      border-bottom-color: color-mix(in srgb, var(--of-border) 76%, transparent);
-      background: var(--of-surface-raised);
-      backdrop-filter: blur(16px) saturate(150%);
-      -webkit-backdrop-filter: blur(16px) saturate(150%);
-    }
-    .topbar-inner {
-      width: min(100% - 4rem, 1200px);
-      min-height: 64px;
-      margin: 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-    }
-    .brand, .preview-nav, .theme-switch, .segment, .actions, .inline-meta {
+    .preview-nav, .theme-switch, .segment, .actions, .inline-meta {
       display: flex;
       align-items: center;
     }
-    .brand { gap: .7rem; color: var(--of-text); font-weight: 650; }
-    .brand-mark {
-      width: 32px;
-      height: 32px;
-      display: grid;
-      place-items: center;
-      border-radius: 10px;
-      background: var(--of-text);
-      color: var(--of-surface);
-    }
+    .preview-nav { margin-left: auto; }
     .brand-mark svg { width: 18px; height: 18px; }
-    .preview-nav { gap: .25rem; }
-    .preview-nav a {
-      min-height: 44px;
-      padding: .55rem .8rem;
-      display: inline-flex;
-      align-items: center;
-      border-radius: 10px;
-      color: var(--of-text-secondary);
-      font-size: .875rem;
-      font-weight: 600;
-      text-decoration: none;
-    }
-    .preview-nav a[aria-current="page"] {
-      color: var(--of-text);
-      background: var(--of-surface-secondary);
-    }
-
-    main { width: min(100% - 4rem, 1200px); margin: 0 auto; padding: 3rem 0 6rem; }
-    .hero { max-width: 760px; margin-bottom: 2rem; }
-    .eyebrow {
-      margin: 0 0 .65rem;
-      color: var(--of-accent);
-      font-size: .875rem;
-      font-weight: 650;
-    }
-    h1, h2, h3, p { margin-top: 0; }
-    h1 {
-      margin-bottom: 1rem;
-      font-size: clamp(2rem, 5vw, 2.5rem);
-      line-height: 1.2;
-      font-weight: 600;
-      letter-spacing: -.025em;
-    }
-    h2 { margin-bottom: .5rem; font-size: 1.375rem; line-height: 1.35; font-weight: 600; }
-    h3 { margin-bottom: .35rem; font-size: 1.0625rem; line-height: 1.45; font-weight: 600; }
-    .lead { margin-bottom: 1.25rem; color: var(--of-text-secondary); font-size: 1.0625rem; }
+    .preview-header { max-width: 760px; }
     .hero-note {
       display: inline-flex;
       align-items: flex-start;
@@ -195,13 +33,8 @@
       gap: 1.5rem;
       align-items: start;
     }
-    .panel {
-      min-width: 0;
-      border: 1px solid var(--of-border);
-      border-radius: 20px;
-      background: var(--of-surface);
-    }
-    .stage { overflow: clip; box-shadow: 0 1px 0 rgb(0 0 0 / .02); }
+    .preview-layout > .card { margin-top: 0; }
+    .stage { padding: 0; overflow: clip; box-shadow: 0 1px 0 rgb(0 0 0 / .02); }
     .stage-head {
       padding: 1.5rem 1.5rem 1.2rem;
       display: flex;
@@ -219,6 +52,7 @@
     }
     .segment button, .theme-switch button {
       min-height: 44px;
+      margin-top: 0;
       border: 0;
       border-radius: 9px;
       background: transparent;
@@ -282,45 +116,9 @@
       background: color-mix(in srgb, var(--of-surface) 86%, var(--of-canvas));
     }
     .field-grid { display: grid; grid-template-columns: 1fr auto; gap: .75rem; align-items: end; }
-    label { display: block; margin-bottom: .4rem; color: var(--of-text); font-size: .875rem; font-weight: 600; }
-    input, select {
-      width: 100%;
-      min-height: 44px;
-      padding: .62rem .75rem;
-      border: 1px solid var(--of-control-border);
-      border-radius: 12px;
-      background: var(--of-surface);
-      color: var(--of-text);
-      transition: border-color var(--of-fast) var(--of-ease),
-        box-shadow var(--of-fast) var(--of-ease);
-    }
-    .button {
-      min-height: 44px;
-      padding: .64rem 1rem;
-      border: 1px solid transparent;
-      border-radius: 12px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: .45rem;
-      background: var(--of-accent);
-      color: var(--of-on-accent);
-      cursor: pointer;
-      font-size: .9375rem;
-      font-weight: 650;
-      line-height: 1.4;
-      text-decoration: none;
-      transition: transform var(--of-fast) var(--of-ease),
-        background-color var(--of-fast) var(--of-ease),
-        border-color var(--of-fast) var(--of-ease),
-        color var(--of-fast) var(--of-ease);
-    }
     .button svg { width: 17px; height: 17px; }
-    .button.secondary { border-color: var(--of-border); background: var(--of-surface-secondary); color: var(--of-text); }
     .button.text { background: transparent; color: var(--of-accent); }
-    .button.danger { border-color: color-mix(in srgb, var(--of-danger) 35%, transparent); background: var(--of-danger-bg); color: var(--of-danger); }
     .button.is-pressed { transform: scale(.98); }
-    .button:disabled { cursor: not-allowed; color: var(--of-text-secondary); background: var(--of-surface-secondary); }
 
     .task-list { margin-top: 1rem; }
     .task-row {
@@ -347,7 +145,6 @@
     .task-copy p { margin: .12rem 0 0; color: var(--of-text-secondary); font-size: .8125rem; }
     .progress-line { margin-top: .55rem; display: flex; align-items: center; gap: .65rem; }
     progress { width: min(240px, 100%); height: 6px; accent-color: var(--of-accent); }
-    .numeric { font-variant-numeric: tabular-nums; }
     .task-action { justify-self: end; }
 
     .account-strip {
@@ -376,6 +173,7 @@
     .confirm-card dt { color: var(--of-text-secondary); }
     .confirm-card dd { margin: 0; overflow-wrap: anywhere; }
     .actions { gap: .5rem; flex-wrap: wrap; }
+    .actions .button, .task-action .button, .component-actions .button { margin-top: 0; }
     .safety-copy { margin: .8rem 0 0; color: var(--of-text-secondary); font-size: .8125rem; }
 
     details {
@@ -385,7 +183,7 @@
       color: var(--of-text-secondary);
       font-size: .8125rem;
     }
-    summary { width: fit-content; min-height: 44px; padding: .65rem .2rem; color: var(--of-accent); cursor: pointer; font-weight: 600; }
+    summary { width: fit-content; color: var(--of-accent); }
     details p { margin: .35rem 0 0; }
 
     .specimen { padding: 1.25rem; position: sticky; top: 88px; }
@@ -428,7 +226,6 @@
     .toast strong { display: block; font-size: .9375rem; }
     .toast span { color: var(--of-text-secondary); font-size: .8125rem; }
 
-    [hidden] { display: none !important; }
     .no-js .segment { display: none; }
     .no-js .workspace-panel + .workspace-panel { border-top: 1px solid var(--of-border); }
     .no-js .theme-switch { display: none; }
@@ -440,11 +237,8 @@
     html[data-input="keyboard"] .toast { transition: none; }
 
     @media (hover: hover) and (pointer: fine) {
-      .button:hover { background: var(--of-accent-hover); }
-      .button.secondary:hover { border-color: var(--of-control-border); background: var(--of-surface); }
+      .segment button:hover, .theme-switch button:hover { background: var(--of-surface-secondary); color: var(--of-text); }
       .button.text:hover { background: var(--of-surface-secondary); color: var(--of-accent-hover); }
-      .button.danger:hover { border-color: var(--of-danger); background: var(--of-danger-bg); }
-      .preview-nav a:hover { color: var(--of-text); background: var(--of-surface-secondary); }
     }
 
     @media (max-width: 1023px) {
@@ -455,11 +249,7 @@
     }
 
     @media (max-width: 767px) {
-      .topbar-inner, main { width: min(100% - 2rem, 1200px); }
-      .topbar-inner { min-height: 58px; }
       .preview-nav { display: none; }
-      main { padding: 2.5rem 0 4rem; }
-      .hero { margin-bottom: 2rem; }
       .stage-head, .workspace-panel { padding: 1rem; }
       .stage-head { align-items: stretch; flex-direction: column; }
       .segment button { flex: 1; }
@@ -481,60 +271,56 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      html { scroll-behavior: auto; }
-      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
       .button, .segment button, .theme-switch button, .workspace-panel,
-      .status, .toast { transition-duration: .01ms !important; transform: none !important; }
+      .status, .toast { transform: none !important; }
     }
 
     @media (prefers-reduced-transparency: reduce) {
-      .topbar, .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
     }
 
     @media (prefers-contrast: more) {
-      .panel, .form-block, .confirm-card, input, select, .button.secondary { border-width: 2px; }
-      .topbar, .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .form-block, .confirm-card { border-width: 2px; }
+      .toast { background: var(--of-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
       .status { outline: 1px solid currentColor; }
     }
 
     @media (forced-colors: active) {
-      .topbar, .toast { background: Canvas; backdrop-filter: none; -webkit-backdrop-filter: none; }
-      .panel, .form-block, .confirm-card, .button, input, select { border: 1px solid CanvasText; }
+      .toast { background: Canvas; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .form-block, .confirm-card { border: 1px solid CanvasText; }
       .brand-mark, .status, .task-icon, .swatch { forced-color-adjust: none; border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
-      .button:focus-visible, a:focus-visible, input:focus-visible,
-      select:focus-visible, summary:focus-visible { outline-color: Highlight; }
     }
   </style>
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-inner">
+<body class="design-preview-page">
+  <header class="topbar-shell">
+    <div class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none"><path d="M13.8 2.7c.5 3-1.4 4.5-3 6.1-1.6 1.7-2.9 3.4-2.1 5.8.4-1.5 1.4-2.5 2.6-3.4-.2 2.4 1.1 3.4 2.2 4.6.8.9 1.4 1.8 1.2 3.2 2.3-1.3 3.8-3.6 3.7-6.3-.1-3.6-2.2-6.3-4.6-10Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.2 20.5c-2-1.6-3-3.6-2.8-5.9.1-1.8.8-3.4 2-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </span>
         <span>Open-Flame</span>
       </div>
-      <nav class="preview-nav" aria-label="设计预览导航">
-        <a href="#preview" aria-current="page">工作台</a>
-        <a href="#components">组件</a>
+      <nav class="primary-nav preview-nav" aria-label="设计预览导航">
+        <a class="nav-link" href="#preview" aria-current="page">工作台</a>
+        <a class="nav-link" href="#components">组件</a>
       </nav>
     </div>
   </header>
 
-  <main id="preview">
-    <header class="hero">
+  <main id="preview" class="of-shell">
+    <header class="page-header preview-header">
       <p class="eyebrow">设计预览 · 合成示例，不连接平台</p>
       <h1>Open-Flame 工作台</h1>
-      <p class="lead">下载、整理、核对草稿。清晰的层级，让每一步操作都从容。</p>
+      <p class="lede">下载、整理、核对草稿。清晰的层级，让每一步操作都从容。</p>
       <p class="hero-note">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5v6M12 7.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <span>视觉基准 1.0 · 本页操作仅演示界面反馈。生产前端将在最终 T16 阶段迁移。</span>
+        <span>视觉基准 1.2 · 本页直接读取 T16 共享样式；操作仅演示界面反馈。真实页面浏览器矩阵已完成本地合成验收，精确制品仍以包外回执为准。</span>
       </p>
     </header>
 
     <div class="preview-layout">
-      <section class="panel stage" aria-labelledby="stage-title">
+      <section class="card stage" aria-labelledby="stage-title">
         <header class="stage-head">
           <div>
             <h2 id="stage-title">工作台片段</h2>
@@ -630,7 +416,7 @@
         </section>
       </section>
 
-      <aside id="components" class="panel specimen" aria-labelledby="components-title">
+      <aside id="components" class="card specimen" aria-labelledby="components-title">
         <section>
           <p class="specimen-label" id="components-title">Typography</p>
           <p class="type-display">安静而清晰</p>
@@ -657,7 +443,7 @@
             <button class="button" type="button" data-preview-action="主操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览主操作</button>
             <button class="button secondary" type="button" data-preview-action="次操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览次操作</button>
             <button class="button text" type="button" data-preview-action="文本操作预览" data-preview-detail="按钮层级示例，不执行产品动作。">预览文本操作</button>
-            <button class="button danger" type="button" data-preview-action="危险操作预览" data-preview-detail="没有删除任何内容。">预览危险操作</button>
+            <button class="button danger-action" type="button" data-preview-action="危险操作预览" data-preview-detail="没有删除任何内容。">预览危险操作</button>
           </div>
         </section>
       </aside>

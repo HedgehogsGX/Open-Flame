@@ -103,16 +103,22 @@ def test_health_and_web_page(settings: Settings) -> None:
     }
     assert page.status_code == 200
     assert openapi.status_code == 200
-    assert openapi.json()["info"]["version"] == "0.24.4"
+    assert openapi.json()["info"]["version"] == "0.25.0"
     assert remote_docs.status_code == 404
     assert remote_redoc.status_code == 404
-    assert "多平台视频下载控制面" in page.text
+    assert "<title>Open-Flame · 下载</title>" in page.text
+    assert '<body class="download-page">' in page.text
+    assert '<a class="nav-link" href="/" aria-current="page">' in page.text
+    assert '<a class="nav-link" href="/uploads">' in page.text
+    assert 'href="/assets/open-flame.css"' in page.text
+    assert 'src="/assets/open-flame-shell.js"' in page.text
+    assert "下载并整理视频" in page.text
     assert "本次运行状态由应用心跳报告" in page.text
     assert "/api/v1/operations/runtime" in page.text
     assert "TXT/CSV" in page.text
-    assert "迭代 0.24.4" in page.text
-    assert "ready 原件、缩略图与字幕下载" in page.text
-    assert "迭代 0.3" not in page.text
+    assert f"Open-Flame {openapi.json()['info']['version']}" in page.text
+    assert 'id="asset-links"' in page.text
+    assert "可下载成品" in page.text
     assert r".split(/\r?\n/)" in page.text
     assert "async function fetchJson" in page.text
     assert "文本与文件只能选择一种输入方式" in page.text
@@ -133,14 +139,16 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert "https://www.tiktok.com/@user/video/..." in page.text
     assert "https://www.instagram.com/reel/..." in page.text
     assert "状态轮询失败" in page.text
-    assert "/api/v1/jobs/${encodeURIComponent(job.id)}/retry" in page.text
+    assert "/api/v1/jobs/${encodeURIComponent(action.jobId)}/retry" in page.text
+    assert "/api/v1/jobs/${encodeURIComponent(action.jobId)}/cancel" in page.text
     assert "job.status === 'failed'" in page.text
     assert "job.job_kind === 'download'" in page.text
     assert "job.source_type !== 'x_attachment'" in page.text
-    assert "const retryGeneration = pollGeneration;" in page.text
-    assert "await pollBatch(retryBatchId, retryGeneration);" in page.text
-    assert "const cancelGeneration = pollGeneration;" in page.text
-    assert "await pollBatch(cancelBatchId, cancelGeneration);" in page.text
+    assert page.text.count(
+        "if (action.generation !== pollGeneration) return;"
+    ) == 2
+    assert "await pollBatch(action.batchId, action.generation);" in page.text
+    assert "const jobActionInFlight = new Set();" in page.text
     assert "const submitGeneration = pollGeneration;" in page.text
     assert page.text.count(
         "if (submitGeneration !== pollGeneration) return;"
@@ -153,8 +161,8 @@ def test_health_and_web_page(settings: Settings) -> None:
     assert "circuit.cooldown_until" in page.text
     assert "自动冷却至" in page.text
     assert "本机工具链" in page.text
-    assert "控制端启动时检查固定的 yt-dlp" in page.text
-    assert "刷新显示不会重新校验整个工具包" in page.text
+    assert "显示控制端启动时缓存的 yt-dlp、FFmpeg 与 ffprobe 检查" in page.text
+    assert "工具链检查与本次运行状态分别展示" in page.text
     assert "外部 Worker 状态保持未知" in page.text
     assert "无法据此判断独立本机 Worker 是否在线" in page.text
     assert "/api/v1/operations/tools" in page.text

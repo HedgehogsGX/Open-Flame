@@ -910,17 +910,18 @@ def test_frontend_fetches_ready_assets_and_builds_links_without_inner_html(
     assert 'id="recent-batches"' in page.text
     assert "async function openBatch(batchId)" in page.text
     assert "async function loadRecentBatches()" in page.text
-    assert "open.addEventListener('click', () => void openBatch(batch.id));" in page.text
+    assert "openBatch(item._batchId)" in page.text
+    assert "reconcileKeyed(" in page.text
     assert "async function loadReadyAssets(payload, generation)" in page.text
     assert "/api/v1/batches/${encodeURIComponent(payload.id)}/assets" in page.text
-    assert "const link = document.createElement('a');" in page.text
-    assert "link.href = asset.download_url;" in page.text
-    assert "link.textContent = `下载成品" in page.text
-    assert "for (const [artifactIndex, artifact] of artifacts.entries())" in page.text
-    assert "artifactLink.href = artifact.download_url;" in page.text
+    assert "item._downloadLink = document.createElement('a');" in page.text
+    assert "item._downloadLink.href = asset.download_url;" in page.text
+    assert "item._downloadLink.textContent = `下载成品" in page.text
+    assert "artifacts.map((artifact, artifactIndex)" in page.text
+    assert "artifactItem._link.href = artifact.download_url;" in page.text
     assert "artifact.kind === 'thumbnail' ? '缩略图' : '字幕'" in page.text
     assert "function renderJobProgress(payload)" in page.text
     assert "postprocessing: '正在合并/后处理'" in page.text
-    assert "progressElement.value = percent;" in page.text
+    assert "item._progress.value = percent;" in page.text
     assert "renderJobProgress(payload);" in page.text
     assert "innerHTML" not in page.text

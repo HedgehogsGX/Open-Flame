@@ -2,12 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-07
-> 当前迭代：Iteration 0.24.4 — 上传数据生命周期、停机恢复与离线交付门禁（T10 外测冻结源）
-> 当前版本：`0.24.4`；下载数据库：Schema `11`；上传数据库：独立 Schema `2`
+> 当前迭代：Iteration 0.25.0 — T16 生产前端升级与最终冻结准备（本地 G6 已完成）
+> 当前版本：`0.25.0`；下载数据库：Schema `11`；上传数据库：独立 Schema `2`
 
 ## 本次交接入口
 
-用户要求按下一轮交接继续开发。当前 `codex/uploader-first-platforms` 的 0.24.4 冻结源已完成以下**本地范围**；精确 commit、product identity、制品 hash 与独立验收结果不写回包内，而由同批包外 release receipt 绑定：
+用户要求按下一轮交接继续开发。当前 `codex/uploader-first-platforms` 已完成 0.25.0 T16 生产前端升级的**本地 G6 范围**；本轮起始基线是 `1178869bbf35212e734d3fda70876033e309a99d`，该提交不包含随后完成的 T16 工作，不能作为最终 `source_commit`。包内文件不能嵌入自身最终提交和制品摘要；0.25.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 | 工作包 | 2026-09-07 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
@@ -15,11 +15,11 @@
 | T07 停机备份/恢复 | 已实现独立 `video-upload-backup`、Upload Schema 2、secret-free manifest、登记媒体复制、业务语义审计、新根恢复和恢复状态降级 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
 | T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
-| T10～T16 | 0.24.4 版本号、精确 14 项 wheel 入口、Windows 上传 no-remote 探针与源码侧发行门禁已接线；新增生命周期控件采用既有 Apple 设计基础 | T10 是否通过须由 clean commit、五个制品与独立安装的包外 receipt 证明；T11/T12 真实平台与下载矩阵未执行，T13/T15/T16 保持原计划边界 |
+| T10 与 T16 | 0.24.4 已完成 T10 源码冻结准备并保留为中间历史；0.25.0 已把共享 Apple 风格、系统/浅/深主题、本地静态资源、响应式与无障碍降级应用到下载和上传生产页，本地 G6 已完成 | 0.25.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装。T11/T12 真实平台与下载矩阵未执行，T13/T15 保持原计划边界 |
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前源码证据见 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)。精确上传集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份、发行、CI、验证、部署与 API 组合为 **287 passed、4 skipped in 44.13s**，4 个 skip 是 Windows 上需要 root/POSIX/getfacl 的环境合同。这些定向结果不能单独证明 T10，冻结全量与制品身份须查看包外 receipt。真实登录、扫码、下载或上传均未在 0.24.4 执行。
+当前 0.25.0 T16 本地范围见 [前端与冻结记录](validation/iteration-0.25.0-t16-frontend-evidence.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt，不能从本地 G6 状态推定。此前 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)保留 T10 中间冻结源历史：精确上传集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份、发行、CI、验证、部署与 API 组合为 **287 passed、4 skipped in 44.13s**，4 个 skip 是 Windows 上需要 root/POSIX/getfacl 的环境合同。这些旧定向结果不能证明 0.25.0 最终冻结。0.25.0 未执行真实登录、扫码、下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 由当前应用按精确结构事务迁移为 Schema 2；未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -27,7 +27,7 @@
 
 用户在完整 Debug 核验后补充：最后对整个前端进行 Apple 风格升级，提升排版/字体并加入适量动效，后续开发沿用同一设计。已建立[设计规范](docs/DESIGN_SYSTEM.md)、[合成视觉预览](docs/design-preview.html)与根目录 [AGENTS.md](AGENTS.md)；新增 T16 最终阶段，当前计划共 **16 个工作包**。规范先用于新增控件，生产页面整体迁移在功能修复与验收收尾后实施；当时未改生产前端，也未执行真实上传或新的推送。
 
-设计准备验收：静态预览的下载/上传两片段在 1440/1024/768/390/320 宽度均无页面横向溢出，主要控件高度至少 44px；实际浏览器验证主题、键盘切换、标题与摘要同步、局部反馈、details、减少动态/透明度、高对比设置及无 JavaScript 双片段可读，控制台 warning/error 为 0。12 组规范文字配色的计算对比度均 ≥4.5:1，JS 语法与文档清单/本地链接检查通过。证据保留在 ignored `validation/local/design-system-20260905/`；这只验证规范和合成预览，不代表生产两页升级、200% 缩放或完整读屏验收完成，后者仍由 T16 执行。
+设计准备验收：静态预览的下载/上传两片段在 1440/1024/768/390/320 宽度均无页面横向溢出，主要控件高度至少 44px；实际浏览器验证主题、键盘切换、标题与摘要同步、局部反馈、details、减少动态/透明度、高对比设置及无 JavaScript 双片段可读，控制台 warning/error 为 0。12 组规范文字配色的计算对比度均 ≥4.5:1，JS 语法与文档清单/本地链接检查通过。证据保留在 ignored `validation/local/design-system-20260905/`；这些是当时只针对规范和合成预览的历史结果。0.25.0 已完成生产两页的 T16 本地 G6，当前边界与最终冻结状态见本次交接入口和对应证据。
 
 此前完整 debug 核验受测基线 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`。详见[本轮核验报告](validation/full-debug-20260905.md)和[后续执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)。全量 **1867 passed、8 skipped**，当前精确源码 ZIP/wheel 独立安装、普通 Start/stop、离线浏览器和下载备份恢复通过；另复现上传最终写入失败导致调度退出、未登记运行时代码仍被 ready 接受、原件同尺寸改写、非视频登记导入及 200 项容量边界问题。**当时这些新发现尚未修复；本轮进展见上方 0.24.3 记录。** 当时计划从 T01/T02 开始；下方上轮已修复项目与制品记录保持历史范围。
 
@@ -47,7 +47,7 @@
 
 执行层采用固定 social-auto-upload 与 biliup，以及独立 CPython 3.12/浏览器环境。安装检查、模拟测试和实际本地网页操作都不能证明真实平台投稿已成功；登录和真实视频/投稿许可仍须由用户提供。代码与测试说明使用上述开发分支交付，具体远端提交以 Git 为准；本轮未新建 GitHub Release，0.23.0 的制品与旧平台记录保持历史身份。
 
-上一轮上传核心、浏览器操作与已安装运行环境的记录见 [0.24.0 上传开发证据](validation/iteration-0.24.0-upload-evidence.md)。该轮当时指向外部三平台测试；当前已由顶部 0.24.4 数据生命周期与 T10 冻结入口取代，仍不代为确认真实上传。
+上一轮上传核心、浏览器操作与已安装运行环境的记录见 [0.24.0 上传开发证据](validation/iteration-0.24.0-upload-evidence.md)。该轮当时指向外部三平台测试；当前已由顶部 0.25.0 T16 与最终冻结入口取代，仍不代为确认真实上传。
 
 ### v0.23.0 交付历史入口
 
@@ -143,7 +143,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 | 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
 | 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
 | 资产 | 不可变原件 + 脱敏 manifest/sidecar | ready 列表含 thumbnail/caption DTO；原件与辅助产物分别由严格下载端点重验；API 不暴露本机路径或用户标题 |
-| 前端/API | 下载控制面及 Bilibili/抖音/视频号上传页 | 上传页新增本地账号断开、媒体状态/占用、受引用删除保护、精确恢复和两步确认，并保留轮询输入/选区/焦点；新增控件采用 Apple 设计基础，整站 T16 尚未完成；没有网页能力审批按钮 |
+| 前端/API | 下载控制面及 Bilibili/抖音/视频号上传页 | 0.25.0 已完成 T16 生产页本地 G6：两页共用 Apple 风格语义 token、组件基础、系统/浅/深主题、本地静态资源、响应式与无障碍降级，并保留轮询输入、选区、焦点、扫码、来源清空、详情展开和任务选择；上传页继续提供账号断开、媒体状态/占用、受引用删除保护、精确恢复和两步确认；没有网页能力审批按钮 |
 | 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
 | 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
 | 备份 | 下载与上传使用两套独立格式；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 保存 Upload Schema 2/登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock 并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。T07 本地 synthetic 完成，真实容量与异机灾备未做 |
@@ -394,7 +394,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-当前主线以 T10 包外 receipt 为外部动作边界，不直接跳到真实平台：对冻结源运行全量、source snapshot、隐私/清单/链接/锁检查，固定 clean commit，再从 detached checkout 构建并独立安装源码 ZIP、sdist、wheel、`release-manifest.json` 和 `SHA256SUMS`。commit、完整 identity、制品摘要和实际结果只写入 `release` 目录外的 receipt，避免修改被打包字节。持有效 receipt 后才把同一身份交给 T11/T12；真实动作仍需用户另行明确授权。
+继续前先寻找与 0.25.0 `release/` 同级的 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就先完成该冻结流程，不直接跳到真实平台；`1178869bbf35212e734d3fda70876033e309a99d` 只是 T16 起始基线。若 receipt 完整，则保持同一制品身份进入 T11/T12；真实登录、扫码、下载或上传仍需用户另行明确授权。0.24.4 T10 只保留为中间历史，不能把旧结果或旧制品绑定给 0.25.0。
 
 本地开发：
 
@@ -465,10 +465,10 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 19. 0.9.1 Apache 迁移后全量回归为 `882 passed, 8 skipped`；独立 sdist/wheel 构建、隔离安装、`Apache-2.0` metadata、32 个法律文件与 11 个命令入口已复验。构建只写入 gitignored 验收目录，不覆盖 proprietary 0.9.0 制品。
 20. v0.16.0 已把一体化 run 的 stop 与新 lease/Attempt 领取线性化：以 SQLite writer transaction 的提交顺序为准，不能把 console 信号到达时刻当作线性化点。stop 不撤销已先提交的 active Attempt；强停后要等待 lease expiry，旧 Attempt 才会变为 `abandoned/worker_lost` 并由新 Attempt 重领。`run_once()` 在最终 claim 事务前仍可能执行有界的终态目录 reconciliation 或 asset-intent recovery，因此这里只承诺 stop commit 后不新增该 run 的 Job lease/Attempt，不宣称“停止后零文件系统副作用”或强制取消阻塞 I/O。当前 deterministic repository/cleanup 回归已覆盖此契约，真实平台 active-download 强停不属于本轮证据。
 21. v0.17.0 progress 是保守阶段估算，不是全任务精确 byte accounting。字幕/sidecar 不推动进度，未知总量不显示伪百分比，顺序双流最多按两个 slot 聚合，单流可能在后处理前停留于较低估算；浏览器约 2 秒轮询也可能错过很短阶段。为保持隐私，普通排障不得打开原始 stdout/stderr、argv、URL、source ID、标题、文件名或路径日志。
-22. 0.24.4 包内文档有意不嵌入自身 commit、build identity 或五件发行文件 hash；不得借用 0.24.3 或定向测试关闭 T10。只有同批包外 release receipt 同时绑定 clean commit、冻结全量、完整 identity、五件发行文件和源码/wheel 独立验收时，才可把对应外测包记为 T10 通过。
+22. 0.24.4 T10 只保留为中间冻结源历史，不能用其定向测试、commit 或制品关闭 0.25.0 最终冻结。0.25.0 包内文档同样有意不嵌入自身最终 commit、build identity 或五件发行文件 hash；只有同批包外 release receipt 同时绑定新的 clean commit、冻结全量、完整 identity、五件发行文件和源码/wheel 独立验收时，才可把最终交付包记为通过。
 23. 上传 activity lock 只协调采用当前 shared/exclusive 合同的应用、active/standby 服务与备份工具。旧版本、手工 SQLite 连接、自写文件 writer 或绕过锁的进程不在完整保证内；停机备份仍要求操作者确认它们全部停止。下载和上传备份必须分别创建与演练。
 24. T09 工作流目前只完成本地静态合同和负向测试。GitHub hosted 四格结果为 **NOT RUN**，required checks 与 branch protection 为 **NOT CONFIGURED**；Windows 上跳过的 root/POSIX/getfacl 合同仍归 T15。
-25. 0.24.4 没有执行真实登录、扫码、下载或上传。T11/T12 仍需绑定最终 T10 构建分别记录 PASS/FAIL/BLOCKED/NOT RUN；T13、T15 与整站 T16 不因本轮本地功能存在而完成。
+25. 0.25.0 T16 本地 G6 没有执行真实登录、扫码、下载或上传，也没有运行 GitHub hosted CI 或目标 Linux/Docker T15。T11/T12 仍须绑定最终 0.25.0 构建分别记录 PASS/FAIL/BLOCKED/NOT RUN；T13 与 T15 不因本地前端完成而关闭。
 
 ## 7. 历史收尾与后续精确入口
 
@@ -561,6 +561,10 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 
 ## 8. 迭代历史
+
+- **0.25.0 — 2026-09-07**：以 `1178869bbf35212e734d3fda70876033e309a99d` 为起始基线，完成 T16 下载/上传生产前端的共享 Apple 风格、主题、本地静态资源、响应式、状态稳定与无障碍降级，本地 G6 已完成。该基线不是最终提交；冻结全量、新 clean commit、五件制品、源码/wheel 独立安装与最终身份只由包外 receipt 记录。没有新增真实登录、扫码、下载、上传、平台审核、GitHub hosted CI 或目标 Linux/Docker T15 结论。
+
+- **0.24.4 — 2026-09-07**：完成 T14 必要数据生命周期切片、T07 上传停机备份/新根恢复、T08 有界 synthetic 韧性切片和 T09 本地 CI 合同，并准备 T10 版本与发行门禁。该版本保留为 T16 前的中间冻结源历史；没有同批包外 receipt 时，不得把其源码或定向结果称为已通过制品冻结，也不得借给 0.25.0。
 
 - **0.19.0 — 2026-09-04**：Windows 一体化短链、JSON/TXT/CSV threadpool、v2 显式平台默认 Cookie、事务内新任务与重试绑定、匿名选择与可用性 UI/API。新增来源/复制/去重/竞态/日志/前端回归，修复新接口导致日志误降级；最终 `1410 passed, 8 skipped in 135.51s`，静态与35文档链接检查、浏览器复验、真实 spawned synthetic `--check` 和 source-equivalent package 预检通过。最终包依冻结契约另行重建，hash只在包外报告；无新真实平台、真 Cookie、Linux/installer 或 push 结论。
 

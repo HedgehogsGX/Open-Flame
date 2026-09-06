@@ -95,7 +95,9 @@ def test_download_startup_and_upload_html_do_not_start_upload_worker(settings):
         assert page.status_code == 200
         assert page.headers["cache-control"] == "no-store"
         assert page.headers["x-frame-options"] == "DENY"
-        assert "打开上传器" in client.get("/").text
+        download_page = client.get("/")
+        assert download_page.status_code == 200
+        assert '<a class="nav-link" href="/uploads">上传</a>' in download_page.text
         assert not root.exists()
         assert client.get("/api/v1/uploads/session").status_code == 200
     assert not root.exists()

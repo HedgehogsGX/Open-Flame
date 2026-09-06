@@ -20,11 +20,11 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 
 `--wheelhouse` 使用 `--no-index`，缺项失败，不回退联网；构建只需要 build lock 对应的五个包。命令失败保留独立输出目录供检查，不覆盖旧包、不自动清理数据。更换新的输出名重试。
 
-0.24.4 的 T10 外测冻结必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在 `release` 目录外生成 release receipt，记录 `source_commit`、完整 `product_identity`、五个发行文件摘要和实际检查结果。不要把这些值回填到 `release-files.txt` 中的文档，否则会改变被绑定的提交与归档字节，形成自引用。
+0.25.0 的 T16 最终冻结和此前 T10 一样，必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在输出根目录、与 `release` 子目录同级生成 `release-receipt.json`，记录 `source_commit`、`working_tree_dirty=false`、完整 `product_identity`、五个发行文件各自的大小/SHA-256 及实际检查结果。receipt 必须直接摘要 `SHA256SUMS`；不要把 receipt 放进 `release`，也不要把最终值回填到被打包文档，否则会改变被绑定的提交与归档字节，形成自引用。
 
 只交付输出下的 **`release` 子目录**中的五个文件，不要交付整个输出目录：
 
-- `Open-Flame-VERSION-source.zip`：Windows 用户便于解压的源码包，含四个 Setup / Start 入口。
+- `Open-Flame-VERSION-source.zip`：Windows 用户便于解压的源码包，含四个 Setup / Start 入口；这就是本流程唯一的 Windows 友好 ZIP，不另产第二个 Windows ZIP。
 - `video_download_control-VERSION.tar.gz`：标准源码分发包。
 - `video_download_control-VERSION-py3-none-any.whl`：只含项目包的开发者 wheel；不含根启动器，也不自带第三方运行依赖。
 - `release-manifest.json`：文件清单、每文件大小/摘要、精确包身份和四个根入口摘要。
@@ -38,7 +38,7 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 py -3 -I .\scripts\release.py verify --release-dir 'C:\OpenFlameBuild\candidate-01\release'
 ```
 
-核对 ZIP / sdist 的源码逐字节一致性、wheel 包载荷、完整 `RECORD`、14 个命令入口映射、Apache-2.0 元数据与 32 份法律文件。归档成员须为普通相对路径，无重复、Windows 大小写碰撞或链接。manifest 在归档外，避免自引用；校验不执行包内代码。
+核对 ZIP / sdist 的源码逐字节一致性、wheel 包载荷、完整 `RECORD`、共享 CSS/主题脚本、14 个命令入口映射、Apache-2.0 元数据与 32 份法律文件。归档成员须为普通相对路径，无重复、Windows 大小写碰撞或链接。manifest 在归档外，避免自引用；校验不执行包内代码。
 
 源码包的原始文件字节决定 identity，四个根入口另行记录；Git 换行转换可能改变身份。SHA-256 是完整性校验，**不是签名或发布者身份认证**，须从可信渠道比较摘要。显式清单、纯文本限制和高置信度规则只能发现部分隐私问题；对外分享前仍需人工查看本轮变更。
 
@@ -58,7 +58,7 @@ py -3 -I .\scripts\verify_windows_release.py --release-dir 'C:\OpenFlameBuild\ca
 
 ## wheel 独立安装验收
 
-这条命令另建虚拟环境，按 runtime lock 安装运行依赖和已核对的项目 wheel，执行 `pip check`、检查导入位置与精确包身份，并实际调用 14 个已安装的 console scripts 的 `--help`。不安装开发依赖，不领取媒体任务；它不替代上面的源码 CMD 测试。
+这条命令另建虚拟环境，按 runtime lock 安装运行依赖和已核对的项目 wheel，执行 `pip check`、检查导入位置、精确包身份和两个共享 UI asset 的 SHA-256，并实际调用 14 个已安装的 console scripts 的 `--help`。成功报告包含 `ui_assets_verified=2`。不安装开发依赖，不领取媒体任务；它不替代上面的源码 CMD 测试。
 
 ```powershell
 py -3 -I .\scripts\verify_wheel_release.py --release-dir 'C:\OpenFlameBuild\candidate-01\release' --work-dir 'C:\OpenFlameBuild\wheel-check-01' --allow-network

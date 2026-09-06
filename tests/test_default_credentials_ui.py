@@ -24,7 +24,7 @@ class PageFixtureParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         if tag == "script":
-            self.script_parts = []
+            self.script_parts = None if "src" in dict(attrs) else []
             return
         node = {"tag": tag, "attrs": dict(attrs), "children": []}
         self.stack[-1]["children"].append(node)
@@ -33,7 +33,8 @@ class PageFixtureParser(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag == "script":
-            self.scripts.append("".join(self.script_parts))
+            if self.script_parts is not None:
+                self.scripts.append("".join(self.script_parts))
             self.script_parts = None
             return
         for index in range(len(self.stack) - 1, 0, -1):
@@ -76,9 +77,33 @@ class Element {
   append(...children) {
     for (let child of children) {
       if (typeof child === 'string') child = new Element('#text', {}, child);
+      if (child.parentElement) {
+        const previous = child.parentElement.children.indexOf(child);
+        if (previous >= 0) child.parentElement.children.splice(previous, 1);
+      }
       child.parentElement = this;
       this.children.push(child);
     }
+  }
+  insertBefore(child, reference) {
+    if (child === reference) return child;
+    if (reference !== null && reference.parentElement !== this) {
+      throw new Error('reference is not a child');
+    }
+    if (child.parentElement) {
+      const previous = child.parentElement.children.indexOf(child);
+      if (previous >= 0) child.parentElement.children.splice(previous, 1);
+    }
+    const index = reference === null ? this.children.length : this.children.indexOf(reference);
+    child.parentElement = this;
+    this.children.splice(index, 0, child);
+    return child;
+  }
+  remove() {
+    if (!this.parentElement) return;
+    const index = this.parentElement.children.indexOf(this);
+    if (index >= 0) this.parentElement.children.splice(index, 1);
+    this.parentElement = null;
   }
   replaceChildren(...children) { this.textContent = ''; this.append(...children); }
   setAttribute(name, value) { this.attributes[name] = String(value); }

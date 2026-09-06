@@ -1,144 +1,134 @@
 from __future__ import annotations
 
 INDEX_HTML = """<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="no-js" data-theme="system">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>多平台视频下载控制面</title>
-  <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f6f8; color: #18202a; }
-    body { margin: 0; }
-    main { max-width: 880px; margin: 0 auto; padding: 48px 20px 80px; }
-    h1 { margin-bottom: 8px; }
-    .muted { color: #5d6875; }
-    .card { background: white; border: 1px solid #dfe3e8; border-radius: 14px; padding: 22px; margin-top: 24px; box-shadow: 0 8px 30px rgba(24,32,42,.06); }
-    label { display: block; font-weight: 650; margin: 14px 0 7px; }
-    input, textarea, select, button { box-sizing: border-box; font: inherit; }
-    input, textarea, select { width: 100%; border: 1px solid #bbc3cc; border-radius: 8px; padding: 10px 12px; }
-    textarea { min-height: 190px; resize: vertical; }
-    button { margin-top: 16px; border: 0; border-radius: 8px; background: #155eef; color: white; padding: 11px 18px; font-weight: 700; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: wait; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #111827; color: #d1fae5; padding: 16px; border-radius: 9px; overflow: auto; }
-    .notice { border-left: 4px solid #d97706; padding-left: 12px; }
-    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    .row button { margin-top: 0; }
-    .row-spread { justify-content: space-between; align-items: flex-start; }
-    .row-spread h2 { margin: 0 0 8px; }
-    .log-output { max-height: 360px; margin-bottom: 0; font-size: .84rem; }
-    .asset-list { margin: 12px 0 0; padding-left: 22px; }
-    .asset-list li { margin: 8px 0; }
-    .asset-list a { color: #155eef; font-weight: 700; }
-    .artifact-list { margin: 6px 0 0; padding-left: 22px; }
-    .artifact-list a { font-weight: 600; }
-    .job-progress-list { display: grid; gap: 12px; margin: 12px 0 18px; }
-    .job-progress-item { border: 1px solid #edf0f3; border-radius: 9px; padding: 12px; }
-    .job-progress-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
-    .job-progress-item progress { display: block; width: 100%; height: 14px; accent-color: #155eef; }
-    .batch-list { list-style: none; margin: 12px 0 0; padding: 0; }
-    .batch-list li { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid #edf0f3; }
-    .batch-list button { flex: 0 0 auto; margin-top: 0; padding: 8px 12px; }
-    .danger { color: #a61b1b; font-weight: 700; }
-  </style>
+  <meta name="color-scheme" content="light dark">
+  <title>Open-Flame · 下载</title>
+  <link rel="stylesheet" href="/assets/open-flame.css">
+  <script src="/assets/open-flame-shell.js" defer></script>
 </head>
-<body>
-  <main>
-    <h1>多平台视频下载控制面</h1>
-    <p><a href="/uploads">打开上传器：Bilibili、抖音、视频号 →</a></p>
-    <p class="muted">迭代 0.24.4：上传账号断开、受管媒体生命周期与停机备份/恢复已加入；Bilibili、抖音和视频号仍采用独立账号、本地草稿与逐项确认。双槽下载、分享短链、匿名与本次启动配置的默认平台 Cookie、下载进度、ready 原件、缩略图与字幕下载、运行日志继续保留。</p>
-    <p class="notice">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
-    <section class="card">
-      <h2>运行状态</h2>
-      <p id="worker-runtime-status" role="status" aria-live="polite">正在读取本次 Worker 状态…</p>
-      <p id="worker-runtime-detail" class="muted"></p>
-      <div class="row">
-        <span id="queue-status">正在读取队列状态…</span>
-        <button id="resume-queue" type="button" hidden>确认磁盘恢复并继续队列</button>
+<body class="download-page">
+  <header class="topbar-shell">
+    <div class="topbar">
+      <a class="brand" href="/" aria-label="Open-Flame 下载首页">
+        <span class="brand-mark" aria-hidden="true">OF</span><span>Open-Flame</span>
+      </a>
+      <nav class="primary-nav" aria-label="主要功能">
+        <a class="nav-link" href="/" aria-current="page">下载</a>
+        <a class="nav-link" href="/uploads">上传</a>
+      </nav>
+      <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观">
+        <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
+      </select></label>
+    </div>
+  </header>
+  <main class="of-shell">
+    <header class="page-header">
+      <p class="eyebrow">本地媒体工作台</p>
+      <h1>下载并整理视频</h1>
+      <p class="lede">创建批次、跟踪真实处理阶段，并从同一处取得原件、缩略图和字幕。上传工作台继续使用独立账号与逐项确认。</p>
+      <p class="notice page-note">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
+    </header>
+
+    <section class="status-strip" aria-label="当前运行摘要">
+      <div class="status-tile">
+        <p class="status-label">本次 Worker</p>
+        <p id="worker-runtime-status" class="status-value" role="status" aria-live="polite">正在读取本次 Worker 状态…</p>
+        <p id="worker-runtime-detail" class="muted small"></p>
       </div>
-      <div id="circuit-status" class="muted">正在读取平台状态…</div>
-      <div class="row row-spread">
-        <div>
-          <h3>下载能力</h3>
-          <p class="muted">实现、精确构建/环境证据与人工决定分别展示。导入证据不会自动批准，也不会开启联网、短链或 Worker。</p>
-        </div>
-        <button id="refresh-capabilities" type="button">刷新能力</button>
+      <div class="status-tile">
+        <p class="status-label">下载队列</p>
+        <p id="queue-status" class="status-value">正在读取队列状态…</p>
+        <button id="resume-queue" class="secondary" type="button" hidden>确认磁盘恢复并继续队列</button>
       </div>
-      <div id="capability-status" class="muted">正在读取平台能力矩阵…</div>
+      <div class="status-tile">
+        <p class="status-label">平台状态</p>
+        <div id="circuit-status" class="status-value muted">正在读取平台状态…</div>
+      </div>
     </section>
-    <section class="card" aria-labelledby="toolchain-heading">
-      <div class="row row-spread">
-        <div>
-          <h2 id="toolchain-heading">本机工具链</h2>
-          <p class="muted">控制端启动时检查固定的 yt-dlp、FFmpeg 与 ffprobe，并缓存本次离线验证结果；刷新显示不会重新校验整个工具包。</p>
-        </div>
-        <button id="refresh-tools" type="button">刷新显示</button>
+
+    <section class="card primary-card" aria-labelledby="create-batch-heading">
+      <div class="card-header">
+        <div><p class="section-index">新建</p><h2 id="create-batch-heading">创建下载批次</h2><p class="muted">粘贴分享文本或导入 UTF-8 文件；提交前会先规范化并校验每条输入。</p></div>
       </div>
-      <p id="tool-status" class="muted">正在读取启动检查结果…</p>
-      <pre id="tool-output" class="log-output" aria-live="polite">尚无工具链检查结果。</pre>
-      <p id="tool-security-note" class="notice">工具链检查与本次运行状态分别展示；外部 Worker 状态保持未知，完整平台能力仍未验证。</p>
-    </section>
-    <section class="card" aria-labelledby="runtime-logs-heading">
-      <div class="row row-spread">
-        <div>
-          <h2 id="runtime-logs-heading">运行日志</h2>
-          <p class="muted">显示脱敏后的本机排障事件；日志是辅助线索，不替代数据库、资产 manifest 或验收证据。</p>
-        </div>
-        <button id="refresh-logs" type="button">手动刷新</button>
-      </div>
-      <p id="log-status" class="muted">正在读取运行日志状态…</p>
-      <pre id="log-output" class="log-output" aria-live="polite">正在读取最近事件…</pre>
-    </section>
-    <section class="card" aria-labelledby="recent-batches-heading">
-      <div class="row row-spread">
-        <div>
-          <h2 id="recent-batches-heading">最近批次</h2>
-          <p class="muted">刷新页面后也可以重新打开任务、继续轮询并下载已完成成品。</p>
-        </div>
-        <button id="refresh-batches" type="button">刷新批次</button>
-      </div>
-      <ul id="recent-batches" class="batch-list" aria-live="polite"></ul>
-    </section>
-    <section class="card">
       <form id="batch-form">
         <label for="name">批次名称（可选）</label>
         <input id="name" maxlength="200" placeholder="例如：9 月素材">
         <label for="inputs">URL 或包含 URL 的分享文本（每行一条）</label>
-        <textarea id="inputs" placeholder="https://www.bilibili.com/video/BV...&#10;https://www.douyin.com/video/...&#10;https://www.tiktok.com/@user/video/...&#10;https://www.instagram.com/reel/..."></textarea>
+        <textarea id="inputs" aria-describedby="inputs-help batch-error" placeholder="https://www.bilibili.com/video/BV...&#10;https://www.douyin.com/video/...&#10;https://www.tiktok.com/@user/video/...&#10;https://www.instagram.com/reel/..."></textarea>
+        <p id="inputs-help" class="muted small">每行可包含一个链接或一段分享文本。文本输入与文件导入只能选择一种。</p>
         <label for="import-file">或导入 UTF-8 TXT/CSV（最多 256 KiB）</label>
-        <input id="import-file" type="file" accept=".txt,.csv,text/plain,text/csv">
+        <input id="import-file" type="file" accept=".txt,.csv,text/plain,text/csv" aria-describedby="inputs-help batch-error">
         <label for="credential-mode">本次新任务与手动重试的 Cookie 模式</label>
         <select id="credential-mode" aria-describedby="credential-status credential-help">
           <option value="use_default">使用本次启动配置的默认 Cookie（未配置的平台匿名）</option>
           <option value="anonymous">匿名下载（不使用 Cookie）</option>
         </select>
         <p id="credential-status" class="muted" aria-live="polite">正在读取默认 Cookie 状态…</p>
-        <button id="refresh-credentials" type="button">刷新 Cookie 状态</button>
+        <button id="refresh-credentials" class="secondary" type="button">刷新 Cookie 状态</button>
         <p id="credential-help" class="muted">仅通过本地配置启用平台默认 Cookie，不在页面上传或展示 Cookie。选择只影响实际新建任务和点击重试的任务；去重不会改写已存在任务。</p>
+        <p id="batch-error" class="danger" role="alert" hidden></p>
         <button id="submit" type="submit">创建批次</button>
       </form>
-      <div id="result" hidden>
-        <h2>结果</h2>
-        <section id="job-progress" hidden aria-live="polite">
-          <h3>任务进度（阶段估算）</h3>
-          <div id="job-progress-list" class="job-progress-list"></div>
-        </section>
-        <div id="job-actions"></div>
-        <section id="asset-links" hidden aria-live="polite">
-          <div class="row row-spread">
-            <h3>可下载成品</h3>
-            <button id="refresh-assets" type="button">刷新成品</button>
-          </div>
-          <ul id="asset-list" class="asset-list"></ul>
-        </section>
-        <pre id="output"></pre>
-      </div>
     </section>
+
+    <section id="result" class="card" aria-labelledby="current-batch-heading" hidden>
+      <div class="card-header"><div><p class="section-index">当前</p><h2 id="current-batch-heading">当前批次</h2><p class="muted">阶段百分比是保守估算；只有验证并发布完成的文件会出现在成品区。</p></div></div>
+      <p id="current-batch-error" class="danger" role="alert" hidden></p>
+      <section id="job-progress" hidden aria-live="polite">
+        <h3>任务进度（阶段估算）</h3>
+        <div id="job-progress-list" class="job-progress-list"></div>
+      </section>
+      <div id="job-actions" class="row"></div>
+      <section id="asset-links" hidden>
+        <div class="row row-spread">
+          <h3>可下载成品</h3>
+          <button id="refresh-assets" class="secondary" type="button">刷新成品</button>
+        </div>
+        <ul id="asset-list" class="asset-list"></ul>
+      </section>
+      <details><summary>查看完整任务数据</summary><pre id="output"></pre></details>
+    </section>
+
+    <section class="card" aria-labelledby="recent-batches-heading">
+      <div class="card-header">
+        <div><p class="section-index">历史</p><h2 id="recent-batches-heading">最近批次</h2><p class="muted">重新打开批次后可继续轮询，并访问已完成的成品。</p></div>
+        <button id="refresh-batches" class="secondary" type="button">刷新批次</button>
+      </div>
+      <ul id="recent-batches" class="batch-list" aria-live="polite"></ul>
+    </section>
+
+    <details class="card operations-card">
+      <summary>运行详情与诊断</summary>
+      <div class="operations-content diagnostic-grid">
+        <section class="diagnostic-panel" aria-labelledby="capabilities-heading">
+          <div class="card-header"><div><h2 id="capabilities-heading">下载能力</h2><p class="muted small">实现、构建/环境证据与人工决定分别展示；导入证据不会自动开启能力。</p></div><button id="refresh-capabilities" class="secondary" type="button">刷新能力</button></div>
+          <div id="capability-status" class="muted">正在读取平台能力矩阵…</div>
+        </section>
+        <section class="diagnostic-panel" aria-labelledby="toolchain-heading">
+          <div class="card-header"><div><h2 id="toolchain-heading">本机工具链</h2><p class="muted small">显示控制端启动时缓存的 yt-dlp、FFmpeg 与 ffprobe 检查。</p></div><button id="refresh-tools" class="secondary" type="button">刷新显示</button></div>
+          <p id="tool-status" class="muted">正在读取启动检查结果…</p>
+          <pre id="tool-output" class="log-output" aria-live="polite">尚无工具链检查结果。</pre>
+          <p id="tool-security-note" class="notice small">工具链检查与本次运行状态分别展示；外部 Worker 状态保持未知，完整平台能力仍未验证。</p>
+        </section>
+        <section class="diagnostic-panel wide" aria-labelledby="runtime-logs-heading">
+          <div class="card-header"><div><h2 id="runtime-logs-heading">运行日志</h2><p class="muted small">显示脱敏后的本机排障事件；日志是辅助线索，不替代数据库、资产 manifest 或验收证据。</p></div><button id="refresh-logs" class="secondary" type="button">手动刷新</button></div>
+          <p id="log-status" class="muted">正在读取运行日志状态…</p>
+          <pre id="log-output" class="log-output" aria-live="polite">正在读取最近事件…</pre>
+        </section>
+      </div>
+    </details>
+    <p class="page-footer">Open-Flame 0.25.0 · 本地优先 · 下载与上传数据相互隔离</p>
   </main>
   <script>
     const form = document.querySelector('#batch-form');
     const button = document.querySelector('#submit');
     const result = document.querySelector('#result');
     const output = document.querySelector('#output');
+    const currentBatchError = document.querySelector('#current-batch-error');
     const jobProgress = document.querySelector('#job-progress');
     const jobProgressList = document.querySelector('#job-progress-list');
     const jobActions = document.querySelector('#job-actions');
@@ -164,6 +154,10 @@ INDEX_HTML = """<!doctype html>
     const credentialMode = document.querySelector('#credential-mode');
     const credentialStatus = document.querySelector('#credential-status');
     const refreshCredentials = document.querySelector('#refresh-credentials');
+    const nameInput = document.querySelector('#name');
+    const inputsField = document.querySelector('#inputs');
+    const importFile = document.querySelector('#import-file');
+    const batchError = document.querySelector('#batch-error');
     let credentialRequestId = 0;
     let pollGeneration = 0;
     let pollRequestId = 0;
@@ -182,6 +176,9 @@ INDEX_HTML = """<!doctype html>
     let runtimeExpiryTimer = null;
     let runtimeRequestId = 0;
     let runtimeStopped = false;
+    let pageActive = true;
+    let inputComposing = false;
+    const jobActionInFlight = new Set();
     const activeStatuses = new Set(['queued', 'probing', 'downloading', 'postprocessing', 'verifying']);
 
     async function fetchJson(url, options = {}, action = '请求') {
@@ -201,6 +198,67 @@ INDEX_HTML = """<!doctype html>
       return payload;
     }
 
+    function reconcileKeyed(parent, entries, keyFor, createNode, updateNode) {
+      const existing = new Map(
+        Array.from(parent.children).map(node => [node._openFlameKey, node])
+      );
+      const ordered = [];
+      for (const entry of entries) {
+        const key = String(keyFor(entry));
+        const node = existing.get(key) || createNode(entry, key);
+        node._openFlameKey = key;
+        updateNode(node, entry, key);
+        ordered.push(node);
+        existing.delete(key);
+      }
+      for (const [index, node] of ordered.entries()) {
+        const current = parent.children[index] || null;
+        if (current !== node) parent.insertBefore(node, current);
+      }
+      for (const node of existing.values()) node.remove();
+    }
+
+    function setListMessage(parent, key, message, className = '') {
+      reconcileKeyed(
+        parent,
+        [{key, message, className}],
+        entry => entry.key,
+        () => document.createElement('li'),
+        (item, entry) => {
+          item.className = entry.className;
+          if (item.textContent !== entry.message) item.textContent = entry.message;
+        }
+      );
+    }
+
+    function clearCurrentBatchError() {
+      currentBatchError.hidden = true;
+      currentBatchError.textContent = '';
+    }
+
+    function showCurrentBatchError(message) {
+      if (currentBatchError.textContent !== message) {
+        currentBatchError.textContent = message;
+      }
+      currentBatchError.hidden = false;
+    }
+
+    function clearBatchError() {
+      batchError.hidden = true;
+      batchError.textContent = '';
+      inputsField.removeAttribute?.('aria-invalid');
+      importFile.removeAttribute?.('aria-invalid');
+    }
+
+    function showBatchError(message, target = null) {
+      batchError.textContent = message;
+      batchError.hidden = false;
+      if (target) {
+        target.setAttribute('aria-invalid', 'true');
+        target.focus?.();
+      }
+    }
+
     function renderWorkerRuntime(payload) {
       if (runtimeExpiryTimer !== null) clearTimeout(runtimeExpiryTimer);
       if (payload.mode === 'managed_direct' && ['online', 'paused'].includes(payload.state)
@@ -213,21 +271,23 @@ INDEX_HTML = """<!doctype html>
       const state = labels[payload.state] || labels.unknown;
       const text = `本次 Worker：${state}${managed ? '（本机托管直连）' : '（外部进程未观测）'}`;
       if (workerRuntimeStatus.textContent !== text) workerRuntimeStatus.textContent = text;
-      workerRuntimeStatus.className = ['stale', 'unknown', 'stopped'].includes(payload.state) ? 'muted' : '';
+      workerRuntimeStatus.className = ['stale', 'unknown', 'stopped'].includes(payload.state)
+        ? 'status-value muted'
+        : 'status-value';
       workerRuntimeDetail.textContent = payload.network_download_enabled === true
         ? '本机网络下载已启用；这不代表平台验证或投稿审核通过。'
         : (payload.state === 'check_only' ? '本次只验证启动，不领取下载任务。'
           : '当前无法确认可执行网络下载；工具链检查与进程运行状态分别展示。');
       if (managed && ['online', 'paused'].includes(payload.state)) {
         const validFor = Math.max(0, Number(payload.heartbeat_timeout_seconds) - Number(payload.heartbeat_age_seconds));
-        if (Number.isFinite(validFor)) runtimeExpiryTimer = setTimeout(() => {
+        if (Number.isFinite(validFor) && pageActive && document.hidden !== true) runtimeExpiryTimer = setTimeout(() => {
           renderWorkerRuntime({mode: 'managed_direct', state: 'stale', network_download_enabled: null});
         }, Math.min(validFor, 3) * 1000);
       }
     }
 
     async function loadWorkerRuntime() {
-      if (runtimeStopped) return;
+      if (runtimeStopped || !pageActive || document.hidden === true) return;
       const requestId = ++runtimeRequestId;
       const clock = () => globalThis.performance?.now?.() ?? Date.now();
       const started = clock();
@@ -246,15 +306,13 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    globalThis.addEventListener?.('pagehide', () => {
-      runtimeStopped = true;
-      runtimeRequestId += 1;
-      clearTimeout(runtimeTimer);
-      clearTimeout(runtimeExpiryTimer);
-      renderWorkerRuntime({mode: 'external_unknown', state: 'unknown'});
-    });
+    globalThis.addEventListener?.('pagehide', () => suspendPageWork(true));
     globalThis.addEventListener?.('pageshow', event => {
-      if (event.persisted && runtimeStopped) { runtimeStopped = false; void loadWorkerRuntime(); }
+      if (event.persisted) resumePageWork();
+    });
+    document.addEventListener?.('visibilitychange', () => {
+      if (document.hidden === true) suspendPageWork(false);
+      else resumePageWork();
     });
 
     async function loadQueueState() {
@@ -265,12 +323,12 @@ INDEX_HTML = """<!doctype html>
         queueStatus.textContent = queue.paused
           ? `队列已暂停：${queue.reason || 'unknown'}`
           : '队列未暂停；可接收新任务（不代表 Worker 已启动）';
-        queueStatus.className = queue.paused ? 'danger' : '';
+        queueStatus.className = queue.paused ? 'status-value danger' : 'status-value';
         resumeQueue.hidden = !queue.paused;
       } catch (error) {
         if (requestId !== queueRequestId) return;
         queueStatus.textContent = `队列状态读取失败：${error}`;
-        queueStatus.className = 'danger';
+        queueStatus.className = 'status-value danger';
         resumeQueue.hidden = true;
       }
     }
@@ -281,7 +339,7 @@ INDEX_HTML = """<!doctype html>
         const circuits = await fetchJson('/api/v1/platform-circuits', {}, '读取平台状态');
         if (requestId !== circuitRequestId) return;
         circuitStatus.replaceChildren();
-        circuitStatus.className = 'muted';
+        circuitStatus.className = 'status-value muted';
         if (!circuits.length) {
           circuitStatus.textContent = '尚无平台熔断记录。';
           return;
@@ -324,7 +382,7 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         if (requestId !== circuitRequestId) return;
         circuitStatus.textContent = `平台状态读取失败：${error}`;
-        circuitStatus.className = 'danger';
+        circuitStatus.className = 'status-value danger';
       }
     }
 
@@ -430,9 +488,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshOperations() {
+      if (!pageActive || document.hidden === true) return;
       await loadOperations();
       if (operationsTimer !== null) clearTimeout(operationsTimer);
-      operationsTimer = setTimeout(refreshOperations, 10000);
+      if (pageActive && document.hidden !== true) {
+        operationsTimer = setTimeout(refreshOperations, 10000);
+      }
     }
 
     function renderToolchain(payload) {
@@ -536,6 +597,7 @@ INDEX_HTML = """<!doctype html>
       if (pollTimer !== null) clearTimeout(pollTimer);
       const generation = pollGeneration;
       result.hidden = false;
+      clearCurrentBatchError();
       output.textContent = '正在打开批次…';
       currentBatchPayload = null;
       jobActions.replaceChildren();
@@ -554,41 +616,54 @@ INDEX_HTML = """<!doctype html>
         }
       } catch (error) {
         if (generation !== pollGeneration) return;
-        output.textContent = `打开批次失败：${error}`;
+        const message = `打开批次失败：${error}`;
+        output.textContent = message;
+        showCurrentBatchError(message);
       }
     }
 
     async function loadRecentBatches() {
       const requestId = ++batchListRequestId;
       refreshBatches.disabled = true;
-      recentBatches.textContent = '正在读取最近批次…';
+      if (recentBatches.children.length === 0) {
+        setListMessage(recentBatches, 'loading', '正在读取最近批次…');
+      }
       try {
         const batches = await fetchJson('/api/v1/batches?limit=20', {}, '读取最近批次');
         if (requestId !== batchListRequestId) return;
         recentBatches.className = 'batch-list';
-        recentBatches.replaceChildren();
         if (!Array.isArray(batches) || batches.length === 0) {
-          const empty = document.createElement('li');
-          empty.textContent = '暂无批次。';
-          recentBatches.append(empty);
+          setListMessage(recentBatches, 'empty', '暂无批次。');
           return;
         }
-        for (const batch of batches) {
-          const item = document.createElement('li');
-          const summary = document.createElement('span');
-          const displayName = batch.name || '未命名批次';
-          summary.textContent = `${displayName} · ${batch.status} · ${batch.ready_count}/${batch.total_count} ready`;
-          const open = document.createElement('button');
-          open.type = 'button';
-          open.textContent = '打开';
-          open.addEventListener('click', () => void openBatch(batch.id));
-          item.append(summary, open);
-          recentBatches.append(item);
-        }
+        reconcileKeyed(
+          recentBatches,
+          batches,
+          batch => batch.id,
+          () => {
+            const item = document.createElement('li');
+            item.className = 'item';
+            item._summary = document.createElement('span');
+            item._open = document.createElement('button');
+            item._open.type = 'button';
+            item._open.className = 'secondary';
+            item._open.textContent = '打开';
+            item._open.addEventListener('click', () => void openBatch(item._batchId));
+            item.append(item._summary, item._open);
+            return item;
+          },
+          (item, batch) => {
+            item._batchId = batch.id;
+            const displayName = batch.name || '未命名批次';
+            const text = `${displayName} · ${batch.status} · ${batch.ready_count}/${batch.total_count} ready`;
+            if (item._summary.textContent !== text) item._summary.textContent = text;
+            item._open.setAttribute('aria-label', `打开批次：${displayName}`);
+          }
+        );
       } catch (error) {
         if (requestId !== batchListRequestId) return;
-        recentBatches.textContent = `最近批次读取失败：${error}`;
         recentBatches.className = 'batch-list danger';
+        setListMessage(recentBatches, 'error', `最近批次读取失败：${error}`, 'danger');
       } finally {
         if (requestId === batchListRequestId) refreshBatches.disabled = false;
       }
@@ -609,8 +684,8 @@ INDEX_HTML = """<!doctype html>
 
     function renderJobProgress(payload) {
       const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-      jobProgressList.replaceChildren();
       if (jobs.length === 0) {
+        jobProgressList.replaceChildren();
         jobProgress.hidden = true;
         return;
       }
@@ -624,32 +699,40 @@ INDEX_HTML = """<!doctype html>
         failed: '失败',
         canceled: '已取消'
       };
-      for (const job of jobs) {
-        const item = document.createElement('div');
-        item.className = 'job-progress-item';
-        const label = document.createElement('div');
-        label.className = 'job-progress-label';
-        const state = document.createElement('span');
-        const rawProgress = Number(job.progress);
-        const hasProgress = Number.isFinite(rawProgress);
-        const percent = hasProgress
-          ? Math.round(Math.min(Math.max(rawProgress, 0), 1) * 100)
-          : null;
-        state.textContent = `${job.platform || 'unknown'} · `
-          + `${statusLabels[job.status] || job.status || 'unknown'}`;
-        const value = document.createElement('span');
-        value.textContent = percent === null ? '进度未知' : `约 ${percent}%`;
-        label.append(state, value);
-        const progressElement = document.createElement('progress');
-        progressElement.max = 100;
-        if (percent !== null) progressElement.value = percent;
-        progressElement.setAttribute(
-          'aria-label',
-          `${job.platform || 'unknown'} ${statusLabels[job.status] || job.status || 'unknown'}`
-        );
-        item.append(label, progressElement);
-        jobProgressList.append(item);
-      }
+      reconcileKeyed(
+        jobProgressList,
+        jobs,
+        job => job.id,
+        () => {
+          const item = document.createElement('div');
+          item.className = 'job-progress-item';
+          const label = document.createElement('div');
+          label.className = 'job-progress-label';
+          item._state = document.createElement('span');
+          item._value = document.createElement('span');
+          item._progress = document.createElement('progress');
+          item._progress.max = 100;
+          label.append(item._state, item._value);
+          item.append(label, item._progress);
+          return item;
+        },
+        (item, job) => {
+          const rawProgress = Number(job.progress);
+          const hasProgress = Number.isFinite(rawProgress);
+          const percent = hasProgress
+            ? Math.round(Math.min(Math.max(rawProgress, 0), 1) * 100)
+            : null;
+          const platform = job.platform || 'unknown';
+          const status = statusLabels[job.status] || job.status || 'unknown';
+          const stateText = `${platform} · ${status}`;
+          const valueText = percent === null ? '进度未知' : `约 ${percent}%`;
+          if (item._state.textContent !== stateText) item._state.textContent = stateText;
+          if (item._value.textContent !== valueText) item._value.textContent = valueText;
+          if (percent === null) item._progress.removeAttribute?.('value');
+          else item._progress.value = percent;
+          item._progress.setAttribute('aria-label', `${platform} ${status}`);
+        }
+      );
       jobProgress.hidden = false;
     }
 
@@ -666,12 +749,72 @@ INDEX_HTML = """<!doctype html>
       return pending.promise;
     }
 
+    function updateAssetItem(item, asset, index) {
+      if (!item._downloadLink) {
+        item._downloadLink = document.createElement('a');
+        item._downloadLink.setAttribute('download', '');
+        item.append(item._downloadLink);
+      }
+      const kind = asset.original?.media_kind || 'media';
+      const bytes = Number(asset.original?.size_bytes);
+      const size = Number.isFinite(bytes) ? ` · ${bytes.toLocaleString()} bytes` : '';
+      item._downloadLink.href = asset.download_url;
+      item._downloadLink.textContent = `下载成品 ${index + 1}（${kind}${size}）`;
+
+      const canUpload = kind === 'video' && typeof asset.asset_id === 'string';
+      if (canUpload && !item._uploadLink) {
+        item._uploadLink = document.createElement('a');
+        item._uploadLink.textContent = '用于上传';
+        item.insertBefore(item._uploadLink, item._artifactList || null);
+      }
+      if (canUpload) {
+        item._uploadLink.href = '/uploads?asset_id=' + encodeURIComponent(asset.asset_id);
+        item._uploadLink.setAttribute('aria-label', `将成品 ${index + 1} 用于上传`);
+      } else if (item._uploadLink) {
+        item._uploadLink.remove();
+        item._uploadLink = null;
+      }
+
+      const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts : [];
+      if (artifacts.length > 0 && !item._artifactList) {
+        item._artifactList = document.createElement('ul');
+        item._artifactList.className = 'artifact-list';
+        item.append(item._artifactList);
+      }
+      if (artifacts.length > 0) {
+        reconcileKeyed(
+          item._artifactList,
+          artifacts.map((artifact, artifactIndex) => ({artifact, artifactIndex})),
+          entry => entry.artifact.artifact_id || entry.artifact.download_url || entry.artifactIndex,
+          () => {
+            const artifactItem = document.createElement('li');
+            artifactItem._link = document.createElement('a');
+            artifactItem._link.setAttribute('download', '');
+            artifactItem.append(artifactItem._link);
+            return artifactItem;
+          },
+          (artifactItem, entry) => {
+            const {artifact, artifactIndex} = entry;
+            const artifactKind = artifact.kind === 'thumbnail' ? '缩略图' : '字幕';
+            const language = artifact.kind === 'caption' && artifact.language
+              ? ` · ${artifact.language}`
+              : '';
+            artifactItem._link.href = artifact.download_url;
+            artifactItem._link.textContent = `下载${artifactKind} ${artifactIndex + 1}${language}`;
+          }
+        );
+      } else if (item._artifactList) {
+        item._artifactList.remove();
+        item._artifactList = null;
+      }
+    }
+
     async function fetchReadyAssets(payload, generation) {
       const requestId = ++assetRequestId;
       refreshAssets.disabled = true;
       assetLinks.hidden = false;
       if (assetList.children.length === 0) {
-        assetList.textContent = '正在读取可下载成品…';
+        setListMessage(assetList, 'loading', '正在读取可下载成品…');
       }
       try {
         const assets = await fetchJson(
@@ -680,57 +823,24 @@ INDEX_HTML = """<!doctype html>
           '读取批次成品'
         );
         if (generation !== pollGeneration || requestId !== assetRequestId) return;
-        assetList.replaceChildren();
         if (!Array.isArray(assets) || assets.length === 0) {
-          const empty = document.createElement('li');
-          empty.textContent = '暂时没有可下载的 ready 成品；任务完成后请点击“刷新成品”。';
-          assetList.append(empty);
+          setListMessage(
+            assetList,
+            'empty',
+            '暂时没有可下载的 ready 成品；任务完成后请点击“刷新成品”。'
+          );
           return;
         }
-        for (const [index, asset] of assets.entries()) {
-          const item = document.createElement('li');
-          const link = document.createElement('a');
-          link.href = asset.download_url;
-          link.setAttribute('download', '');
-          const kind = asset.original?.media_kind || 'media';
-          const bytes = Number(asset.original?.size_bytes);
-          const size = Number.isFinite(bytes) ? ` · ${bytes.toLocaleString()} bytes` : '';
-          link.textContent = `下载成品 ${index + 1}（${kind}${size}）`;
-          item.append(link);
-          if (kind === 'video' && typeof asset.asset_id === 'string') {
-            const uploadLink = document.createElement('a');
-            uploadLink.href = '/uploads?asset_id=' + encodeURIComponent(asset.asset_id);
-            uploadLink.textContent = ' · 用于上传';
-            item.append(uploadLink);
-          }
-          const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts : [];
-          if (artifacts.length > 0) {
-            const artifactList = document.createElement('ul');
-            artifactList.className = 'artifact-list';
-            for (const [artifactIndex, artifact] of artifacts.entries()) {
-              const artifactItem = document.createElement('li');
-              const artifactLink = document.createElement('a');
-              artifactLink.href = artifact.download_url;
-              artifactLink.setAttribute('download', '');
-              const artifactKind = artifact.kind === 'thumbnail' ? '缩略图' : '字幕';
-              const language = artifact.kind === 'caption' && artifact.language
-                ? ` · ${artifact.language}`
-                : '';
-              artifactLink.textContent = `下载${artifactKind} ${artifactIndex + 1}${language}`;
-              artifactItem.append(artifactLink);
-              artifactList.append(artifactItem);
-            }
-            item.append(artifactList);
-          }
-          assetList.append(item);
-        }
+        reconcileKeyed(
+          assetList,
+          assets.map((asset, index) => ({asset, index})),
+          entry => entry.asset.asset_id || entry.asset.id || entry.asset.download_url,
+          () => document.createElement('li'),
+          (item, entry) => updateAssetItem(item, entry.asset, entry.index)
+        );
       } catch (error) {
         if (generation !== pollGeneration || requestId !== assetRequestId) return;
-        assetList.replaceChildren();
-        const failure = document.createElement('li');
-        failure.textContent = `成品列表读取失败：${error}`;
-        failure.className = 'danger';
-        assetList.append(failure);
+        setListMessage(assetList, 'error', `成品列表读取失败：${error}`, 'danger');
       } finally {
         if (generation === pollGeneration && requestId === assetRequestId) {
           refreshAssets.disabled = false;
@@ -763,82 +873,119 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function renderPayload(payload) {
-      currentBatchPayload = payload;
-      output.textContent = JSON.stringify(payload, null, 2);
-      renderJobProgress(payload);
-      jobActions.replaceChildren();
+    function renderJobActions(payload) {
+      const entries = [];
       for (const job of payload.jobs || []) {
         const retryableFlatFailure = job.status === 'failed'
           && job.job_kind === 'download'
           && job.source_type !== 'x_attachment';
         if (retryableFlatFailure) {
-          const retry = document.createElement('button');
-          retry.type = 'button';
-          retry.textContent = `重试 ${job.platform} 任务（新一代）`;
-          retry.addEventListener('click', async () => {
-            const retryBatchId = payload.id;
-            const retryGeneration = pollGeneration;
-            retry.disabled = true;
-            try {
-              await fetchJson(
-                `/api/v1/jobs/${encodeURIComponent(job.id)}/retry`,
-                {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ credential_mode: credentialMode.value })
-                },
-                `重试 ${job.platform} 任务`
-              );
-              await loadCircuitState();
-              if (retryGeneration !== pollGeneration) return;
-              await pollBatch(retryBatchId, retryGeneration);
-            } catch (error) {
-              if (retryGeneration !== pollGeneration) return;
-              output.textContent = `重试失败：${error}`;
-            } finally {
-              if (retry.isConnected) retry.disabled = false;
-            }
+          entries.push({
+            key: `retry:${job.id}`,
+            kind: 'retry',
+            jobId: job.id,
+            platform: job.platform,
+            batchId: payload.id,
+            generation: pollGeneration
           });
-          jobActions.append(retry);
-          continue;
+        } else if (activeStatuses.has(job.status) && job.cancel_requested_at) {
+          entries.push({
+            key: `pending:${job.id}`,
+            kind: 'pending',
+            jobId: job.id,
+            platform: job.platform,
+            batchId: payload.id,
+            generation: pollGeneration
+          });
+        } else if (activeStatuses.has(job.status)) {
+          entries.push({
+            key: `cancel:${job.id}`,
+            kind: 'cancel',
+            jobId: job.id,
+            platform: job.platform,
+            batchId: payload.id,
+            generation: pollGeneration
+          });
         }
-        if (!activeStatuses.has(job.status)) continue;
-        if (job.cancel_requested_at) {
-          const pending = document.createElement('span');
-          pending.textContent = `${job.platform} 任务已请求取消`;
-          jobActions.append(pending);
-          continue;
-        }
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.textContent = `取消 ${job.platform} 任务`;
-        cancel.addEventListener('click', async () => {
-          const cancelBatchId = payload.id;
-          const cancelGeneration = pollGeneration;
-          cancel.disabled = true;
-          try {
-            await fetchJson(
-              `/api/v1/jobs/${encodeURIComponent(job.id)}/cancel`,
-              { method: 'POST' },
-              `取消 ${job.platform} 任务`
-            );
-            if (cancelGeneration !== pollGeneration) return;
-            await pollBatch(cancelBatchId, cancelGeneration);
-          } catch (error) {
-            if (cancelGeneration !== pollGeneration) return;
-            output.textContent = `取消失败：${error}`;
-          } finally {
-            if (cancel.isConnected) cancel.disabled = false;
-          }
-        });
-        jobActions.append(cancel);
       }
+      reconcileKeyed(
+        jobActions,
+        entries,
+        entry => entry.key,
+        entry => {
+          const control = document.createElement(entry.kind === 'pending' ? 'span' : 'button');
+          if (entry.kind !== 'pending') {
+            control.type = 'button';
+            control.addEventListener('click', () => void runJobAction(control));
+          }
+          return control;
+        },
+        (control, entry) => {
+          control._action = entry;
+          if (entry.kind === 'pending') {
+            control.className = 'muted';
+            control.textContent = `${entry.platform} 任务已请求取消`;
+            return;
+          }
+          control.className = entry.kind === 'cancel' ? 'danger-action' : 'secondary';
+          control.textContent = entry.kind === 'retry'
+            ? `重试 ${entry.platform} 任务（新一代）`
+            : `取消 ${entry.platform} 任务`;
+          control.disabled = jobActionInFlight.has(entry.key);
+        }
+      );
+    }
+
+    async function runJobAction(control) {
+      const action = control._action;
+      if (!action || jobActionInFlight.has(action.key)) return;
+      const credential_mode = credentialMode.value;
+      jobActionInFlight.add(action.key);
+      control.disabled = true;
+      try {
+        if (action.kind === 'retry') {
+          await fetchJson(
+            `/api/v1/jobs/${encodeURIComponent(action.jobId)}/retry`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ credential_mode })
+            },
+            `重试 ${action.platform} 任务`
+          );
+          await loadCircuitState();
+        } else {
+          await fetchJson(
+            `/api/v1/jobs/${encodeURIComponent(action.jobId)}/cancel`,
+            { method: 'POST' },
+            `取消 ${action.platform} 任务`
+          );
+        }
+        if (action.generation !== pollGeneration) return;
+        await pollBatch(action.batchId, action.generation);
+      } catch (error) {
+        if (action.generation !== pollGeneration) return;
+        const message = `${action.kind === 'retry' ? '重试' : '取消'}失败：${error}`;
+        output.textContent = message;
+        showCurrentBatchError(message);
+      } finally {
+        jobActionInFlight.delete(action.key);
+        if (control.isConnected) control.disabled = false;
+        if (pageActive && currentBatchPayload) renderJobActions(currentBatchPayload);
+      }
+    }
+
+    function renderPayload(payload) {
+      currentBatchPayload = payload;
+      clearCurrentBatchError();
+      output.textContent = JSON.stringify(payload, null, 2);
+      renderJobProgress(payload);
+      renderJobActions(payload);
       void loadReadyAssets(payload, pollGeneration);
     }
 
     async function pollBatch(batchId, generation) {
-      if (generation !== pollGeneration) return;
+      if (generation !== pollGeneration || !pageActive || document.hidden === true) return;
       const requestId = ++pollRequestId;
       let payload;
       try {
@@ -849,7 +996,9 @@ INDEX_HTML = """<!doctype html>
         );
       } catch (error) {
         if (generation !== pollGeneration || requestId !== pollRequestId) return;
-        output.textContent = `状态轮询失败：${error}；5 秒后重试。`;
+        const message = `状态轮询失败：${error}；5 秒后重试。`;
+        output.textContent = message;
+        showCurrentBatchError(message);
         schedulePoll(batchId, generation, 5000);
         return;
       }
@@ -861,7 +1010,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function schedulePoll(batchId, generation, delayMs = 2000) {
-      if (generation !== pollGeneration) return;
+      if (generation !== pollGeneration || !pageActive || document.hidden === true) return;
       if (pollTimer !== null) clearTimeout(pollTimer);
       pollTimer = setTimeout(() => {
         if (generation !== pollGeneration) return;
@@ -870,26 +1019,81 @@ INDEX_HTML = """<!doctype html>
       }, delayMs);
     }
 
+    function suspendPageWork(markRuntimeUnknown) {
+      pageActive = false;
+      runtimeStopped = true;
+      runtimeRequestId += 1;
+      pollGeneration += 1;
+      pollRequestId += 1;
+      assetRequestId += 1;
+      queueRequestId += 1;
+      circuitRequestId += 1;
+      capabilityRequestId += 1;
+      toolRequestId += 1;
+      logRequestId += 1;
+      batchListRequestId += 1;
+      credentialRequestId += 1;
+      assetRequestInFlight = null;
+      clearTimeout(runtimeTimer);
+      clearTimeout(runtimeExpiryTimer);
+      clearTimeout(pollTimer);
+      clearTimeout(operationsTimer);
+      runtimeTimer = null;
+      runtimeExpiryTimer = null;
+      pollTimer = null;
+      operationsTimer = null;
+      if (markRuntimeUnknown) {
+        renderWorkerRuntime({mode: 'external_unknown', state: 'unknown'});
+      }
+    }
+
+    function resumePageWork() {
+      if (pageActive || document.hidden === true) return;
+      pageActive = true;
+      runtimeStopped = false;
+      void loadWorkerRuntime();
+      void refreshOperations();
+      void loadCapabilityState();
+      void loadToolchain();
+      void loadRuntimeLogs();
+      void loadCredentialDefaults();
+      void loadRecentBatches();
+      if (currentBatchPayload) {
+        const generation = pollGeneration;
+        void pollBatch(currentBatchPayload.id, generation);
+      }
+    }
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (event.isComposing || inputComposing) return;
+      clearBatchError();
       pollGeneration += 1;
       pollRequestId += 1;
       if (pollTimer !== null) clearTimeout(pollTimer);
       const submitGeneration = pollGeneration;
       button.disabled = true;
       result.hidden = false;
+      clearCurrentBatchError();
       output.textContent = '正在提交…';
       currentBatchPayload = null;
       jobActions.replaceChildren();
       clearJobProgress();
       clearAssetLinks();
-      const name = document.querySelector('#name').value || null;
+      const name = nameInput.value || null;
       const credential_mode = credentialMode.value;
-      const file = document.querySelector('#import-file').files[0];
-      const inputs = document.querySelector('#inputs').value.split(/\\r?\\n/).filter(line => line.trim());
+      const file = importFile.files[0];
+      const inputs = inputsField.value.split(/\\r?\\n/).filter(line => line.trim());
       try {
-        if (!file && inputs.length === 0) throw new Error('请输入 URL，或选择 TXT/CSV 文件');
-        if (file && inputs.length > 0) throw new Error('文本与文件只能选择一种输入方式');
+        if (!file && inputs.length === 0) {
+          showBatchError('请输入 URL，或选择 TXT/CSV 文件', inputsField);
+          throw new Error('请输入 URL，或选择 TXT/CSV 文件');
+        }
+        if (file && inputs.length > 0) {
+          showBatchError('文本与文件只能选择一种输入方式', inputsField);
+          importFile.setAttribute('aria-invalid', 'true');
+          throw new Error('文本与文件只能选择一种输入方式');
+        }
         let payload;
         if (file) {
           const params = new URLSearchParams({ filename: file.name, credential_mode });
@@ -915,10 +1119,22 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         if (submitGeneration !== pollGeneration) return;
         output.textContent = `请求失败：${error}`;
+        if (batchError.hidden) showBatchError(`请求失败：${error}`);
       } finally {
         button.disabled = false;
       }
     });
+    for (const input of [nameInput, inputsField]) {
+      input.addEventListener('compositionstart', () => { inputComposing = true; });
+      input.addEventListener('compositionend', () => { inputComposing = false; });
+      input.addEventListener('keydown', event => {
+        if ((event.isComposing || event.keyCode === 229) && event.key === 'Enter') {
+          event.preventDefault();
+        }
+      });
+      input.addEventListener('input', clearBatchError);
+    }
+    importFile.addEventListener('change', clearBatchError);
     refreshCapabilities.addEventListener('click', loadCapabilityState);
     refreshCredentials.addEventListener('click', loadCredentialDefaults);
     loadCredentialDefaults();

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from .contracts import UploadError
+from ..ui_assets import page_content_security_policy
 from .web import UPLOAD_HTML
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
@@ -188,7 +189,12 @@ def install_upload_routes(
 
     @app.get("/uploads", response_class=HTMLResponse, include_in_schema=False)
     def page():
-        return UPLOAD_HTML
+        return HTMLResponse(
+            UPLOAD_HTML,
+            headers={
+                "Content-Security-Policy": page_content_security_policy(UPLOAD_HTML),
+            },
+        )
 
     router = APIRouter(prefix="/api/v1/uploads")
 

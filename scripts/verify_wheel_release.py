@@ -32,6 +32,10 @@ RUNTIME_MODULES = {
     "typing-inspection": "typing_inspection", "uvicorn": "uvicorn",
 }
 REPORT_NAME = "wheel-smoke-report.json"
+UI_ASSETS = (
+    "src/video_download_control/static/open-flame.css",
+    "src/video_download_control/static/open-flame-shell.js",
+)
 
 
 class WheelSmokeError(RuntimeError):
@@ -81,7 +85,7 @@ def runtime_requirements(payload: bytes) -> dict[str, str]:
 
 
 INSTALLED_PROBE = r'''
-import importlib, importlib.metadata as metadata, json, os, pathlib, sys
+import hashlib, importlib, importlib.metadata as metadata, importlib.resources as resources, json, os, pathlib, sys
 expected = json.loads(sys.argv[1])
 environment = pathlib.Path(expected['environment']).resolve(strict=True)
 work = pathlib.Path(expected['work']).resolve(strict=True)
@@ -110,6 +114,10 @@ assert package.__version__ == expected['version']
 identity = importlib.import_module('video_download_control.build_identity')
 installed_file(identity.__file__)
 assert identity.current_product_identity() == expected['product_identity']
+package_root = resources.files('video_download_control')
+for relative, expected_sha256 in expected['ui_assets'].items():
+    payload = package_root.joinpath(*relative.split('/')).read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == expected_sha256
 scripts = {entry.name: entry.value for entry in distribution.entry_points if entry.group == 'console_scripts'}
 assert scripts == expected['scripts'] and len(scripts) == 14
 
@@ -133,7 +141,7 @@ def _report() -> dict:
         "schema_version": 1, "action": "verify_wheel_release", "status": "failed",
         "stage": "policy", "error_code": None, "version": None,
         "product_identity": None, "runtime_dependencies_verified": 0,
-        "console_scripts_verified": 0,
+        "console_scripts_verified": 0, "ui_assets_verified": 0,
     }
 
 
@@ -159,7 +167,7 @@ def verify_wheel_release(
         source = release.archive_payloads(release_dir / manifest["source_zip"])
         prefix = f"Open-Flame-{manifest['version']}-source/"
         selected = {}
-        for name in ("deployment/requirements.runtime.lock", "pyproject.toml"):
+        for name in ("deployment/requirements.runtime.lock", "pyproject.toml", *UI_ASSETS):
             payload = source[prefix + name]
             require(release.fingerprint(payload) == manifest["source_files"][name], "release_changed")
             selected[name] = payload
@@ -203,10 +211,16 @@ def verify_wheel_release(
             "environment": str(environment), "work": str(work_dir), "runtime": runtime,
             "runtime_modules": RUNTIME_MODULES, "scripts": scripts,
             "version": manifest["version"], "product_identity": manifest["product_identity"],
+            "ui_assets": {
+                name.removeprefix("src/video_download_control/"):
+                    manifest["source_files"][name]["sha256"]
+                for name in UI_ASSETS
+            },
         }
         release.command(python, ["-c", INSTALLED_PROBE, json.dumps(expected)], work_dir)
         report.update(status="passed", stage="complete", runtime_dependencies_verified=13,
-                      console_scripts_verified=len(release.PROJECT_SCRIPTS))
+                      console_scripts_verified=len(release.PROJECT_SCRIPTS),
+                      ui_assets_verified=len(UI_ASSETS))
     except KeyboardInterrupt:
         report.update(status="cancelled", error_code="cancelled")
     except WheelSmokeError as error:

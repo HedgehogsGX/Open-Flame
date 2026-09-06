@@ -12,20 +12,29 @@ from video_download_control.uploads.web import UPLOAD_HTML
 
 HARNESS = r"""
 const vm=require('node:vm');const ids=new Map();
+function contains(root,target){return root===target||root.children.some(item=>contains(item,target));}
 class Element{
- constructor(tag,attrs={},text=''){this.tagName=tag;this.children=[];this.listeners=new Map();this._text=text;this.value=attrs.value||'';this.hidden=Object.hasOwn(attrs,'hidden');this.disabled=Object.hasOwn(attrs,'disabled');this.checked=false;this.dataset={};this.attributes={...attrs};this.className=attrs.class||'';this.type=attrs.type||'';this.files=[];this.tabIndex=attrs.tabindex===undefined?0:Number(attrs.tabindex);if(attrs.id)ids.set(attrs.id,this);}
- get textContent(){return this._text+this.children.map(item=>item.textContent).join('');}set textContent(value){this._text=String(value);this.children=[];}
+ constructor(tag,attrs={},text=''){this.tagName=tag;this.children=[];this.parentElement=null;this.listeners=new Map();this._text=text;this._textWriteCount=0;this.value=attrs.value||'';this.hidden=Object.hasOwn(attrs,'hidden');this.disabled=Object.hasOwn(attrs,'disabled');this.checked=false;this.dataset={};this.attributes={...attrs};this.className=attrs.class||'';this.type=attrs.type||'';this.files=[];this.tabIndex=attrs.tabindex===undefined?0:Number(attrs.tabindex);if(attrs.id)ids.set(attrs.id,this);}
+ get textContent(){return this._text+this.children.map(item=>item.textContent).join('');}
+ set textContent(value){this._textWriteCount+=1;this._text=String(value);for(const child of [...this.children])this.detach(child,false);}
  set innerHTML(value){throw new Error('Unsafe innerHTML assignment');}
- removeAttribute(name){delete this.attributes[name];delete this[name];}setAttribute(name,value){this.attributes[name]=String(value);}focus(){if(document.activeElement)document.activeElement.focused=false;document.activeElement=this;this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
- append(...items){for(const item of items)this.children.push(typeof item==='string'?new Element('#text',{},item):item);}
- replaceChildren(...items){this._text='';this.children=[];this.append(...items);}get firstChild(){return this.children[0];}
+ get firstChild(){return this.children[0];}get lastElementChild(){return [...this.children].reverse().find(item=>item.tagName!=='#text')||null;}
+ get isConnected(){return this.tagName==='document'||!!this.parentElement?.isConnected;}
+ removeAttribute(name){delete this.attributes[name];delete this[name];}setAttribute(name,value){this.attributes[name]=String(value);}
+ focus(){if(document.activeElement)document.activeElement.focused=false;document.activeElement=this;this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
+ detach(item,preserveFocus){const index=this.children.indexOf(item);if(index<0)return;if(!preserveFocus&&document.activeElement&&contains(item,document.activeElement)){document.activeElement.focused=false;document.activeElement=null;}this.children.splice(index,1);item.parentElement=null;}
+ append(...items){for(let item of items){if(typeof item==='string')item=new Element('#text',{},item);if(item.parentElement)item.parentElement.detach(item,true);item.parentElement=this;this.children.push(item);}}
+ insertBefore(item,reference){if(reference!==null&&!this.children.includes(reference))throw new Error('Reference is not a child');if(item.parentElement)item.parentElement.detach(item,true);const index=reference===null?this.children.length:this.children.indexOf(reference);item.parentElement=this;this.children.splice(index,0,item);return item;}
+ remove(){if(this.parentElement)this.parentElement.detach(this,false);}
+ replaceChildren(...items){this._text='';for(const child of [...this.children])this.detach(child,false);this.append(...items);}
  querySelectorAll(selector){if(selector==='details[data-job-id]')return all(this).filter(item=>item.tagName==='details'&&item.dataset.jobId!==undefined);throw new Error('Unsupported selector '+selector);}
  addEventListener(name,callback){if(!this.listeners.has(name))this.listeners.set(name,[]);this.listeners.get(name).push(callback);}
- async dispatch(name){for(const callback of this.listeners.get(name)||[])await callback({preventDefault(){},target:this});}
+ async dispatch(name,event={}){const payload={target:this,currentTarget:this,isComposing:false,key:'',keyCode:0,defaultPrevented:false,...event};payload.preventDefault=()=>{payload.defaultPrevented=true;};for(const callback of this.listeners.get(name)||[])await callback(payload);return payload;}
 }
 function construct(node){const item=new Element(node.tag,node.attrs,node.text||'');for(const child of node.children||[])item.append(construct(child));if(node.tag==='select')item.value=item.children.find(child=>child.tagName==='option')?.value||'';return item;}
 const root=construct(fixture.page);function all(item){return [item,...item.children.flatMap(all)];}
-const document={activeElement:null,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),querySelectorAll(selector){if(selector==='button')return all(root).filter(item=>item.tagName==='button');if(selector==='#account-choices input:checked')return all(ids.get('account-choices')).filter(item=>item.tagName==='input'&&item.checked);throw new Error('Unsupported selector '+selector);}};
+const documentListeners=new Map();
+const document={activeElement:null,hidden:false,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),querySelectorAll(selector){if(selector==='button')return all(root).filter(item=>item.tagName==='button');if(selector==='#account-choices input:checked')return all(ids.get('account-choices')).filter(item=>item.tagName==='input'&&item.checked);throw new Error('Unsupported selector '+selector);},addEventListener(name,callback){if(!documentListeners.has(name))documentListeners.set(name,[]);documentListeners.get(name).push(callback);}};
 const state={requests:[],accounts:[{id:'a'.repeat(32),platform:'bilibili',name:'Synthetic Bili',auth_state:'ready',lifecycle_state:'active',disconnected_at:null},{id:'b'.repeat(32),platform:'tencent',name:'Synthetic Tencent',auth_state:'ready',lifecycle_state:'active',disconnected_at:null}],sources:[{id:'c'.repeat(32),name:'synthetic.mp4',size:42,sha256:'d'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true}],storage:{managed_bytes:42,registered_source_count:1,present_source_count:1,missing_source_count:0,deleted_source_count:0,changed_source_count:0,unsafe_source_count:0,orphan_file_count:0,orphan_bytes:0,unsafe_entry_count:0,free_bytes:1073741824,reserve_bytes:67108864,low_space:false},jobs:[],operations:[],turn:()=>new Promise(resolve=>setImmediate(resolve)),all};
 async function fetch(url,options={}){state.requests.push({url,method:options.method||'GET',body:options.body,headers:Object.fromEntries(options.headers.entries())});if(state.requestHook)await state.requestHook(url,options);let payload;
  if(url.endsWith('/session'))payload={csrf_token:'synthetic-session-nonce'};
@@ -46,6 +55,7 @@ async function fetch(url,options={}){state.requests.push({url,method:options.met
 let timer=0;const timers=new Map(),windowListeners=new Map();state.timers=timers;
 state.fireTimer=async id=>{const item=timers.get(id);if(!item)throw new Error('Missing timer');timers.delete(id);await item.callback();};
 state.windowEvent=async(name,event={})=>{for(const callback of windowListeners.get(name)||[])await callback(event);};
+state.documentEvent=async(name,event={})=>{for(const callback of documentListeners.get(name)||[])await callback(event);};
 const context=vm.createContext({document,fetch,Headers,AbortController,Blob,URL,crypto:require('node:crypto'),location:{href:'http://127.0.0.1/uploads'},window:{addEventListener(name,callback){if(!windowListeners.has(name))windowListeners.set(name,[]);windowListeners.get(name).push(callback);}},setTimeout:(callback,delay)=>{const id=++timer;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id),__test:state});
 (async()=>{vm.runInContext(fixture.script,context);await state.turn();const result=await vm.runInContext('(async()=>{'+fixture.exercise+'})()',context);await state.turn();process.stdout.write(JSON.stringify(result));})().catch(error=>{process.stderr.write(String(error.stack));process.exitCode=1;});
 """
@@ -175,7 +185,7 @@ confirm=__test.all($('accounts')).find(item=>item.tagName==='button'&&item.textC
 const afterPoll={visible:!!confirm,focused:document.activeElement===confirm,title:$('title').value};
 await confirm.dispatch('click');for(let i=0;i<5;i++)await __test.turn();
 card=[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32));
-return {afterFirst,afterPoll,card:card.textContent,choiceIds:__test.all($('account-choices')).filter(item=>item.tagName==='input').map(item=>item.value),posts:__test.requests.filter(item=>item.method==='POST').map(item=>({url:item.url,nonce:item.headers['x-upload-csrf']})),message:$('message').textContent,title:$('title').value};
+return {afterFirst,afterPoll,card:card.textContent,focusedAfter:document.activeElement===card,choiceIds:__test.all($('account-choices')).filter(item=>item.tagName==='input').map(item=>item.value),posts:__test.requests.filter(item=>item.method==='POST').map(item=>({url:item.url,nonce:item.headers['x-upload-csrf']})),message:$('message').textContent,title:$('title').value};
 """)
     assert result["afterFirst"]["posts"] == 0
     assert result["afterFirst"]["focused"] is True
@@ -186,6 +196,7 @@ return {afterFirst,afterPoll,card:card.textContent,choiceIds:__test.all($('accou
         "title": "保留正在编辑的标题",
     }
     assert "已断开本地账号" in result["card"]
+    assert result["focusedAfter"] is True
     assert "a" * 32 not in result["choiceIds"]
     assert result["posts"] == [{
         "url": "/api/v1/uploads/accounts/" + "a" * 32 + "/disconnect",
@@ -193,6 +204,72 @@ return {afterFirst,afterPoll,card:card.textContent,choiceIds:__test.all($('accou
     }]
     assert "已撤回" in result["message"]
     assert result["title"] == "保留正在编辑的标题"
+
+
+def test_login_tick_does_not_rewrite_unchanged_live_description():
+    result = run_upload_ui(r"""
+const accountId='a'.repeat(32);
+__test.operations=[{id:'e'.repeat(32),account_id:accountId,action:'login',state:'running',login_phase:'waiting_scan',qr_revision:1,qr_available:false,expires_at:Date.now()/1000+90}];
+await refresh();
+const description=$('login-description'),before=description._textWriteCount;
+renderLogin();renderLogin();
+return {text:description.textContent,writesBefore:before,writesAfter:description._textWriteCount};
+""")
+    assert "扫码" in result["text"]
+    assert result["writesAfter"] == result["writesBefore"]
+
+
+def test_job_validation_marks_and_focuses_the_first_invalid_control():
+    result = run_upload_ui(r"""
+const form=$('job-form'), error=$('job-form-error');
+for(const input of __test.all($('account-choices')).filter(item=>item.tagName==='input'))input.checked=false;
+await form.dispatch('submit');
+const account={text:error.textContent,invalid:$('account-selection').attributes['aria-invalid'],focused:document.activeElement===$('account-selection')};
+const bili=__test.all($('account-choices')).find(item=>item.tagName==='input'&&item.value==='a'.repeat(32));bili.checked=true;updateMetadata();
+$('source-id').value='';await form.dispatch('submit');
+const source={text:error.textContent,invalid:$('source-id').attributes['aria-invalid'],focused:document.activeElement===$('source-id')};
+$('source-id').value='c'.repeat(32);$('title').value='';await form.dispatch('submit');
+const title={text:error.textContent,invalid:$('title').attributes['aria-invalid'],focused:document.activeElement===$('title')};
+$('title').value='Synthetic';$('category-id').value='';$('copyright').value='';await form.dispatch('submit');
+const category={text:error.textContent,invalid:$('category-id').attributes['aria-invalid'],focused:document.activeElement===$('category-id')};
+$('category-id').value='21';await form.dispatch('submit');
+const copyright={text:error.textContent,invalid:$('copyright').attributes['aria-invalid'],focused:document.activeElement===$('copyright')};
+$('copyright').value='2';$('source-credit').value='';await form.dispatch('submit');
+const credit={text:error.textContent,invalid:$('source-credit').attributes['aria-invalid'],focused:document.activeElement===$('source-credit')};
+return {account,source,title,category,copyright,credit,posts:__test.requests.filter(item=>item.method==='POST').length,describedBy:$('source-id').attributes['aria-describedby']};
+""")
+    assert result["account"] == {
+        "text": "请选择至少一个账号。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["source"] == {
+        "text": "请先导入并选择视频。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["title"] == {
+        "text": "请填写标题。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["category"] == {
+        "text": "请填写 Bilibili 分区 ID。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["copyright"] == {
+        "text": "请选择 Bilibili 原创或转载。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["credit"] == {
+        "text": "转载必须填写来源。",
+        "invalid": "true",
+        "focused": True,
+    }
+    assert result["posts"] == 0
+    assert result["describedBy"] == "source-info job-form-error"
 
 
 def test_disconnect_cleanup_failure_is_visible_and_retryable():
@@ -641,3 +718,114 @@ return {found:!!target,focused,scrolled,persisted:!!afterPoll,text:afterPoll?.te
     assert "/api/v1/uploads/jobs/" + "2" * 32 in result["gets"]
     assert "/api/v1/uploads/sources/" + "7" * 32 in result["gets"]
     assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + "/retry"]
+
+
+def test_poll_reuses_keyed_account_source_and_job_nodes_with_local_state():
+    result = run_upload_ui(r"""
+const job={id:'1'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Unknown result',description:'Keep this',tags:['one'],mode:'publish',state:'unknown',code:'interrupted_result_unknown'};
+__test.jobs=[job];await refresh();
+const find=(root,tag,predicate=()=>true)=>__test.all(root).find(item=>item.tagName===tag&&predicate(item));
+const before={
+ account:[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32)),
+ choice:find($('account-choices'),'input',item=>item.value==='a'.repeat(32)),
+ option:find($('source-id'),'option',item=>item.value==='c'.repeat(32)),
+ source:[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32)),
+ job:[...$('jobs').children].find(item=>item.dataset.jobId===job.id)
+};
+before.details=find(before.job,'details');before.summary=find(before.job,'summary');before.ack=find(before.job,'input');before.retry=find(before.job,'button',item=>item.textContent==='重新创建本地草稿');
+before.choice.checked=true;await before.choice.dispatch('change');before.details.open=false;before.ack.checked=true;await before.ack.dispatch('change');before.retry.focus();
+__test.accounts.reverse();for(const item of [...__test.accounts,...__test.sources,...__test.jobs])item.updated_at='ignored-'+Math.random();await poll();
+const after={
+ account:[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32)),
+ choice:find($('account-choices'),'input',item=>item.value==='a'.repeat(32)),
+ option:find($('source-id'),'option',item=>item.value==='c'.repeat(32)),
+ source:[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32)),
+ job:[...$('jobs').children].find(item=>item.dataset.jobId===job.id)
+};
+after.details=find(after.job,'details');after.summary=find(after.job,'summary');after.ack=find(after.job,'input');after.retry=find(after.job,'button',item=>item.textContent==='重新创建本地草稿');
+return {same:Object.fromEntries(Object.keys(before).map(key=>[key,before[key]===after[key]])),checked:after.choice.checked,detailsOpen:after.details.open,acknowledged:after.ack.checked,focused:document.activeElement===after.retry,firstAccount:$('accounts').children[0].dataset.accountId,posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert all(result["same"].values())
+    assert result["checked"] and result["acknowledged"]
+    assert result["detailsOpen"] is False
+    assert result["focused"] is True
+    assert result["firstAccount"] == "b" * 32
+    assert result["posts"] == 0
+
+
+def test_job_card_updates_in_place_when_visible_server_state_changes():
+    result = run_upload_ui(r"""
+const job={id:'1'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Tracked',description:'',tags:[],mode:'publish',state:'running',code:''};
+__test.jobs=[job];await refresh();const before=[...$('jobs').children].find(item=>item.dataset.jobId===job.id),details=__test.all(before).find(item=>item.tagName==='details');details.open=false;
+job.state='submitted';job.code='upstream_submitted';job.updated_at='2026-09-07T12:34:56Z';await poll();const after=[...$('jobs').children].find(item=>item.dataset.jobId===job.id),afterDetails=__test.all(after).find(item=>item.tagName==='details');
+return {sameCard:before===after,copy:after.textContent,detailsOpen:afterDetails.open,hasCancel:__test.all(after).some(item=>item.tagName==='button'&&item.textContent==='取消'),posts:__test.requests.filter(item=>item.method==='POST').length};
+""")
+    assert result["sameCard"] is True
+    assert "上游报告投稿完成" in result["copy"]
+    assert result["detailsOpen"] is False
+    assert result["hasCancel"] is False
+    assert result["posts"] == 0
+
+
+def test_job_submit_uses_submit_time_snapshot_while_poll_is_pending():
+    result = run_upload_ui(r"""
+for(const input of __test.all($('account-choices')).filter(item=>item.tagName==='input'))input.checked=input.value==='a'.repeat(32);
+updateMetadata();$('title').value='Before poll';$('description').value='Before description';$('tags').value='one，two';$('category-id').value='21';$('copyright').value='2';$('source-credit').value='Before source';
+let release,hold=true;__test.requestHook=url=>{if(hold&&url.endsWith('/status')){hold=false;return new Promise(resolve=>release=resolve);}};
+const polling=poll();await __test.turn();await $('job-form').dispatch('submit');
+for(const input of __test.all($('account-choices')).filter(item=>item.tagName==='input'))input.checked=input.value==='b'.repeat(32);
+$('source-id').value='';$('title').value='After poll';$('description').value='After description';$('tags').value='changed';$('category-id').value='99';$('copyright').value='1';$('source-credit').value='After source';$('tencent-mode').value='draft';
+release();await polling;for(let index=0;index<8;index++)await __test.turn();
+const post=__test.requests.find(item=>item.method==='POST'&&item.url.endsWith('/jobs'));
+return {body:JSON.parse(post.body),postCount:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/jobs')).length,currentTitle:$('title').value};
+""")
+    assert result["postCount"] == 1
+    assert result["body"] | {
+        "source_id": "c" * 32,
+        "title": "Before poll",
+        "description": "Before description",
+        "tags": ["one", "two"],
+        "category_id": 21,
+        "copyright": 2,
+        "source_credit": "Before source",
+        "account_ids": ["a" * 32],
+        "mode": "publish",
+    } == result["body"]
+    assert result["currentTitle"] == "After poll"
+
+
+def test_ime_composition_blocks_account_and_job_submission_until_finished():
+    result = run_upload_ui(r"""
+$('account-name').value='Composing account';await $('account-name').dispatch('compositionstart');const accountKey=await $('account-name').dispatch('keydown',{key:'Enter',keyCode:229,isComposing:true});await $('account-form').dispatch('submit',{isComposing:true});
+const afterAccount=__test.requests.filter(item=>item.method==='POST').length;await $('account-name').dispatch('compositionend');
+for(const input of __test.all($('account-choices')).filter(item=>item.tagName==='input'))input.checked=input.value==='a'.repeat(32);updateMetadata();$('title').value='Composing title';$('category-id').value='21';$('copyright').value='1';await $('title').dispatch('compositionstart');const jobKey=await $('title').dispatch('keydown',{key:'Enter',keyCode:229,isComposing:true});await $('job-form').dispatch('submit',{isComposing:true});const duringJob=__test.requests.filter(item=>item.method==='POST').length;
+await $('title').dispatch('compositionend');await $('job-form').dispatch('submit');for(let index=0;index<6;index++)await __test.turn();
+return {accountPrevented:accountKey.defaultPrevented,jobPrevented:jobKey.defaultPrevented,afterAccount,duringJob,jobPosts:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/jobs')).length,accountPosts:__test.requests.filter(item=>item.method==='POST'&&item.url.endsWith('/accounts')).length};
+""")
+    assert result == {
+        "accountPrevented": True,
+        "jobPrevented": True,
+        "afterAccount": 0,
+        "duringJob": 0,
+        "jobPosts": 1,
+        "accountPosts": 0,
+    }
+
+
+def test_visibility_pause_clears_qr_and_resumes_one_poll_and_timer_pair():
+    result = run_upload_ui(r"""
+__test.operations=[{id:'e'.repeat(32),account_id:'a'.repeat(32),action:'login',state:'running',login_phase:'waiting_scan',qr_available:true,qr_revision:1,expires_at:Math.floor(Date.now()/1000)+120}];await refresh();for(let index=0;index<3;index++)await __test.turn();
+const beforeStatus=__test.requests.filter(item=>item.url.endsWith('/status')).length,beforeQR=__test.requests.filter(item=>item.url.endsWith('/qr')).length;
+document.hidden=true;await __test.documentEvent('visibilitychange');const paused={timers:__test.timers.size,qrHidden:$('login-qr').hidden,qrRemoved:!$('login-qr').src};await poll();const hiddenStatus=__test.requests.filter(item=>item.url.endsWith('/status')).length;
+document.hidden=false;await __test.documentEvent('visibilitychange');for(let index=0;index<3;index++)await __test.turn();await __test.documentEvent('visibilitychange');for(let index=0;index<2;index++)await __test.turn();
+return {paused,hiddenPollSkipped:hiddenStatus===beforeStatus,statusIncrease:__test.requests.filter(item=>item.url.endsWith('/status')).length-beforeStatus,qrIncrease:__test.requests.filter(item=>item.url.endsWith('/qr')).length-beforeQR,timers:[...__test.timers.values()].map(item=>item.delay).sort()};
+""")
+    assert result["paused"] == {
+        "timers": 0,
+        "qrHidden": True,
+        "qrRemoved": True,
+    }
+    assert result["hiddenPollSkipped"] is True
+    assert result["statusIncrease"] == 1
+    assert result["qrIncrease"] == 1
+    assert result["timers"] == [1000, 1500]

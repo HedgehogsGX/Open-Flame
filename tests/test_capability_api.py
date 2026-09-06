@@ -458,12 +458,12 @@ def test_home_page_exposes_three_capability_layers_with_safe_dom_updates(
         page = client.get("/")
 
     assert page.status_code == 200
-    assert "迭代 0.24.4" in page.text
-    assert "本次启动配置的默认平台 Cookie" in page.text
-    assert "双槽下载" in page.text
+    assert "Open-Flame · 下载" in page.text
+    assert '<a class="nav-link" href="/" aria-current="page">下载</a>' in page.text
+    assert "创建下载批次" in page.text
     assert "本次运行状态由应用心跳报告" in page.text
     assert "/api/v1/operations/runtime" in page.text
-    assert "实现、精确构建/环境证据与人工决定分别展示" in page.text
+    assert "实现、构建/环境证据与人工决定分别展示" in page.text
     assert "/api/v1/capability-snapshot" in page.text
     for endpoint in (
         "/api/v1/capability-implementations",

@@ -71,6 +71,9 @@ def test_frontend_executes_real_progress_renderer_for_active_phases(
         page = client.get("/")
 
     assert page.status_code == 200
+    helper_start = page.text.index("function reconcileKeyed(parent")
+    helper_end = page.text.index("function setListMessage(parent", helper_start)
+    helper = page.text[helper_start:helper_end]
     function_start = page.text.index("function renderJobProgress(payload)")
     function_end = page.text.index(
         "async function loadReadyAssets(payload, generation)", function_start
@@ -96,17 +99,31 @@ class Element {
   get textContent() {
     return this._textContent + this.children.map(child => child.textContent).join('');
   }
-  append(...children) {
+      append(...children) {
     for (const child of children) {
       if (typeof child === 'string') {
         const textNode = new Element('#text');
         textNode.textContent = child;
         this.children.push(textNode);
-      } else {
-        this.children.push(child);
+          } else {
+            child.parentElement = this;
+            this.children.push(child);
+          }
+        }
       }
-    }
-  }
+      insertBefore(child, reference) {
+        const oldIndex = this.children.indexOf(child);
+        if (oldIndex >= 0) this.children.splice(oldIndex, 1);
+        const index = reference === null ? this.children.length : this.children.indexOf(reference);
+        child.parentElement = this;
+        this.children.splice(index < 0 ? this.children.length : index, 0, child);
+      }
+      remove() {
+        if (!this.parentElement) return;
+        const index = this.parentElement.children.indexOf(this);
+        if (index >= 0) this.parentElement.children.splice(index, 1);
+        this.parentElement = null;
+      }
   replaceChildren(...children) {
     this._textContent = '';
     this.children = [];
@@ -145,7 +162,7 @@ process.stdout.write(JSON.stringify({downloading, postprocessing}));
 """
     completed = subprocess.run(
         [node],
-        input=harness + renderer + exercise,
+        input=harness + helper + renderer + exercise,
         text=True,
         encoding="utf-8",
         capture_output=True,

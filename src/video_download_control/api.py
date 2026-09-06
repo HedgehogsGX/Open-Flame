@@ -92,6 +92,7 @@ from .short_link_transport import (
 )
 from .short_links import ControlledShortLinkResolver
 from .toolchain import inspect_toolchain
+from .ui_assets import page_content_security_policy, ui_asset
 from .uploads.activity_lock import UploadActivityLease
 from .uploads.api import install_upload_routes
 from .uploads.service import default_upload_root
@@ -1154,8 +1155,36 @@ def create_app(
         )
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def index() -> str:
-        return INDEX_HTML
+    def index() -> HTMLResponse:
+        return HTMLResponse(
+            INDEX_HTML,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": page_content_security_policy(INDEX_HTML),
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "X-Frame-Options": "DENY",
+            },
+        )
+
+    def shared_ui_asset(name: str) -> Response:
+        payload, media_type = ui_asset(name)
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/assets/open-flame.css", include_in_schema=False)
+    def shared_stylesheet() -> Response:
+        return shared_ui_asset("open-flame.css")
+
+    @app.get("/assets/open-flame-shell.js", include_in_schema=False)
+    def shared_shell_script() -> Response:
+        return shared_ui_asset("open-flame-shell.js")
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

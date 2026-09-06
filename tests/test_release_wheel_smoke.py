@@ -30,7 +30,11 @@ def release_fixture(tmp_path, monkeypatch):
     config = (ROOT / "pyproject.toml").read_bytes()
     project = tomllib.loads(config.decode("utf-8"))["project"]
     version = project["version"]
-    source = {"deployment/requirements.runtime.lock": runtime, "pyproject.toml": config}
+    source = {
+        "deployment/requirements.runtime.lock": runtime,
+        "pyproject.toml": config,
+        **{name: (ROOT / name).read_bytes() for name in smoke.UI_ASSETS},
+    }
     wheel_name = f"video_download_control-{version}-py3-none-any.whl"
     wheel = b"synthetic verified project wheel"
     manifest = {
@@ -112,6 +116,7 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     result = smoke.verify_wheel_release(directory, work, wheelhouse=cache, allow_network=True)
     assert result["status"] == "passed" and result["console_scripts_verified"] == 14
     assert result["runtime_dependencies_verified"] == 13
+    assert result["ui_assets_verified"] == 2
     assert calls[0] == ("verify",)
     commands = [call[1] for call in calls[1:]]
     assert commands[0][:3] == ["-m", "venv", "--without-pip"]
@@ -125,7 +130,8 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     assert any(command[-1] == "check" for command in commands)
     project_lock = (work / "requirements.project-wheel.lock").read_text()
     assert "file:///" in project_lock and "%20" in project_lock
-    assert manifest["artifacts"]["video_download_control-0.24.4-py3-none-any.whl"]["sha256"] in project_lock
+    wheel_name = f"video_download_control-{manifest['version']}-py3-none-any.whl"
+    assert manifest["artifacts"][wheel_name]["sha256"] in project_lock
     assert "pytest" not in (work / "requirements.runtime.lock").read_text()
     probe = commands[-1]
     assert probe[:2] == ["-c", smoke.INSTALLED_PROBE]
@@ -133,6 +139,11 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     assert expected["product_identity"] == manifest["product_identity"]
     assert len(expected["scripts"]) == 14
     assert len(expected["runtime"]) == 13
+    assert expected["ui_assets"] == {
+        name.removeprefix("src/video_download_control/"):
+        manifest["source_files"][name]["sha256"]
+        for name in smoke.UI_ASSETS
+    }
     assert all(call[2] == work for call in calls[1:])
     assert json.loads((work / smoke.REPORT_NAME).read_text()) == result
     assert str(work) not in json.dumps(result)
