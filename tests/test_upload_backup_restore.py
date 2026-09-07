@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import sqlite3
+import struct
 import threading
+import zlib
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
@@ -20,6 +22,8 @@ from video_download_control.uploads.activity_lock import (
     upload_activity_lock,
 )
 from video_download_control.uploads.backup import (
+    UPLOAD_ASSET_PAYLOAD_PREFIX,
+    UPLOAD_BACKUP_FORMAT_VERSION,
     UPLOAD_BACKUP_MANIFEST_HASH_NAME,
     UPLOAD_BACKUP_MANIFEST_NAME,
     UPLOAD_BACKUP_METADATA_NAME,
@@ -32,6 +36,7 @@ from video_download_control.uploads.backup import (
 from video_download_control.uploads.contracts import UploadError
 from video_download_control.uploads.schema import (
     LEGACY_SCHEMA_DDL,
+    SCHEMA_V2_DDL,
     ensure_upload_schema,
     validate_upload_schema,
 )
@@ -45,6 +50,7 @@ SOURCE_PRESENT = "c" * 32
 SOURCE_MISSING = "d" * 32
 SOURCE_DELETED = "e" * 32
 PRESENT_BYTES = b"registered managed upload media\x00"
+ASSET_ID = "9" * 32
 
 
 class IdleBackend:
@@ -79,6 +85,24 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _png(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    scanlines = b"".join(b"\x00" + b"\x00\x00\x00" * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk("IHDR".encode(), struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(scanlines))
+        + chunk(b"IEND", b"")
+    )
+
+
 def _tree_bytes(root: Path) -> dict[str, bytes | None]:
     return {
         path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None
@@ -90,6 +114,7 @@ def _make_upload_root(tmp_path: Path, *, root: Path | None = None) -> Path:
     root = root or tmp_path / "upload-source"
     for relative in (
         "media",
+        "assets",
         "incoming",
         "runtime",
         "private/accounts/douyin",
@@ -205,6 +230,16 @@ def _make_upload_root(tmp_path: Path, *, root: Path | None = None) -> Path:
                     retry_of,
                 ),
             )
+        # This fixture represents a Schema-2 database after the 2→3 migration:
+        # pinned upstream defaults are now explicit and reviewable.
+        db.execute(
+            "UPDATE jobs SET platform_options=? WHERE account_id=?",
+            ('{"declaration":"内容由AI生成"}', ACCOUNT_ACTIVE),
+        )
+        db.execute(
+            "UPDATE jobs SET platform_options=? WHERE id=?",
+            ('{"content_label":"含AI生成内容","short_title":"batch，精"}', "2" * 32),
+        )
         db.executemany(
             "INSERT INTO operations(id,account_id,action,state,code,created_at,updated_at) "
             "VALUES(?,?,?,?,?,?,?)",
@@ -284,6 +319,90 @@ def _make_upload_root(tmp_path: Path, *, root: Path | None = None) -> Path:
     return root
 
 
+def _v2_request_digest(db: sqlite3.Connection, job_ids: list[str]) -> str:
+    db.row_factory = sqlite3.Row
+    rows = list(db.execute(
+        "SELECT j.*,a.platform FROM jobs j JOIN accounts a ON a.id=j.account_id "
+        f"WHERE j.id IN ({','.join('?' for _ in job_ids)})",
+        job_ids,
+    ))
+    by_id = {row["id"]: row for row in rows}
+    targets = []
+    for job_id in job_ids:
+        row = by_id[job_id]
+        targets.append({
+            "account_id": row["account_id"],
+            "platform": row["platform"],
+            "title": row["title"],
+            "description": row["description"],
+            "tags": json.loads(row["tags"]),
+            "category_id": row["category_id"],
+            "mode": row["mode"],
+            "copyright": row["copyright"],
+            "source_credit": row["source_credit"],
+            "cover_landscape_asset_id": row["cover_landscape_asset_id"],
+            "cover_portrait_asset_id": row["cover_portrait_asset_id"],
+            "publish_at_unix": row["publish_at_unix"],
+            "publish_timezone_offset_minutes": row[
+                "publish_timezone_offset_minutes"
+            ],
+            "platform_options": json.loads(row["platform_options"]),
+        })
+    payload = {
+        "source_id": rows[0]["source_id"],
+        "targets": sorted(targets, key=lambda target: target["account_id"]),
+    }
+    return _sha256(json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode())
+
+
+def _add_cover_and_v2_request(root: Path) -> bytes:
+    cover = _png(4, 3)
+    (root / "assets" / f"{ASSET_ID}.png").write_bytes(cover)
+    with sqlite3.connect(root / "uploads.sqlite3") as db:
+        db.execute(
+            "INSERT INTO upload_assets(id,kind,name,suffix,mime_type,size,sha256,width,"
+            "height,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                ASSET_ID,
+                "cover",
+                "cover.png",
+                ".png",
+                "image/png",
+                len(cover),
+                _sha256(cover),
+                4,
+                3,
+                "2026-09-07T00:00:00+00:00",
+            ),
+        )
+        db.execute(
+            "UPDATE jobs SET cover_landscape_asset_id=?,publish_at_unix=?,"
+            "publish_timezone_offset_minutes=?,platform_options=? WHERE id=?",
+            (
+                ASSET_ID,
+                1_900_002_600,
+                570,
+                '{"declaration":"内容由AI生成"}',
+                "1" * 32,
+            ),
+        )
+        db.execute(
+            "UPDATE jobs SET platform_options=? WHERE id=?",
+            ('{"content_label":null,"short_title":"batch，精"}', "2" * 32),
+        )
+        digest = _v2_request_digest(db, ["1" * 32, "2" * 32])
+        db.execute(
+            "UPDATE requests SET digest=?,digest_version=2 WHERE id='request-key'",
+            (digest,),
+        )
+    return cover
+
+
 def _manifest(backup_root: Path) -> dict:
     return json.loads((backup_root / UPLOAD_BACKUP_MANIFEST_NAME).read_text("utf-8"))
 
@@ -309,6 +428,158 @@ def _update_entry(backup_root: Path, relative: str) -> None:
     _rewrite_manifest(backup_root, manifest)
 
 
+def _write_format1_schema2_backup(
+    root: Path,
+    tags: list[str] | None = None,
+    *,
+    platform: str = "douyin",
+    job_state: str = "draft",
+) -> None:
+    payload = root / "payload"
+    media = payload / "media"
+    media.mkdir(parents=True)
+    database = payload / "uploads.sqlite3"
+    source_id = "0" * 32
+    account_id = "6" * 32
+    job_id = "7" * 32
+    media_bytes = b"legacy format one media"
+    (media / f"{source_id}.mp4").write_bytes(media_bytes)
+    now = "2026-09-07T00:00:00+00:00"
+    tags = [] if tags is None else tags
+    request_payload = [
+        source_id,
+        [account_id],
+        "legacy format",
+        "",
+        tags,
+        None,
+        "publish",
+        None,
+        "",
+    ]
+    with sqlite3.connect(database) as db:
+        db.executescript(SCHEMA_V2_DDL)
+        db.execute("INSERT INTO metadata VALUES(2)")
+        db.execute(
+            "INSERT INTO accounts(id,platform,name,auth_state,code,created_at,"
+            "lifecycle_state) VALUES(?,?,?,?,?,?,?)",
+            (account_id, platform, "legacy account", "checking", "", now, "active"),
+        )
+        db.execute(
+            "INSERT INTO sources(id,name,suffix,size,sha256,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                source_id,
+                "legacy.mp4",
+                ".mp4",
+                len(media_bytes),
+                _sha256(media_bytes),
+                now,
+            ),
+        )
+        db.execute(
+            "INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,"
+            "mode,copyright,source_credit,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                job_id,
+                account_id,
+                source_id,
+                "legacy format",
+                "",
+                json.dumps(tags, ensure_ascii=False),
+                None,
+                "publish",
+                1,
+                "",
+                now,
+                now,
+            ),
+        )
+        db.execute("UPDATE jobs SET state=? WHERE id=?", (job_state, job_id))
+        db.execute(
+            "INSERT INTO requests(id,digest,job_ids) VALUES(?,?,?)",
+            (
+                "legacy-format-request",
+                _sha256(json.dumps(
+                    request_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()),
+                json.dumps([job_id]),
+            ),
+        )
+    payload_entries = [
+        {
+            "path": UPLOAD_DATABASE_PAYLOAD_PATH,
+            "size_bytes": database.stat().st_size,
+            "sha256": _sha256(database.read_bytes()),
+        },
+        {
+            "path": f"payload/media/{source_id}.mp4",
+            "size_bytes": len(media_bytes),
+            "sha256": _sha256(media_bytes),
+        },
+    ]
+    metadata = {
+        "format_version": 1,
+        "created_at": now,
+        "application_version": "0.25.0",
+        "schema_version": 2,
+        "database_payload_path": UPLOAD_DATABASE_PAYLOAD_PATH,
+        "media_payload_prefix": "payload/media",
+        "payload_file_count": len(payload_entries),
+        "payload_total_bytes": sum(entry["size_bytes"] for entry in payload_entries),
+        "consistency": "exclusive_upload_activity_and_worker_plus_stable_sqlite_snapshot",
+        "excluded_paths": [
+            ".open-flame-setup.lock",
+            ".worker.lock",
+            "incoming",
+            "private",
+            "runtime",
+        ],
+        "media_scope": "registered_present_media_only",
+        "secret_material_included": False,
+        "account_fields": [
+            "id",
+            "platform",
+            "name",
+            "auth_state",
+            "code",
+            "created_at",
+            "lifecycle_state",
+            "disconnected_at",
+        ],
+        "preserved_tables": ["accounts", "sources", "jobs", "operations", "requests"],
+        "restore_policy": {
+            "ready_or_checking_account": "unchecked_account_missing",
+            "queued_job": "draft_restart_confirmation_required",
+            "running_job": "unknown_interrupted_result_unknown",
+            "queued_or_running_operation": "failed_operation_interrupted",
+        },
+    }
+    metadata_path = root / UPLOAD_BACKUP_METADATA_NAME
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    entries = [
+        {
+            "path": UPLOAD_BACKUP_METADATA_NAME,
+            "size_bytes": metadata_path.stat().st_size,
+            "sha256": _sha256(metadata_path.read_bytes()),
+        },
+        *payload_entries,
+    ]
+    entries.sort(key=lambda entry: entry["path"].casefold())
+    _rewrite_manifest(root, {
+        "format_version": 1,
+        "algorithm": "sha256",
+        "metadata_path": UPLOAD_BACKUP_METADATA_NAME,
+        "entries": entries,
+    })
+
+
 def _write_windows_ads_or_skip(path: Path, payload: bytes) -> Path:
     stream = Path(str(path) + ":open_flame_test")
     try:
@@ -326,7 +597,8 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
     backup = create_upload_backup(source_root=source, backup_target=backup_root)
 
     assert _tree_bytes(source) == source_before
-    assert backup.schema_version == 2
+    assert backup.schema_version == 3
+    assert UPLOAD_BACKUP_FORMAT_VERSION == 2
     payload_media = backup_root.joinpath(*UPLOAD_MEDIA_PAYLOAD_PREFIX.parts)
     assert {path.name for path in payload_media.iterdir()} == {f"{SOURCE_PRESENT}.mp4"}
     all_backup_bytes = b"".join(
@@ -340,6 +612,9 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
         "exclusive_upload_activity_and_worker_plus_stable_sqlite_snapshot"
     )
     assert metadata["media_scope"] == "registered_present_media_only"
+    assert metadata["asset_scope"] == "registered_present_cover_assets_only"
+    assert metadata["asset_payload_prefix"] == UPLOAD_ASSET_PAYLOAD_PREFIX.as_posix()
+    assert "upload_assets" in metadata["preserved_tables"]
     assert metadata["excluded_paths"] == [
         ".open-flame-setup.lock",
         ".worker.lock",
@@ -355,6 +630,7 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
     validate_upload_schema(restored.database_path)
     assert {path.relative_to(restored_root).as_posix() for path in restored_root.rglob("*")} == {
         "media",
+        "assets",
         f"media/{SOURCE_PRESENT}.mp4",
         "uploads.sqlite3",
     }
@@ -380,6 +656,259 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
         assert sources[SOURCE_MISSING]["media_state"] == "missing"
         assert sources[SOURCE_DELETED]["media_state"] == "deleted"
         assert list(db.execute("PRAGMA foreign_key_check")) == []
+
+
+def test_format2_round_trip_preserves_cover_schedule_options_and_v2_digest(tmp_path):
+    source = _make_upload_root(tmp_path)
+    cover = _add_cover_and_v2_request(source)
+    before = _tree_bytes(source)
+    backup_root = tmp_path / "format2-cover-backup"
+
+    create_upload_backup(source_root=source, backup_target=backup_root)
+
+    assert _tree_bytes(source) == before
+    payload_assets = backup_root.joinpath(*UPLOAD_ASSET_PAYLOAD_PREFIX.parts)
+    assert (payload_assets / f"{ASSET_ID}.png").read_bytes() == cover
+    assert any(
+        entry["path"] == f"payload/assets/{ASSET_ID}.png"
+        for entry in _manifest(backup_root)["entries"]
+    )
+
+    restored = tmp_path / "format2-cover-restored"
+    restore_upload_backup(backup_root=backup_root, restore_root=restored)
+
+    assert (restored / "assets" / f"{ASSET_ID}.png").read_bytes() == cover
+    with sqlite3.connect(restored / "uploads.sqlite3") as db:
+        assert db.execute(
+            "SELECT mime_type,width,height,media_state FROM upload_assets WHERE id=?",
+            (ASSET_ID,),
+        ).fetchone() == ("image/png", 4, 3, "present")
+        assert db.execute(
+            "SELECT cover_landscape_asset_id,publish_at_unix,"
+            "publish_timezone_offset_minutes,platform_options FROM jobs WHERE id=?",
+            ("1" * 32,),
+        ).fetchone() == (
+            ASSET_ID,
+                1_900_002_600,
+            570,
+            '{"declaration":"内容由AI生成"}',
+        )
+        assert db.execute(
+            "SELECT digest_version FROM requests WHERE id='request-key'"
+        ).fetchone() == (2,)
+
+
+@pytest.mark.parametrize(
+    ("title", "short_title", "expected"),
+    [
+        ("主标题测试", "abc,def", "abc def"),
+        ("abc", None, "abc，精彩内"),
+        ("一二三四，五六七", None, "一二三四五六七"),
+    ],
+)
+def test_service_reachable_tencent_short_titles_can_be_backed_up(
+    tmp_path, title, short_title, expected
+):
+    root = tmp_path / "reachable-short-title"
+    service = UploadService(root, IdleBackend())
+    service.start()
+    try:
+        account = service.add_account("tencent", "backup account")
+        video = tmp_path / "reachable.mp4"
+        video.write_bytes(b"reachable tencent short title")
+        source = service.import_source(video, video.name)
+        options = {} if short_title is None else {"short_title": short_title}
+        job = service.create_jobs(
+            source_id=source["id"],
+            account_ids=[account["id"]],
+            title=title,
+            description="",
+            tags=[],
+            idempotency_key="reachable-short-title",
+            target_overrides=[{
+                "account_id": account["id"],
+                "platform_options": options,
+            }],
+        )[0]
+        assert job["platform_options"]["short_title"] == expected
+    finally:
+        service.stop()
+
+    result = create_upload_backup(
+        source_root=root,
+        backup_target=tmp_path / "reachable-short-title-backup",
+    )
+    assert result.schema_version == 3
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        ("asset_mime", "upload cover asset metadata is invalid"),
+        ("options_noncanonical", "upload job platform options are not canonical"),
+        ("options_unknown", "upload job platform option is unsupported"),
+        ("tencent_short_title_null", "upload job platform options are invalid"),
+        ("tencent_short_title_noncanonical", "upload job platform options are invalid"),
+        ("schedule_unpaired", "upload job schedule metadata is invalid"),
+        ("douyin_cover_orientation", "upload job cover metadata is invalid"),
+        ("v2_digest", "upload request digest does not match its jobs"),
+        ("retry_cover", "upload retry payload differs from its parent"),
+    ],
+)
+def test_format2_rejects_rehashed_cover_and_platform_contract_damage(
+    tmp_path, damage, expected
+):
+    source = _make_upload_root(tmp_path)
+    _add_cover_and_v2_request(source)
+    backup_root = tmp_path / f"format2-{damage}-backup"
+    create_upload_backup(source_root=source, backup_target=backup_root)
+    database = backup_root.joinpath(*Path(UPLOAD_DATABASE_PAYLOAD_PATH).parts)
+    with sqlite3.connect(database) as db:
+        if damage == "asset_mime":
+            db.execute(
+                "UPDATE upload_assets SET mime_type='image/jpeg' WHERE id=?",
+                (ASSET_ID,),
+            )
+        elif damage == "options_noncanonical":
+            db.execute(
+                "UPDATE jobs SET platform_options=? WHERE id=?",
+                ('{"declaration": "内容由AI生成"}', "1" * 32),
+            )
+        elif damage == "options_unknown":
+            db.execute(
+                "UPDATE jobs SET platform_options=? WHERE id=?",
+                ('{"declaration":"内容由AI生成","product":"x"}', "1" * 32),
+            )
+        elif damage == "tencent_short_title_null":
+            db.execute(
+                "UPDATE jobs SET platform_options=? WHERE id=?",
+                ('{"content_label":null,"short_title":null}', "2" * 32),
+            )
+        elif damage == "tencent_short_title_noncanonical":
+            db.execute(
+                "UPDATE jobs SET platform_options=? WHERE id=?",
+                ('{"content_label":null,"short_title":"invalid_title"}', "2" * 32),
+            )
+        elif damage == "schedule_unpaired":
+            db.execute(
+                "UPDATE jobs SET publish_timezone_offset_minutes=NULL WHERE id=?",
+                ("1" * 32,),
+            )
+        elif damage == "douyin_cover_orientation":
+            db.execute(
+                "UPDATE jobs SET cover_landscape_asset_id=NULL,"
+                "cover_portrait_asset_id=? WHERE id=?",
+                (ASSET_ID, "1" * 32),
+            )
+        elif damage == "v2_digest":
+            db.execute(
+                "UPDATE requests SET digest=? WHERE id='request-key'",
+                ("4" * 64,),
+            )
+        else:
+            db.execute(
+                "UPDATE jobs SET cover_landscape_asset_id=? WHERE id=?",
+                (ASSET_ID, "4" * 32),
+            )
+    _update_entry(backup_root, UPLOAD_DATABASE_PAYLOAD_PATH)
+
+    target = tmp_path / f"format2-{damage}-restored"
+    with pytest.raises(UploadBackupError, match=expected):
+        restore_upload_backup(backup_root=backup_root, restore_root=target)
+    assert not target.exists()
+
+
+def test_format1_schema2_restores_via_staged_migration_without_changing_backup(tmp_path):
+    backup_root = tmp_path / "legacy-format1-backup"
+    _write_format1_schema2_backup(backup_root)
+    before = _tree_bytes(backup_root)
+    restored = tmp_path / "legacy-format1-restored"
+
+    result = restore_upload_backup(backup_root=backup_root, restore_root=restored)
+
+    assert _tree_bytes(backup_root) == before
+    assert result.schema_version == 3
+    assert (restored / "assets").is_dir()
+    assert list((restored / "assets").iterdir()) == []
+    validate_upload_schema(restored / "uploads.sqlite3")
+    with sqlite3.connect(restored / "uploads.sqlite3") as db:
+        assert db.execute("SELECT version FROM metadata").fetchone() == (3,)
+        assert db.execute("SELECT COUNT(*) FROM upload_assets").fetchone() == (0,)
+        assert db.execute(
+            "SELECT platform_options,cover_landscape_asset_id,publish_at_unix FROM jobs"
+        ).fetchone() == ('{"declaration":"内容由AI生成"}', None, None)
+        assert db.execute(
+            "SELECT digest_version FROM requests"
+        ).fetchone() == (1,)
+
+
+def test_format1_schema2_legacy_tags_migrate_before_strict_schema3_audit(tmp_path):
+    backup_root = tmp_path / "legacy-tags-format1"
+    _write_format1_schema2_backup(backup_root, ["#topic", "中文，标签"])
+    restored = tmp_path / "legacy-tags-restored"
+
+    restore_upload_backup(backup_root=backup_root, restore_root=restored)
+
+    with sqlite3.connect(restored / "uploads.sqlite3") as db:
+        assert json.loads(db.execute("SELECT tags FROM jobs").fetchone()[0]) == [
+            "topic", "中文、标签",
+        ]
+        assert db.execute("SELECT digest_version FROM requests").fetchone() == (1,)
+    (restored / ".worker.lock").write_bytes(b"0")
+    create_upload_backup(
+        source_root=restored,
+        backup_target=tmp_path / "post-migration-format2",
+    )
+
+
+def test_format1_schema2_tencent_short_title_restores_and_rebacks_up(tmp_path):
+    backup_root = tmp_path / "legacy-tencent-format1"
+    _write_format1_schema2_backup(backup_root, platform="tencent")
+    restored = tmp_path / "legacy-tencent-restored"
+
+    restore_upload_backup(backup_root=backup_root, restore_root=restored)
+
+    with sqlite3.connect(restored / "uploads.sqlite3") as db:
+        assert db.execute(
+            "SELECT platform_options,state,code FROM jobs"
+        ).fetchone() == (
+            '{"content_label":"含AI生成内容","short_title":"legacyformat"}',
+            "draft",
+            "legacy_platform_options_review_required",
+        )
+    (restored / ".worker.lock").write_bytes(b"0")
+    result = create_upload_backup(
+        source_root=restored,
+        backup_target=tmp_path / "legacy-tencent-format2",
+    )
+    assert result.schema_version == 3
+
+
+@pytest.mark.parametrize(
+    ("original_state", "expected_state", "expected_code"),
+    [
+        ("queued", "draft", "legacy_metadata_restart_confirmation_required"),
+        ("running", "unknown", "legacy_metadata_interrupted_result_unknown"),
+    ],
+)
+def test_format1_schema2_restore_preserves_legacy_review_and_interruption_reason(
+    tmp_path, original_state, expected_state, expected_code
+):
+    backup_root = tmp_path / f"legacy-{original_state}-format1"
+    _write_format1_schema2_backup(
+        backup_root,
+        platform="tencent",
+        job_state=original_state,
+    )
+    restored = tmp_path / f"legacy-{original_state}-restored"
+
+    restore_upload_backup(backup_root=backup_root, restore_root=restored)
+
+    with sqlite3.connect(restored / "uploads.sqlite3") as db:
+        assert db.execute("SELECT state,code FROM jobs").fetchone() == (
+            expected_state,
+            expected_code,
+        )
 
 
 def test_schema_one_is_rejected_without_mutating_source_or_publishing_target(tmp_path):
@@ -593,7 +1122,7 @@ def test_rehashed_database_schema_tamper_is_still_rejected(tmp_path):
     relative = UPLOAD_DATABASE_PAYLOAD_PATH
     database = backup_root.joinpath(*Path(relative).parts)
     with sqlite3.connect(database) as db:
-        db.execute("UPDATE metadata SET version=3")
+        db.execute("UPDATE metadata SET version=4")
     _update_entry(backup_root, relative)
     target = tmp_path / "schema-tamper-restore"
 
@@ -1118,7 +1647,7 @@ def test_backup_failure_and_restore_failure_remove_private_staging(tmp_path, mon
     create_upload_backup(source_root=source, backup_target=valid_backup)
     restore_target = tmp_path / "failed-restore"
 
-    def fail_policy(_path):
+    def fail_policy(_path, _original_job_states):
         raise UploadBackupError("injected restore policy failure")
 
     monkeypatch.setattr(upload_backup, "_apply_restore_state_policy", fail_policy)
@@ -1239,15 +1768,16 @@ def test_service_category_id_round_trips_through_backup_and_restore(tmp_path):
     service = UploadService(source_root, IdleBackend())
     media = tmp_path / "category-source.mp4"
     media.write_bytes(b"service category payload")
-    account = service.add_account("douyin", "category account")
+    account = service.add_account("bilibili", "category account")
     imported = service.import_source(media, media.name)
     job = service.create_jobs(
         source_id=imported["id"],
         account_ids=[account["id"]],
         title="category round trip",
         description="",
-        tags=[],
+        tags=["category"],
         category_id=249,
+        copyright=1,
         idempotency_key="category_round_trip",
     )[0]
     assert job["category_id"] == 249
@@ -1427,10 +1957,10 @@ def test_restore_reserves_target_until_policy_and_publish_finish(tmp_path, monke
     original_policy = upload_backup._apply_restore_state_policy
     outcome: list[object] = []
 
-    def paused_policy(database_path: Path) -> None:
+    def paused_policy(database_path: Path, original_job_states) -> None:
         entered.set()
         assert release.wait(10)
-        original_policy(database_path)
+        original_policy(database_path, original_job_states)
 
     def run_restore() -> None:
         try:
@@ -1562,13 +2092,24 @@ def test_restore_of_rehashed_wal_database_never_opens_or_changes_backup_source(
             pytest.fail("restore opened the immutable backup database through SQLite")
         return original_connect(path, *args, **kwargs)
 
-    def observing_audit(*, database_path: Path, media_root: Path) -> None:
+    def observing_audit(
+        *,
+        database_path: Path,
+        media_root: Path,
+        asset_root: Path | None = None,
+        schema_version: int | None = None,
+    ) -> None:
         assert not database_path.is_relative_to(backup_root)
         assert _tree_bytes(backup_root) == source_before
         assert not Path(str(payload_database) + "-wal").exists()
         assert not Path(str(payload_database) + "-shm").exists()
         audited.append(database_path)
-        original_audit(database_path=database_path, media_root=media_root)
+        original_audit(
+            database_path=database_path,
+            media_root=media_root,
+            asset_root=asset_root,
+            schema_version=schema_version,
+        )
 
     monkeypatch.setattr(upload_backup.sqlite3, "connect", guarded_connect)
     monkeypatch.setattr(upload_backup, "_audit_database_and_media", observing_audit)
@@ -1605,7 +2146,7 @@ def test_semantic_damage_is_rejected_in_staging_before_restore_policy(
     source_before = _tree_bytes(backup_root)
     policy_called = False
 
-    def unexpected_policy(_database_path: Path) -> None:
+    def unexpected_policy(_database_path: Path, _original_job_states) -> None:
         nonlocal policy_called
         policy_called = True
         pytest.fail("restore policy ran before the raw staged database audit")

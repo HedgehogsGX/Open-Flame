@@ -60,7 +60,7 @@ def test_third_party_python_license_copies_match_audited_hash_manifest() -> None
         for path in (ROOT / "licenses" / "python").glob("*/*")
         if path.is_file()
     }
-    assert len(expected) == 29
+    assert len(expected) == 30
     assert actual_paths == set(expected)
     for relative_path, digest in expected.items():
         payload = (ROOT / relative_path).read_bytes()
@@ -79,7 +79,7 @@ def test_notices_cover_every_audited_python_distribution() -> None:
         if line
     }
 
-    assert len(directories) == 26
+    assert len(directories) == 27
     for directory in directories:
         distribution = directory.rsplit("-", 1)[0].replace("_", "-")
         assert distribution.casefold() in notices

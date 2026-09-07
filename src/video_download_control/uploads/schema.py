@@ -13,7 +13,10 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-SCHEMA_VERSION = 2
+from .contracts import normalize_tencent_short_title
+
+SCHEMA_VERSION = 3
+_SCHEMA_V2_VERSION = 2
 
 LEGACY_SCHEMA_STATEMENTS = (
     "CREATE TABLE metadata(version INTEGER NOT NULL)",
@@ -41,7 +44,7 @@ LEGACY_SCHEMA_STATEMENTS = (
 )
 LEGACY_SCHEMA_DDL = ";\n".join(LEGACY_SCHEMA_STATEMENTS) + ";"
 
-SCHEMA_TABLE_STATEMENTS = (
+SCHEMA_V2_TABLE_STATEMENTS = (
     "CREATE TABLE metadata(version INTEGER NOT NULL)",
     """CREATE TABLE \"accounts\"(
  id TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL,
@@ -68,11 +71,46 @@ SCHEMA_TABLE_STATEMENTS = (
     """CREATE TABLE requests(
  id TEXT PRIMARY KEY, digest TEXT NOT NULL, job_ids TEXT NOT NULL)""",
 )
-SCHEMA_INDEX_STATEMENTS = (
+SCHEMA_V2_INDEX_STATEMENTS = (
     "CREATE UNIQUE INDEX accounts_active_name ON accounts(platform,name) WHERE lifecycle_state='active'",
     "CREATE INDEX jobs_account_state ON jobs(account_id,state)",
     "CREATE INDEX jobs_source_state ON jobs(source_id,state)",
     "CREATE INDEX operations_account_state ON operations(account_id,state)",
+)
+SCHEMA_V2_STATEMENTS = SCHEMA_V2_TABLE_STATEMENTS + SCHEMA_V2_INDEX_STATEMENTS
+SCHEMA_V2_DDL = ";\n".join(SCHEMA_V2_STATEMENTS) + ";"
+
+SCHEMA_TABLE_STATEMENTS = (
+    SCHEMA_V2_TABLE_STATEMENTS[0],
+    SCHEMA_V2_TABLE_STATEMENTS[1],
+    SCHEMA_V2_TABLE_STATEMENTS[2],
+    """CREATE TABLE upload_assets(
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind='cover'),
+ name TEXT NOT NULL, suffix TEXT NOT NULL, mime_type TEXT NOT NULL,
+ size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER NOT NULL,
+ height INTEGER NOT NULL, created_at TEXT NOT NULL,
+ media_state TEXT NOT NULL DEFAULT 'present'
+ CHECK(media_state IN ('present','missing','deleted')), deleted_at TEXT)""",
+    """CREATE TABLE jobs(
+ id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
+ source_id TEXT NOT NULL REFERENCES sources(id), title TEXT NOT NULL,
+ description TEXT NOT NULL, tags TEXT NOT NULL, category_id INTEGER,
+ mode TEXT NOT NULL, copyright INTEGER NOT NULL, source_credit TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'draft', code TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ retry_of TEXT REFERENCES jobs(id),
+ cover_landscape_asset_id TEXT REFERENCES upload_assets(id),
+ cover_portrait_asset_id TEXT REFERENCES upload_assets(id),
+ publish_at_unix INTEGER, publish_timezone_offset_minutes INTEGER,
+ platform_options TEXT NOT NULL DEFAULT '{}')""",
+    SCHEMA_V2_TABLE_STATEMENTS[4],
+    """CREATE TABLE requests(
+ id TEXT PRIMARY KEY, digest TEXT NOT NULL, job_ids TEXT NOT NULL,
+ digest_version INTEGER NOT NULL DEFAULT 1)""",
+)
+SCHEMA_INDEX_STATEMENTS = SCHEMA_V2_INDEX_STATEMENTS + (
+    "CREATE INDEX jobs_cover_landscape_state ON jobs(cover_landscape_asset_id,state)",
+    "CREATE INDEX jobs_cover_portrait_state ON jobs(cover_portrait_asset_id,state)",
 )
 SCHEMA_STATEMENTS = SCHEMA_TABLE_STATEMENTS + SCHEMA_INDEX_STATEMENTS
 SCHEMA_DDL = ";\n".join(SCHEMA_STATEMENTS) + ";"
@@ -132,16 +170,50 @@ _LEGACY_COLUMNS = {
         (2, "job_ids", "TEXT", 1, None, 0, 0),
     ),
 }
-_COLUMNS = dict(_LEGACY_COLUMNS)
-_COLUMNS["accounts"] = _LEGACY_COLUMNS["accounts"] + (
+_V2_COLUMNS = dict(_LEGACY_COLUMNS)
+_V2_COLUMNS["accounts"] = _LEGACY_COLUMNS["accounts"] + (
     (6, "lifecycle_state", "TEXT", 1, "'active'", 0, 0),
     (7, "disconnected_at", "TEXT", 0, None, 0, 0),
 )
-_COLUMNS["sources"] = _LEGACY_COLUMNS["sources"] + (
+_V2_COLUMNS["sources"] = _LEGACY_COLUMNS["sources"] + (
     (6, "media_state", "TEXT", 1, "'present'", 0, 0),
     (7, "deleted_at", "TEXT", 0, None, 0, 0),
 )
-_COLUMNS_BY_VERSION = {1: _LEGACY_COLUMNS, SCHEMA_VERSION: _COLUMNS}
+_COLUMNS = {
+    "metadata": _V2_COLUMNS["metadata"],
+    "accounts": _V2_COLUMNS["accounts"],
+    "sources": _V2_COLUMNS["sources"],
+    "upload_assets": (
+        (0, "id", "TEXT", 0, None, 1, 0),
+        (1, "kind", "TEXT", 1, None, 0, 0),
+        (2, "name", "TEXT", 1, None, 0, 0),
+        (3, "suffix", "TEXT", 1, None, 0, 0),
+        (4, "mime_type", "TEXT", 1, None, 0, 0),
+        (5, "size", "INTEGER", 1, None, 0, 0),
+        (6, "sha256", "TEXT", 1, None, 0, 0),
+        (7, "width", "INTEGER", 1, None, 0, 0),
+        (8, "height", "INTEGER", 1, None, 0, 0),
+        (9, "created_at", "TEXT", 1, None, 0, 0),
+        (10, "media_state", "TEXT", 1, "'present'", 0, 0),
+        (11, "deleted_at", "TEXT", 0, None, 0, 0),
+    ),
+    "jobs": _V2_COLUMNS["jobs"] + (
+        (15, "cover_landscape_asset_id", "TEXT", 0, None, 0, 0),
+        (16, "cover_portrait_asset_id", "TEXT", 0, None, 0, 0),
+        (17, "publish_at_unix", "INTEGER", 0, None, 0, 0),
+        (18, "publish_timezone_offset_minutes", "INTEGER", 0, None, 0, 0),
+        (19, "platform_options", "TEXT", 1, "'{}'", 0, 0),
+    ),
+    "operations": _V2_COLUMNS["operations"],
+    "requests": _V2_COLUMNS["requests"] + (
+        (3, "digest_version", "INTEGER", 1, "1", 0, 0),
+    ),
+}
+_COLUMNS_BY_VERSION = {
+    1: _LEGACY_COLUMNS,
+    _SCHEMA_V2_VERSION: _V2_COLUMNS,
+    SCHEMA_VERSION: _COLUMNS,
+}
 
 _LEGACY_INDEXES = {
     "metadata": set(),
@@ -154,7 +226,7 @@ _LEGACY_INDEXES = {
     "operations": {("pk", 1, 0, (("id", 0, "BINARY"),))},
     "requests": {("pk", 1, 0, (("id", 0, "BINARY"),))},
 }
-_INDEXES = {
+_V2_INDEXES = {
     "metadata": set(),
     "accounts": {
         ("pk", 1, 0, (("id", 0, "BINARY"),)),
@@ -172,8 +244,18 @@ _INDEXES = {
     },
     "requests": {("pk", 1, 0, (("id", 0, "BINARY"),))},
 }
-_INDEXES_BY_VERSION = {1: _LEGACY_INDEXES, SCHEMA_VERSION: _INDEXES}
-_FOREIGN_KEYS = {
+_INDEXES = dict(_V2_INDEXES)
+_INDEXES["upload_assets"] = {("pk", 1, 0, (("id", 0, "BINARY"),))}
+_INDEXES["jobs"] = _V2_INDEXES["jobs"] | {
+    ("c", 0, 0, (("cover_landscape_asset_id", 0, "BINARY"), ("state", 0, "BINARY"))),
+    ("c", 0, 0, (("cover_portrait_asset_id", 0, "BINARY"), ("state", 0, "BINARY"))),
+}
+_INDEXES_BY_VERSION = {
+    1: _LEGACY_INDEXES,
+    _SCHEMA_V2_VERSION: _V2_INDEXES,
+    SCHEMA_VERSION: _INDEXES,
+}
+_V2_FOREIGN_KEYS = {
     "metadata": set(),
     "accounts": set(),
     "sources": set(),
@@ -187,7 +269,17 @@ _FOREIGN_KEYS = {
     },
     "requests": set(),
 }
-_FOREIGN_KEYS_BY_VERSION = {1: _FOREIGN_KEYS, SCHEMA_VERSION: _FOREIGN_KEYS}
+_FOREIGN_KEYS = dict(_V2_FOREIGN_KEYS)
+_FOREIGN_KEYS["upload_assets"] = set()
+_FOREIGN_KEYS["jobs"] = _V2_FOREIGN_KEYS["jobs"] | {
+    ("upload_assets", "cover_landscape_asset_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    ("upload_assets", "cover_portrait_asset_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+}
+_FOREIGN_KEYS_BY_VERSION = {
+    1: _V2_FOREIGN_KEYS,
+    _SCHEMA_V2_VERSION: _V2_FOREIGN_KEYS,
+    SCHEMA_VERSION: _FOREIGN_KEYS,
+}
 
 
 def _normalized_sql(statement: str) -> str:
@@ -215,16 +307,30 @@ _LEGACY_CANONICAL_SQL = {
     name: _normalized_sql(statement)
     for name, statement in zip(_LEGACY_COLUMNS, LEGACY_SCHEMA_STATEMENTS, strict=True)
 }
+_V2_CANONICAL_SQL = {
+    name: _normalized_sql(statement)
+    for name, statement in zip(_V2_COLUMNS, SCHEMA_V2_TABLE_STATEMENTS, strict=True)
+}
 _CANONICAL_SQL = {
     name: _normalized_sql(statement)
     for name, statement in zip(_COLUMNS, SCHEMA_TABLE_STATEMENTS, strict=True)
 }
 _CANONICAL_SQL_BY_VERSION = {
     1: _LEGACY_CANONICAL_SQL,
+    _SCHEMA_V2_VERSION: _V2_CANONICAL_SQL,
     SCHEMA_VERSION: _CANONICAL_SQL,
 }
 _EXPLICIT_INDEX_SQL_BY_VERSION = {
     1: {},
+    _SCHEMA_V2_VERSION: {
+        name: (owner, _normalized_sql(statement))
+        for name, owner, statement in (
+            ("accounts_active_name", "accounts", SCHEMA_V2_INDEX_STATEMENTS[0]),
+            ("jobs_account_state", "jobs", SCHEMA_V2_INDEX_STATEMENTS[1]),
+            ("jobs_source_state", "jobs", SCHEMA_V2_INDEX_STATEMENTS[2]),
+            ("operations_account_state", "operations", SCHEMA_V2_INDEX_STATEMENTS[3]),
+        )
+    },
     SCHEMA_VERSION: {
         name: (owner, _normalized_sql(statement))
         for name, owner, statement in (
@@ -232,6 +338,8 @@ _EXPLICIT_INDEX_SQL_BY_VERSION = {
             ("jobs_account_state", "jobs", SCHEMA_INDEX_STATEMENTS[1]),
             ("jobs_source_state", "jobs", SCHEMA_INDEX_STATEMENTS[2]),
             ("operations_account_state", "operations", SCHEMA_INDEX_STATEMENTS[3]),
+            ("jobs_cover_landscape_state", "jobs", SCHEMA_INDEX_STATEMENTS[4]),
+            ("jobs_cover_portrait_state", "jobs", SCHEMA_INDEX_STATEMENTS[5]),
         )
     },
 }
@@ -258,14 +366,26 @@ _MIGRATION_V1_TO_V2 = (
  SELECT id,platform,name,auth_state,code,created_at FROM accounts""",
     "DROP TABLE accounts",
     "ALTER TABLE accounts_v2 RENAME TO accounts",
-    SCHEMA_INDEX_STATEMENTS[0],
+    SCHEMA_V2_INDEX_STATEMENTS[0],
     """ALTER TABLE sources ADD COLUMN media_state TEXT NOT NULL DEFAULT 'present'
  CHECK(media_state IN ('present','missing','deleted'))""",
     "ALTER TABLE sources ADD COLUMN deleted_at TEXT",
-    SCHEMA_INDEX_STATEMENTS[1],
-    SCHEMA_INDEX_STATEMENTS[2],
-    SCHEMA_INDEX_STATEMENTS[3],
-    f"UPDATE metadata SET version={SCHEMA_VERSION}",
+    SCHEMA_V2_INDEX_STATEMENTS[1],
+    SCHEMA_V2_INDEX_STATEMENTS[2],
+    SCHEMA_V2_INDEX_STATEMENTS[3],
+    "UPDATE metadata SET version=2",
+)
+_MIGRATION_V2_TO_V3 = (
+    SCHEMA_TABLE_STATEMENTS[3],
+    "ALTER TABLE jobs ADD COLUMN cover_landscape_asset_id TEXT REFERENCES upload_assets(id)",
+    "ALTER TABLE jobs ADD COLUMN cover_portrait_asset_id TEXT REFERENCES upload_assets(id)",
+    "ALTER TABLE jobs ADD COLUMN publish_at_unix INTEGER",
+    "ALTER TABLE jobs ADD COLUMN publish_timezone_offset_minutes INTEGER",
+    "ALTER TABLE jobs ADD COLUMN platform_options TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE requests ADD COLUMN digest_version INTEGER NOT NULL DEFAULT 1",
+    SCHEMA_INDEX_STATEMENTS[4],
+    SCHEMA_INDEX_STATEMENTS[5],
+    "UPDATE metadata SET version=3",
 )
 
 
@@ -832,7 +952,348 @@ def _normalize_v1_legacy_category_digests(db: sqlite3.Connection) -> None:
             raise UploadSchemaError
 
 
-def _migrate_v1_to_v2(path: Path) -> None:
+def _v3_tag_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise UploadSchemaError
+    normalized = value.strip()
+    while normalized[:1] in {"#", "＃"}:
+        normalized = normalized[1:].lstrip()
+    normalized = normalized.replace("#", "井").replace("＃", "井").replace("，", "、")
+    # Schema 2 accepted a tag consisting only of a hash marker. Keep a visible,
+    # inert representation rather than turning it into an empty Bilibili tag.
+    return normalized or "井"
+
+
+def _normalize_v2_legacy_tags(db: sqlite3.Connection) -> None:
+    """Make Schema-2 tags safe for adapters that add their own hash marker.
+
+    Schema 2 allowed ``#``, ``＃`` and ``，`` inside persisted tags. Schema 3
+    treats those characters as syntax. Normalize only during the exact 2→3
+    transaction, revoke queued work, and update affected v1 request digests so
+    backup and idempotent replay continue to describe the stored jobs.
+    """
+
+    jobs = list(db.execute(
+        "SELECT id,account_id,source_id,title,description,tags,category_id,mode,"
+        "copyright,source_credit,state FROM jobs"
+    ))
+    old_tags: dict[str, list[str]] = {}
+    new_tags: dict[str, list[str]] = {}
+    changed: set[str] = set()
+    for job in jobs:
+        raw_tags = job["tags"]
+        if not isinstance(raw_tags, str):
+            raise UploadSchemaError
+        try:
+            decoded = json.loads(raw_tags)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadSchemaError from exc
+        if (
+            not isinstance(decoded, list)
+            or len(decoded) > 10
+            or any(not isinstance(tag, str) for tag in decoded)
+        ):
+            raise UploadSchemaError
+        normalized: list[str] = []
+        for tag in decoded:
+            candidate = _v3_tag_text(tag)
+            if len(candidate) > 20:
+                raise UploadSchemaError
+            if candidate not in normalized:
+                normalized.append(candidate)
+        old_tags[job["id"]] = decoded
+        new_tags[job["id"]] = normalized
+        if normalized != decoded:
+            changed.add(job["id"])
+
+    jobs_by_id = {job["id"]: job for job in jobs}
+    decoded_requests: list[tuple[sqlite3.Row, list[str], set[str]]] = []
+    for request in db.execute("SELECT id,digest,job_ids FROM requests"):
+        raw_job_ids = request["job_ids"]
+        if not isinstance(raw_job_ids, str):
+            raise UploadSchemaError
+        try:
+            job_ids = json.loads(raw_job_ids)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadSchemaError from exc
+        if (
+            not isinstance(job_ids, list)
+            or not 1 <= len(job_ids) <= 20
+            or any(not isinstance(job_id, str) for job_id in job_ids)
+        ):
+            raise UploadSchemaError
+        job_id_set = set(job_ids)
+        if len(job_ids) != len(job_id_set) or any(
+            job_id not in jobs_by_id for job_id in job_ids
+        ):
+            raise UploadSchemaError
+        decoded_requests.append((request, job_ids, job_id_set))
+
+    if not changed:
+        return
+
+    account_platforms = dict(db.execute("SELECT id,platform FROM accounts"))
+    for request, job_ids, job_id_set in decoded_requests:
+        if not job_id_set & changed:
+            continue
+        request_jobs = [jobs_by_id[job_id] for job_id in job_ids]
+        first = request_jobs[0]
+        shared = (
+            "source_id", "title", "description", "category_id", "mode",
+            "copyright", "source_credit",
+        )
+        if (
+            any(job[field] != first[field] for job in request_jobs[1:] for field in shared)
+            or any(old_tags[job["id"]] != old_tags[first["id"]] for job in request_jobs[1:])
+            or any(new_tags[job["id"]] != new_tags[first["id"]] for job in request_jobs[1:])
+        ):
+            raise UploadSchemaError
+        account_ids = [job["account_id"] for job in request_jobs]
+        if (
+            len(account_ids) != len(set(account_ids))
+            or any(account_id not in account_platforms for account_id in account_ids)
+        ):
+            raise UploadSchemaError
+        copyright_inputs: list[int | None] = [first["copyright"]]
+        if (
+            first["copyright"] == 1
+            and "bilibili" not in {account_platforms[account_id] for account_id in account_ids}
+        ):
+            copyright_inputs.append(None)
+        matched: list[int | None] = []
+        for copyright_input in copyright_inputs:
+            payload = [
+                first["source_id"], sorted(account_ids), first["title"],
+                first["description"], old_tags[first["id"]], first["category_id"],
+                first["mode"], copyright_input, first["source_credit"],
+            ]
+            if _legacy_request_digest(payload) == request["digest"]:
+                matched.append(copyright_input)
+        if len(matched) != 1:
+            raise UploadSchemaError
+        payload = [
+            first["source_id"], sorted(account_ids), first["title"],
+            first["description"], new_tags[first["id"]], first["category_id"],
+            first["mode"], matched[0], first["source_credit"],
+        ]
+        digest = _legacy_request_digest(payload)
+        if digest is None:
+            raise UploadSchemaError
+        db.execute("UPDATE requests SET digest=? WHERE id=?", (digest, request["id"]))
+
+    for job in jobs:
+        if job["id"] not in changed:
+            continue
+        state = job["state"]
+        next_state = "unknown" if state == "running" else "draft" if state == "queued" else state
+        code = (
+            "legacy_tags_normalized_review_required"
+            if state in {"draft", "queued", "running"}
+            else None
+        )
+        if code is None:
+            db.execute(
+                "UPDATE jobs SET tags=? WHERE id=?",
+                (json.dumps(new_tags[job["id"]], ensure_ascii=False, separators=(",", ":")), job["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE jobs SET tags=?,state=?,code=? WHERE id=?",
+                (
+                    json.dumps(new_tags[job["id"]], ensure_ascii=False, separators=(",", ":")),
+                    next_state,
+                    code,
+                    job["id"],
+                ),
+            )
+
+
+def _normalize_v2_bilibili_original_sources(db: sqlite3.Connection) -> None:
+    """Remove a legacy repost source from Bilibili original submissions.
+
+    Schema 2 accepted this contradictory pair and included it in the v1 request
+    digest. Schema 3 rejects it, so update each complete root request as one
+    unit and revoke any confirmation that could otherwise execute unseen data.
+    """
+
+    account_platforms = dict(db.execute("SELECT id,platform FROM accounts"))
+    jobs = {
+        row["id"]: row
+        for row in db.execute(
+            "SELECT id,account_id,source_id,title,description,tags,category_id,"
+            "mode,copyright,source_credit,state,retry_of FROM jobs"
+        )
+    }
+    affected = {
+        job_id
+        for job_id, job in jobs.items()
+        if account_platforms.get(job["account_id"]) == "bilibili"
+        and job["copyright"] == 1
+        and isinstance(job["source_credit"], str)
+        and bool(job["source_credit"])
+    }
+    if not affected:
+        return
+
+    normalized_ids: set[str] = set()
+    for request in db.execute("SELECT id,digest,job_ids FROM requests"):
+        try:
+            job_ids = json.loads(request["job_ids"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadSchemaError from exc
+        if (
+            not isinstance(job_ids, list)
+            or not 1 <= len(job_ids) <= 20
+            or any(not isinstance(job_id, str) for job_id in job_ids)
+        ):
+            raise UploadSchemaError
+        if not set(job_ids) & affected:
+            continue
+        if (
+            any(job_id not in jobs for job_id in job_ids)
+            or len(job_ids) != len(set(job_ids))
+        ):
+            raise UploadSchemaError
+        request_jobs = [jobs[job_id] for job_id in job_ids]
+        first = request_jobs[0]
+        shared = (
+            "source_id", "title", "description", "tags", "category_id",
+            "mode", "copyright", "source_credit",
+        )
+        if any(
+            job[field] != first[field]
+            for job in request_jobs[1:]
+            for field in shared
+        ):
+            raise UploadSchemaError
+        try:
+            tags = json.loads(first["tags"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise UploadSchemaError from exc
+        old_payload = [
+            first["source_id"], sorted(job["account_id"] for job in request_jobs),
+            first["title"], first["description"], tags, first["category_id"],
+            first["mode"], first["copyright"], first["source_credit"],
+        ]
+        if _legacy_request_digest(old_payload) != request["digest"]:
+            raise UploadSchemaError
+        new_payload = [*old_payload]
+        new_payload[8] = ""
+        new_digest = _legacy_request_digest(new_payload)
+        if new_digest is None:
+            raise UploadSchemaError
+        db.execute("UPDATE requests SET digest=? WHERE id=?", (new_digest, request["id"]))
+        db.executemany(
+            "UPDATE jobs SET source_credit='' WHERE id=?",
+            ((job_id,) for job_id in job_ids),
+        )
+        normalized_ids.update(job_ids)
+
+    # Retries are intentionally outside requests.  A request stores one shared
+    # v1 payload, so changing that payload changed every root job in the
+    # request.  Carry the same normalization through every retry descendant,
+    # including descendants for non-Bilibili targets in a mixed request, so
+    # retry snapshots remain identical to their parents.
+    normalized_lineage = set(normalized_ids)
+    while True:
+        descendants = {
+            job_id
+            for job_id, job in jobs.items()
+            if job["retry_of"] in normalized_lineage
+        }
+        expanded = normalized_lineage | descendants
+        if expanded == normalized_lineage:
+            break
+        normalized_lineage = expanded
+    if not affected <= normalized_lineage:
+        raise UploadSchemaError
+    for job_id in normalized_lineage:
+        job = jobs[job_id]
+        db.execute("UPDATE jobs SET source_credit='' WHERE id=?", (job_id,))
+        if job["state"] in {"draft", "queued", "running"}:
+            next_state = (
+                "unknown" if job["state"] == "running"
+                else "draft" if job["state"] == "queued"
+                else job["state"]
+            )
+            db.execute(
+                "UPDATE jobs SET state=?,code=? WHERE id=?",
+                (next_state, "legacy_bilibili_source_credit_removed", job_id),
+            )
+
+
+def _populate_v3_legacy_platform_options(db: sqlite3.Connection) -> None:
+    """Persist pinned upstream implicit defaults as reviewable Schema-3 data."""
+
+    rows = list(db.execute(
+        "SELECT j.id,j.title,j.state,a.platform FROM jobs j "
+        "JOIN accounts a ON a.id=j.account_id"
+    ))
+    for row in rows:
+        if row["platform"] == "douyin":
+            values = {"declaration": "内容由AI生成"}
+        elif row["platform"] == "tencent":
+            if not isinstance(row["title"], str):
+                raise UploadSchemaError
+            values = {
+                "content_label": "含AI生成内容",
+                "short_title": normalize_tencent_short_title(row["title"]),
+            }
+        else:
+            continue
+        options = json.dumps(
+            values,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        state = row["state"]
+        next_state = "unknown" if state == "running" else "draft" if state == "queued" else state
+        if state in {"draft", "queued", "running"}:
+            db.execute(
+                "UPDATE jobs SET platform_options=?,state=?,code=? WHERE id=?",
+                (options, next_state, "legacy_platform_options_review_required", row["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE jobs SET platform_options=? WHERE id=?",
+                (options, row["id"]),
+            )
+
+
+def _preserve_v3_legacy_review_state_reasons(
+    db: sqlite3.Connection,
+    original_job_states: dict[object, object],
+) -> None:
+    """Keep restart/interruption meaning after a legacy metadata migration."""
+
+    review_codes = {
+        "legacy_tags_normalized_review_required",
+        "legacy_platform_options_review_required",
+        "legacy_bilibili_source_credit_removed",
+    }
+    for job_id, original_state in original_job_states.items():
+        if original_state not in {"queued", "running"}:
+            continue
+        current = db.execute(
+            "SELECT code FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+        if current is None or current["code"] not in review_codes:
+            continue
+        if original_state == "running":
+            state = "unknown"
+            code = "legacy_metadata_interrupted_result_unknown"
+        else:
+            state = "draft"
+            code = "legacy_metadata_restart_confirmation_required"
+        db.execute(
+            "UPDATE jobs SET state=?,code=? WHERE id=?",
+            (state, code, job_id),
+        )
+
+
+def _migrate_to_latest(path: Path) -> None:
     before = _require_plain_database(path)
     db = None
     committed = False
@@ -846,13 +1307,25 @@ def _migrate_v1_to_v2(path: Path) -> None:
         if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
             raise UploadSchemaError
         version = _metadata_version(db)
-        if version == SCHEMA_VERSION:
-            _validate_connection(db, SCHEMA_VERSION)
-        elif version == 1:
+        if version == 1:
             _validate_connection(db, 1)
             for statement in _MIGRATION_V1_TO_V2:
                 db.execute(statement)
             _normalize_v1_legacy_category_digests(db)
+            _validate_connection(db, _SCHEMA_V2_VERSION)
+            version = _SCHEMA_V2_VERSION
+        if version == _SCHEMA_V2_VERSION:
+            _validate_connection(db, _SCHEMA_V2_VERSION)
+            original_job_states = dict(db.execute("SELECT id,state FROM jobs"))
+            _normalize_v2_legacy_tags(db)
+            _normalize_v2_bilibili_original_sources(db)
+            for statement in _MIGRATION_V2_TO_V3:
+                db.execute(statement)
+            _populate_v3_legacy_platform_options(db)
+            _preserve_v3_legacy_review_state_reasons(db, original_job_states)
+            _validate_connection(db, SCHEMA_VERSION)
+            version = SCHEMA_VERSION
+        if version == SCHEMA_VERSION:
             _validate_connection(db, SCHEMA_VERSION)
         else:
             raise UploadSchemaError
@@ -924,12 +1397,15 @@ def initialize_upload_schema(path: Path) -> None:
 
 
 def ensure_upload_schema(path: Path) -> None:
-    """Atomically create Schema 2 or migrate one exact Schema 1 database."""
+    """Atomically create Schema 3 or migrate one exact Schema 1/2 database."""
     with _INITIALIZE_LOCK:
         if not path.exists():
             _publish_upload_schema(path)
         with _exclusive_schema_access(path):
-            version = _validated_schema_version(path, frozenset({1, SCHEMA_VERSION}))
-            if version == 1:
-                _migrate_v1_to_v2(path)
+            version = _validated_schema_version(
+                path,
+                frozenset({1, _SCHEMA_V2_VERSION, SCHEMA_VERSION}),
+            )
+            if version != SCHEMA_VERSION:
+                _migrate_to_latest(path)
             validate_upload_schema(path)

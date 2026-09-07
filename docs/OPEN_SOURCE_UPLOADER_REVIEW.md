@@ -22,6 +22,16 @@
 
 [biliup Studio 参数](https://github.com/biliup/biliup/blob/v1.2.4/crates/biliup/src/uploader/bilibili.rs) 区分 `copyright=1` 自制与 `2` 转载。桥接层真实传入 `--copyright` 与 `--source`，不会因调用 SAU 的简化 CLI 而让转载材料落到默认自制。Bilibili 分区编号也必须明确给出。
 
+0.26.0 只在固定上游版本上加入下列映射；每项仍需真实账号逐项核对：
+
+| 平台 | Open-Flame 已固定的调用 | 失败与默认行为 |
+| --- | --- | --- |
+| Bilibili | biliup `--cover`、`--dtime`、`--dynamic`、`--no-reprint`；关闭评论/弹幕映射到 `--up-close-reply` / `--up-close-danmu` 并使用 `--submit app` | 参数写入前均在本地草稿显示；关闭评论/弹幕的实际平台效果尚未验证 |
+| 抖音 | 固定 [Douyin uploader](https://github.com/dreammis/social-auto-upload/blob/0012d2c355f88f683cc38dde2a2db209e14091bc/uploader/douyin_uploader/main.py) 的单封面、定时和自主声明方法 | 未选择声明时覆盖上游的 AI 默认并不操作；显式声明只接受白名单，弹窗未关闭或 radio 未选中即失败 |
+| 视频号 | 固定 [Tencent uploader](https://github.com/dreammis/social-auto-upload/blob/0012d2c355f88f683cc38dde2a2db209e14091bc/uploader/tencent_uploader/main.py) 的 4:3/3:4 封面槽、定时、短标题和内容标记 | 未选择内容标记时覆盖上游 AI 默认并不操作；显式封面要求裁剪/主弹窗关闭及槽位预览变化，短标题与标记要求回读一致，否则失败 |
+
+标签输入本地保存为不含 `#` 的文本，调用上游时才由适配器添加平台语法；最多 10 个、不重复、每个最多 20 字。这样可避免同一标签在不同适配器中出现双井号或被逗号再次拆分。
+
 ## 发布结果与重复投稿
 
 [抖音提交代码](https://github.com/dreammis/social-auto-upload/blob/0012d2c355f88f683cc38dde2a2db209e14091bc/uploader/douyin_uploader/main.py) 会在失败后循环点击最终按钮。自写 `SingleSubmission` 包装同一最终按钮的普通点击与 JavaScript fallback；第一次结果不明时退出，不再点击。发布成功状态表示上游观察到进入作品管理页，不是独立服务端回执，也不代表审核通过。

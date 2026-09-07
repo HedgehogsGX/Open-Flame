@@ -42,6 +42,7 @@ also retain their upstream `.dist-info/licenses/` files when installed.
 | fastapi 0.141.1 | Direct | MIT | https://github.com/fastapi/fastapi | `licenses/python/fastapi-0.141.1/LICENSE` |
 | h11 0.16.0 | Transitive | MIT | https://github.com/python-hyper/h11 | `licenses/python/h11-0.16.0/LICENSE.txt` |
 | idna 3.19 | Transitive | BSD-3-Clause | https://github.com/kjd/idna | `licenses/python/idna-3.19/LICENSE.md` |
+| Pillow 12.3.0 | Direct/native image decoder | MIT-CMU with bundled codec notices | https://github.com/python-pillow/Pillow | `licenses/python/pillow-12.3.0/LICENSE` |
 | pydantic 2.13.5 | Transitive | MIT | https://github.com/pydantic/pydantic | `licenses/python/pydantic-2.13.5/LICENSE` |
 | pydantic-core 2.46.5 | Transitive/native | MIT for the top-level project; native closure is a release gate below | https://github.com/pydantic/pydantic/tree/main/pydantic-core | `licenses/python/pydantic_core-2.46.5/LICENSE` |
 | starlette 1.6.0 | Transitive | BSD-3-Clause | https://github.com/Kludex/starlette | `licenses/python/starlette-1.6.0/LICENSE.md` |
@@ -120,8 +121,10 @@ Those third-party binary and container outputs remain blocked until all of the
 following target-specific checks are complete:
 
 - A target-specific native SBOM and complete license bundle is generated for
-  the exact `pydantic-core` wheel. Its Rust dependency closure is not fully
-  represented by the wheel's top-level MIT file.
+  the exact `pydantic-core` and Pillow wheels. `pydantic-core`'s Rust dependency
+  closure is not fully represented by the wheel's top-level MIT file; Pillow's
+  native image codecs and their linked-library closure also require review for
+  the exact target artifact.
 - The exact target-platform OCI child image is pulled and audited, including
   CPython, pip, Debian packages, notices, corresponding-source duties, and
   image provenance. A multi-architecture index digest alone is insufficient.

@@ -39,16 +39,16 @@ RUN --network=none printf '%s' "${VDC_TOOL_IMAGE}" \
 
 COPY deployment/requirements.runtime.lock /tmp/requirements.runtime.lock
 COPY --from=wheel_builder /locked-wheels /wheels
-COPY --from=wheel_builder /project-wheel/video_download_control-0.25.0-py3-none-any.whl /tmp/video_download_control-0.25.0-py3-none-any.whl
+COPY --from=wheel_builder /project-wheel/video_download_control-0.26.0-py3-none-any.whl /tmp/video_download_control-0.26.0-py3-none-any.whl
 RUN --network=none python -m pip install --no-cache-dir --no-index \
       --no-deps --only-binary=:all: --find-links=/wheels --require-hashes \
       --requirement /tmp/requirements.runtime.lock \
     && python -m pip install --no-cache-dir --no-index \
       --only-binary=:all: --no-deps \
-      /tmp/video_download_control-0.25.0-py3-none-any.whl \
+      /tmp/video_download_control-0.26.0-py3-none-any.whl \
     && python -m pip check \
     && rm -rf /wheels /tmp/requirements.runtime.lock \
-      /tmp/video_download_control-0.25.0-py3-none-any.whl
+      /tmp/video_download_control-0.26.0-py3-none-any.whl
 
 # Tool-bundle contract: self-contained executables plus hash-verified provenance
 # and license evidence. Runtime preflight additionally checks exact versions.
@@ -62,7 +62,7 @@ RUN --network=none test -x /opt/vdc-tools/yt-dlp \
          --execute-version-checks /opt/vdc-tools
 
 LABEL org.opencontainers.image.title="video-download-control candidate worker" \
-      org.opencontainers.image.version="0.25.0" \
+      org.opencontainers.image.version="0.26.0" \
       org.opencontainers.image.description="Default-disabled deployment candidate; not Stage-0 verified"
 
 USER 10001:10001

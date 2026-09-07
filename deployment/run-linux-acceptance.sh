@@ -1481,13 +1481,14 @@ expected = {
     "fastapi": "0.141.1",
     "h11": "0.16.0",
     "idna": "3.19",
+    "pillow": "12.3.0",
     "pydantic": "2.13.5",
     "pydantic-core": "2.46.5",
     "starlette": "1.6.0",
     "typing-extensions": "4.16.0",
     "typing-inspection": "0.4.4",
     "uvicorn": "0.52.4",
-    "video-download-control": "0.25.0",
+    "video-download-control": "0.26.0",
 }
 assert all(version(name) == expected_version for name, expected_version in expected.items())
 for build_only in ("hatchling", "packaging", "pathspec", "pluggy", "trove-classifiers"):

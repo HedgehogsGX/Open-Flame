@@ -2,7 +2,7 @@
 
 # Preserve audited upstream legal files byte-for-byte; their manifest hashes
 # cover the original wheel bytes, including any native line endings.
-licenses/python/** -text
+licenses/python/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab,cr-at-eol
 
 # The installed uploader manifest pins this lock file's exact byte hash.
 # Preserve it across Git checkout just like the audited license payloads.

@@ -2,26 +2,30 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-07
-> 当前迭代：Iteration 0.25.0 — T16 生产前端升级与最终冻结准备（本地 G6 已完成）
-> 当前版本：`0.25.0`；下载数据库：Schema `11`；上传数据库：独立 Schema `2`
+> 当前迭代：Iteration 0.26.0 — T17 三平台投稿参数、封面与定时发布（本地 G7 已完成；最终冻结与真实平台待验收）
+> 当前版本：`0.26.0`；下载数据库：Schema `11`；上传数据库：独立 Schema `3`；上传备份格式：`2`
 
 ## 本次交接入口
 
-用户要求按下一轮交接继续开发。当前 `codex/uploader-first-platforms` 已完成 0.25.0 T16 生产前端升级的**本地 G6 范围**；本轮起始基线是 `1178869bbf35212e734d3fda70876033e309a99d`，该提交不包含随后完成的 T16 工作，不能作为最终 `source_commit`。包内文件不能嵌入自身最终提交和制品摘要；0.25.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
+用户要求按交接继续开发，并把首批三个平台的标题、标签、封面、发布时间及平台专属参数做成可核对的本地草稿。当前 `codex/uploader-first-platforms` 以 `c5b57ff7472d3eac7550bfe3f2b3129704f277b7` 为本轮起始基线，在 0.25.0 T16 前端之上开发 0.26.0 T17。包内文件不能嵌入自身最终提交和制品摘要；0.26.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 | 工作包 | 2026-09-07 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
 | T14 必要切片 | 已实现本地账号断开与墓碑、排队确认撤回、迟到登录/重启凭据 fencing、媒体占用与状态、活动引用删除保护、两步删除及同大小/同 SHA-256 恢复 | hash 去重、总配额、自动孤儿清理仍是后续；没有修改用户现有账号、媒体或 runtime |
-| T07 停机备份/恢复 | 已实现独立 `video-upload-backup`、Upload Schema 2、secret-free manifest、登记媒体复制、业务语义审计、新根恢复和恢复状态降级 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
+| T07 停机备份/恢复 | 上传备份格式 2 / Upload Schema 3 保存受管封面、定时值和平台参数；格式 1 / Schema 2 只读输入经 staging 迁移，并撤回需要复核的旧确认 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
 | T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
-| T10 与 T16 | 0.24.4 已完成 T10 源码冻结准备并保留为中间历史；0.25.0 已把共享 Apple 风格、系统/浅/深主题、本地静态资源、响应式与无障碍降级应用到下载和上传生产页，本地 G6 已完成 | 0.25.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装。T11/T12 真实平台与下载矩阵未执行，T13/T15 保持原计划边界 |
+| T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范继续用于 0.26.0 新控件 | 0.26.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
+| T17 投稿参数 | Bilibili/抖音/视频号均可按平台覆盖标题、简介、标签、受管封面和发布时间；另保存各平台专属字段，按账号生成独立草稿并逐任务明确确认 | 当前页面同一平台只有一套表单值，多账号会得到相同参数的独立任务；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
+| T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.26.0 最终 receipt 后的同一构建分别执行 |
+
+当前树的三平台上传定向集合为 **465 passed in 92.83s**；全量为 **2367 passed、8 skipped in 362.91s**。8 个 skip 是目标 POSIX/Linux 环境门槛。最终只读代码审计未发现 P0～P2 或提交阻断项。以上均是本地 synthetic/offline 工程证据，不改变真实平台与最终发行状态。
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.25.0 T16 本地范围见 [前端与冻结记录](validation/iteration-0.25.0-t16-frontend-evidence.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt，不能从本地 G6 状态推定。此前 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)保留 T10 中间冻结源历史：精确上传集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份、发行、CI、验证、部署与 API 组合为 **287 passed、4 skipped in 44.13s**，4 个 skip 是 Windows 上需要 root/POSIX/getfacl 的环境合同。这些旧定向结果不能证明 0.25.0 最终冻结。0.25.0 未执行真实登录、扫码、下载或上传。
+当前 0.26.0 T17 本地范围见 [三平台投稿参数记录](validation/iteration-0.26.0-upload-parameters-evidence.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.25.0 前端与冻结记录](validation/iteration-0.25.0-t16-frontend-evidence.md)和 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)只保留各自历史，不能证明 0.26.0。0.26.0 未执行真实登录、扫码、下载或上传。
 
-[0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 由当前应用按精确结构事务迁移为 Schema 2；未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
+[0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
 ### 此前设计准备与 0.24.2 历史
 

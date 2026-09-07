@@ -36,6 +36,19 @@ from .runtime_setup import (
 
 _ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 _PLATFORMS = frozenset({"bilibili", "douyin", "tencent"})
+_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+_SCHEDULE_LEAD_SECONDS = {
+    "bilibili": 6 * 3600 + 5 * 60,
+    "douyin": 4 * 3600 + 5 * 60,
+    "tencent": 4 * 3600 + 5 * 60,
+}
+_TENCENT_SCHEDULE_MAX_SECONDS = 28 * 24 * 3600
+_DOUYIN_DECLARATIONS = frozenset({
+    "内容由AI生成",
+    "内容为转载信息",
+    "内容为个人观点或见解",
+})
+_TENCENT_CONTENT_LABELS = frozenset({"含AI生成内容"})
 _RESULTS = frozenset({
     ("ready", "account_ready"),
     ("failed", "account_missing"),
@@ -49,6 +62,8 @@ _RESULTS = frozenset({
     ("failed", "login_qr_unavailable"),
     ("failed", "login_timeout"),
     ("failed", "invalid_platform"),
+    ("failed", "schedule_window_elapsed"),
+    ("failed", "platform_parameter_mismatch"),
     ("submitted", "upstream_submitted"),
     ("draft_saved", "upstream_draft_saved"),
     ("unknown", "upstream_result_unknown"),
@@ -224,14 +239,119 @@ class SauBackend:
             or isinstance(request.category_id, bool)
             or not 1 <= request.category_id <= 65535
             or (request.copyright == 2 and not request.source_credit.strip())
+            or (request.copyright == 1 and bool(request.source_credit.strip()))
         ):
             return BackendResult("failed", "invalid_bilibili_metadata")
-        if not request.file_path.is_absolute() or not request.file_path.is_file():
+        if (not isinstance(request.file_path, Path)
+                or not request.file_path.is_absolute()
+                or not request.file_path.is_file()):
             return BackendResult("failed", "media_missing")
+        if (
+            request.mode == "publish"
+            and request.platform in _SCHEDULE_LEAD_SECONDS
+            and type(request.publish_at_unix) is int
+            and 1_700_000_000 <= request.publish_at_unix <= 4_102_444_800
+            and type(request.publish_timezone_offset_minutes) is int
+            and -840 <= request.publish_timezone_offset_minutes <= 840
+            and request.publish_at_unix % 60 == 0
+            and (
+                request.platform != "tencent"
+                or (
+                    (request.publish_at_unix
+                     + request.publish_timezone_offset_minutes * 60) % 3600 == 0
+                    and request.publish_at_unix
+                    <= int(time.time()) + _TENCENT_SCHEDULE_MAX_SECONDS
+                )
+            )
+            and request.publish_at_unix
+            <= int(time.time()) + _SCHEDULE_LEAD_SECONDS[request.platform]
+        ):
+            return BackendResult("failed", "schedule_window_elapsed")
+        if not self._valid_platform_metadata(request):
+            return BackendResult("failed", "invalid_platform_metadata")
         data = asdict(request)
         data["file_path"] = str(request.file_path)
+        for field in ("cover_landscape_path", "cover_portrait_path"):
+            path = data[field]
+            data[field] = str(path) if path is not None else None
         return self._run("upload", request.platform, request.account_id, data,
                          stop, self.upload_timeout)
+
+    @staticmethod
+    def _valid_platform_metadata(request: UploadRequest) -> bool:
+        covers = (request.cover_landscape_path, request.cover_portrait_path)
+        for cover in covers:
+            if cover is not None and (
+                not isinstance(cover, Path)
+                or not cover.is_absolute()
+                or not cover.is_file()
+                or cover.suffix.lower() not in _IMAGE_SUFFIXES
+            ):
+                return False
+        if request.publish_at_unix is None:
+            if request.publish_timezone_offset_minutes is not None:
+                return False
+        elif (
+            type(request.publish_at_unix) is not int
+            or not 1_700_000_000 <= request.publish_at_unix <= 4_102_444_800
+            or type(request.publish_timezone_offset_minutes) is not int
+            or not -840 <= request.publish_timezone_offset_minutes <= 840
+            or request.publish_at_unix
+            <= int(time.time()) + _SCHEDULE_LEAD_SECONDS.get(request.platform, 0)
+            or request.publish_at_unix % 60
+            or request.platform == "tencent" and (
+                (request.publish_at_unix + request.publish_timezone_offset_minutes * 60) % 3600
+                or request.publish_at_unix > int(time.time()) + _TENCENT_SCHEDULE_MAX_SECONDS
+            )
+        ):
+            return False
+        if request.mode == "draft" and request.publish_at_unix is not None:
+            return False
+        if (
+            not isinstance(request.dynamic, str)
+            or len(request.dynamic) > 250
+            or "\x00" in request.dynamic
+            or type(request.no_reprint) is not bool
+            or type(request.close_comments) is not bool
+            or type(request.close_danmu) is not bool
+        ):
+            return False
+
+        if request.platform == "bilibili":
+            return (
+                sum(cover is not None for cover in covers) <= 1
+                and request.declaration is None
+                and request.short_title is None
+                and request.content_label is None
+            )
+        if request.platform == "douyin":
+            return (
+                sum(cover is not None for cover in covers) <= 1
+                and request.dynamic == ""
+                and request.no_reprint is False
+                and request.close_comments is False
+                and request.close_danmu is False
+                and request.declaration in _DOUYIN_DECLARATIONS | {None}
+                and request.short_title is None
+                and request.content_label is None
+            )
+        if request.platform == "tencent":
+            return (
+                request.dynamic == ""
+                and request.no_reprint is False
+                and request.close_comments is False
+                and request.close_danmu is False
+                and request.declaration is None
+                and (
+                    request.short_title is None
+                    or isinstance(request.short_title, str)
+                    and request.short_title.strip() == request.short_title
+                    and 7 <= len(request.short_title) <= 15
+                    and "\x00" not in request.short_title
+                )
+                and request.content_label in _TENCENT_CONTENT_LABELS | {None}
+            )
+        return False
 
     def _run(self, action: str, platform: str, account: str, payload: dict,
              stop: Event, timeout: float, on_update=None) -> BackendResult:

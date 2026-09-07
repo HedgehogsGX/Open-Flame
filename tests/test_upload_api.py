@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from video_download_control.api import create_app
 from video_download_control.uploads import api as upload_api
+from video_download_control.uploads import schema as upload_schema
 from video_download_control.uploads.contracts import BackendResult
 from video_download_control.uploads.service import UploadService, default_upload_root
 
@@ -155,6 +157,61 @@ def test_explicit_preview_confirm_and_idempotency(upload_client, platform, mode,
     assert list((app.state.upload_manager.root / "incoming").iterdir()) == []
 
 
+def test_mixed_publish_and_platform_draft_are_created_atomically(upload_client):
+    client, _, backend = upload_client
+    bilibili = _account(client, "bilibili")
+    tencent = _account(client, "tencent")
+    source = _source(client)
+    payload = {
+        "source_id": source["id"],
+        "account_ids": [bilibili["id"], tencent["id"]],
+        "title": "公共标题",
+        "description": "公共简介",
+        "tags": ["公共标签"],
+        "category_id": 21,
+        "copyright": 1,
+        "source_credit": "",
+        "mode": "publish",
+        "target_overrides": [
+            {
+                "account_id": bilibili["id"],
+                "mode": "publish",
+                "category_id": 21,
+                "copyright": 1,
+                "source_credit": "",
+                "platform_options": {
+                    "dynamic": "动态文案",
+                    "no_reprint": True,
+                    "close_comments": False,
+                    "close_danmu": False,
+                },
+            },
+            {
+                "account_id": tencent["id"],
+                "mode": "draft",
+                "platform_options": {
+                    "short_title": "视频号短标题测试",
+                    "content_label": "含AI生成内容",
+                },
+            },
+        ],
+        "idempotency_key": "mixed-" + uuid4().hex,
+    }
+
+    response = client.post("/api/v1/uploads/jobs", json=payload)
+
+    assert response.status_code == 201, response.text
+    jobs = {job["platform"]: job for job in response.json()}
+    assert set(jobs) == {"bilibili", "tencent"}
+    assert jobs["bilibili"]["mode"] == "publish"
+    assert jobs["bilibili"]["category_id"] == 21
+    assert jobs["tencent"]["mode"] == "draft"
+    assert jobs["tencent"]["category_id"] is None
+    assert jobs["tencent"]["source_credit"] == ""
+    assert all(job["state"] == "draft" for job in jobs.values())
+    assert not any(call[0] == "upload" for call in backend.calls)
+
+
 def test_unknown_requires_acknowledgement_and_creates_new_unconfirmed_draft(upload_client):
     client, _, backend = upload_client
     backend.outcome = "unknown"
@@ -294,6 +351,239 @@ def test_unknown_account_is_404_and_validation_is_422(upload_client):
     client, _, _ = upload_client
     assert client.post("/api/v1/uploads/accounts/" + uuid4().hex + "/check").status_code == 404
     assert client.post("/api/v1/uploads/accounts", json={"platform": "youtube", "name": "unsupported"}).status_code == 422
+
+
+def test_copyright_boolean_is_not_coerced_to_original(upload_client):
+    client, _, _ = upload_client
+    account = _account(client)
+    source = _source(client)
+    base = {
+        "source_id": source["id"], "account_ids": [account["id"]],
+        "title": "Strict copyright", "description": "", "tags": ["test"],
+        "category_id": 21, "copyright": True, "mode": "publish",
+        "idempotency_key": "strict-copyright",
+    }
+    assert client.post("/api/v1/uploads/jobs", json=base).status_code == 422
+    base["copyright"] = 1
+    base["target_overrides"] = [{"account_id": account["id"], "copyright": True}]
+    assert client.post("/api/v1/uploads/jobs", json=base).status_code == 422
+
+
+def test_platform_integers_booleans_and_unknown_acknowledgement_are_strict(
+    upload_client,
+):
+    client, _, _ = upload_client
+    account = _account(client)
+    source = _source(client)
+    base = {
+        "source_id": source["id"], "account_ids": [account["id"]],
+        "title": "Strict API fields", "description": "", "tags": ["test"],
+        "category_id": 21, "copyright": 1, "mode": "publish",
+        "idempotency_key": "strict-fields",
+    }
+    for category in (True, 21.0, "21"):
+        payload = {**base, "category_id": category}
+        assert client.post("/api/v1/uploads/jobs", json=payload).status_code == 422
+    for option in (1, "true"):
+        payload = {
+            **base,
+            "target_overrides": [{
+                "account_id": account["id"],
+                "platform_options": {"no_reprint": option},
+            }],
+        }
+        assert client.post("/api/v1/uploads/jobs", json=payload).status_code == 422
+    for acknowledgement in (1, "true"):
+        response = client.post(
+            "/api/v1/uploads/jobs/" + "a" * 32 + "/retry",
+            json={"acknowledge_unknown": acknowledgement},
+        )
+        assert response.status_code == 422
+
+
+def test_target_override_inherited_fields_reject_explicit_null(upload_client):
+    client, _, _ = upload_client
+    account = _account(client)
+    source = _source(client)
+    base = {
+        "source_id": source["id"],
+        "account_ids": [account["id"]],
+        "title": "Strict nullable API fields",
+        "description": "",
+        "tags": ["test"],
+        "category_id": 21,
+        "copyright": 1,
+        "mode": "publish",
+    }
+    cases = [
+        {"title": None},
+        {"description": None},
+        {"tags": None},
+        {"category_id": None},
+        {"mode": None},
+        {"copyright": None},
+        {"source_credit": None},
+        {"platform_options": {"no_reprint": None}},
+        {"platform_options": {"close_comments": None}},
+        {"platform_options": {"close_danmu": None}},
+    ]
+    for index, values in enumerate(cases):
+        response = client.post(
+            "/api/v1/uploads/jobs",
+            json={
+                **base,
+                "idempotency_key": f"null-field-{index}",
+                "target_overrides": [{"account_id": account["id"], **values}],
+            },
+        )
+        assert response.status_code == 422, response.text
+
+
+def test_jobs_request_identifiers_noop_overrides_and_openapi_are_precise(upload_client):
+    client, _, _ = upload_client
+    account = _account(client)
+    source = _source(client)
+    base = {
+        "source_id": source["id"],
+        "account_ids": [account["id"]],
+        "title": "Strict identifiers",
+        "description": "",
+        "tags": ["test"],
+        "category_id": 21,
+        "copyright": 1,
+        "mode": "publish",
+        "idempotency_key": "strict-identifiers",
+    }
+    assert client.post(
+        "/api/v1/uploads/jobs",
+        json={**base, "account_ids": ["a" * 65]},
+    ).status_code == 422
+    assert client.post(
+        "/api/v1/uploads/jobs",
+        json={**base, "target_overrides": [{"account_id": account["id"]}]},
+    ).status_code == 422
+    for invalid_tags in (["duplicate", "duplicate"], ["x" * 21]):
+        assert client.post(
+            "/api/v1/uploads/jobs",
+            json={**base, "tags": invalid_tags},
+        ).status_code == 422
+    invalid_syntax = client.post(
+        "/api/v1/uploads/jobs",
+        json={**base, "tags": ["has#syntax"]},
+    )
+    assert invalid_syntax.status_code == 409
+    assert invalid_syntax.json() == {"detail": "invalid_tags"}
+    assert client.post(
+        "/api/v1/uploads/jobs",
+        json={
+            **base,
+            "target_overrides": [{
+                "account_id": account["id"],
+                "platform_options": {"short_title": "太短了"},
+            }],
+        },
+    ).status_code == 422
+
+    openapi = client.get("/openapi.json").json()
+    response_schema = openapi["paths"]["/api/v1/uploads/jobs"]["post"]["responses"][
+        "201"
+    ]["content"]["application/json"]["schema"]
+    assert response_schema["items"]["$ref"].endswith("/UploadJobResponse")
+    override_properties = openapi["components"]["schemas"][
+        "TargetOverrideRequest"
+    ]["properties"]
+    for field in (
+        "title", "description", "tags", "category_id", "mode", "copyright",
+        "source_credit",
+    ):
+        assert "anyOf" not in override_properties[field]
+        assert "default" not in override_properties[field]
+    platform_option_properties = openapi["components"]["schemas"][
+        "PlatformOptionsRequest"
+    ]["properties"]
+    for field in ("no_reprint", "close_comments", "close_danmu"):
+        assert "anyOf" not in platform_option_properties[field]
+        assert "default" not in platform_option_properties[field]
+    covers_operation = openapi["paths"]["/api/v1/uploads/covers"]["get"]
+    assert covers_operation["deprecated"] is True
+    assert covers_operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]["items"]["$ref"].endswith("/UploadCoverResponse")
+    cover_content_types = openapi["paths"][
+        "/api/v1/uploads/covers/{asset_id}/content"
+    ]["get"]["responses"]["200"]["content"]
+    assert set(cover_content_types) == {"image/jpeg", "image/png", "image/webp"}
+
+
+def test_schema2_legacy_tags_remain_http_idempotent_replay_compatible(settings):
+    root = default_upload_root(settings.data_root)
+    root.mkdir(parents=True)
+    database = root / "uploads.sqlite3"
+    account_id, source_id, job_id = "a" * 32, "b" * 32, "c" * 32
+    request_id = "request-key"
+    old_tags = ["#topic", "旅＃行", "中文，标签", "#"]
+    old_payload = [
+        source_id, [account_id], "title", "description", old_tags,
+        None, "publish", None, "",
+    ]
+    old_digest = upload_schema._legacy_request_digest(old_payload)
+    assert old_digest is not None
+    with sqlite3.connect(database) as db:
+        db.executescript(upload_schema.SCHEMA_V2_DDL)
+        db.execute("INSERT INTO metadata VALUES(2)")
+        db.execute(
+            "INSERT INTO accounts(id,platform,name,auth_state,code,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (account_id, "douyin", "account", "ready", "account_ready", "created"),
+        )
+        db.execute(
+            "INSERT INTO sources(id,name,suffix,size,sha256,created_at) VALUES(?,?,?,?,?,?)",
+            (source_id, "video.mp4", ".mp4", 5, "1" * 64, "created"),
+        )
+        db.execute(
+            "INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,"
+            "mode,copyright,source_credit,state,code,created_at,updated_at,retry_of) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                job_id, account_id, source_id, "title", "description",
+                json.dumps(old_tags, ensure_ascii=False), None, "publish", 1, "",
+                "queued", "", "created", "updated", None,
+            ),
+        )
+        db.execute(
+            "INSERT INTO requests(id,digest,job_ids) VALUES(?,?,?)",
+            (request_id, old_digest, json.dumps([job_id])),
+        )
+
+    backend = FakeBackend()
+    app = create_app(settings)
+    app.state.upload_service_factory = lambda upload_root: UploadService(
+        upload_root, backend
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Upload-CSRF"] = client.get(
+            "/api/v1/uploads/session"
+        ).json()["csrf_token"]
+        request = {
+            "source_id": source_id,
+            "account_ids": [account_id],
+            "title": "title",
+            "description": "description",
+            "tags": old_tags,
+            "mode": "publish",
+            "idempotency_key": request_id,
+        }
+        replay = client.post("/api/v1/uploads/jobs", json=request)
+        assert replay.status_code == 201, replay.text
+        assert replay.json()[0]["id"] == job_id
+        assert replay.json()[0]["tags"] == ["topic", "旅井行", "中文、标签", "井"]
+
+        rejected = client.post(
+            "/api/v1/uploads/jobs",
+            json={**request, "idempotency_key": "new-legacy-tags"},
+        )
+        assert rejected.status_code == 409
+        assert rejected.json() == {"detail": "invalid_tags"}
 
 
 def test_disconnect_api_keeps_tombstone_and_revokes_queued_confirmation(upload_client):

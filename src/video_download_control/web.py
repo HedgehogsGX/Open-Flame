@@ -121,7 +121,7 @@ INDEX_HTML = """<!doctype html>
         </section>
       </div>
     </details>
-    <p class="page-footer">Open-Flame 0.25.0 · 本地优先 · 下载与上传数据相互隔离</p>
+    <p class="page-footer">Open-Flame 0.26.0 · 本地优先 · 下载与上传数据相互隔离</p>
   </main>
   <script>
     const form = document.querySelector('#batch-form');

@@ -529,7 +529,7 @@ def test_valid_current_schema_wal_is_opened_without_creating_a_shm_sidecar(tmp_p
     source_path = tmp_path / "wal-source.sqlite3"
     target_root = tmp_path / "uploads"
     target_root.mkdir()
-    for name in ("media", "incoming", "private"):
+    for name in ("media", "assets", "incoming", "private"):
         (target_root / name).mkdir()
     target_path = target_root / "uploads.sqlite3"
 
@@ -606,7 +606,7 @@ def test_current_schema_wal_reset_tail_is_accepted_without_mutation(tmp_path):
     source_path = source_service.database_path
     target_root = tmp_path / "uploads"
     target_root.mkdir()
-    for name in ("media", "incoming", "private"):
+    for name in ("media", "assets", "incoming", "private"):
         (target_root / name).mkdir()
     target_path = target_root / "uploads.sqlite3"
 
@@ -713,7 +713,8 @@ def test_concurrent_new_database_initialization_publishes_only_complete_schema(t
         assert db.execute("PRAGMA quick_check").fetchall() == [("ok",)]
         assert db.execute("SELECT version FROM metadata").fetchall() == [(SCHEMA_VERSION,)]
         assert {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")} == {
-            "metadata", "accounts", "sources", "jobs", "operations", "requests",
+            "metadata", "accounts", "sources", "upload_assets", "jobs", "operations",
+            "requests",
         }
     assert not any(".tmp" in item.name or item.name.endswith("-journal") for item in root.iterdir())
 

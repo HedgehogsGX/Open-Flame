@@ -130,7 +130,7 @@ def test_new_schema_is_exact_and_active_account_names_are_unique(tmp_path):
 
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT version FROM metadata").fetchone() == (SCHEMA_VERSION,)
-        assert SCHEMA_VERSION == 2
+        assert SCHEMA_VERSION == 3
         account_columns = [row[1] for row in db.execute("PRAGMA table_xinfo(accounts)")]
         source_columns = [row[1] for row in db.execute("PRAGMA table_xinfo(sources)")]
         assert account_columns[-2:] == ["lifecycle_state", "disconnected_at"]
@@ -145,6 +145,8 @@ def test_new_schema_is_exact_and_active_account_names_are_unique(tmp_path):
             "accounts_active_name",
             "jobs_account_state",
             "jobs_source_state",
+            "jobs_cover_landscape_state",
+            "jobs_cover_portrait_state",
             "operations_account_state",
         }
         db.execute(
@@ -299,7 +301,7 @@ def test_unknown_malformed_and_too_new_databases_are_not_modified(tmp_path, kind
     with sqlite3.connect(path) as db:
         if kind in {"too_new", "bad_version"}:
             db.executescript(SCHEMA_DDL)
-            value = 3 if kind == "too_new" else "not-an-integer"
+            value = SCHEMA_VERSION + 1 if kind == "too_new" else "not-an-integer"
             db.execute("INSERT INTO metadata VALUES(?)", (value,))
         elif kind == "changed_check":
             db.executescript(SCHEMA_DDL.replace(

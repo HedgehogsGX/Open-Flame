@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.25.0"
+version = "0.26.0"
 description = "Local-first media downloads and explicitly confirmed multi-platform uploads"
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,6 +12,7 @@ license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.141.1",
+  "pillow==12.3.0",
   "uvicorn==0.52.4",
 ]
 

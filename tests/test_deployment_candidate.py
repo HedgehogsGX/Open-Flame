@@ -61,8 +61,8 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
     assert "ARG VDC_PYTHON_IMAGE" not in dockerfile
     assert "@sha256:[0-9a-f]{64}" in dockerfile
     assert "USER 10001:10001" in dockerfile
-    assert "video_download_control-0.25.0-py3-none-any.whl" in dockerfile
-    assert 'org.opencontainers.image.version="0.25.0"' in dockerfile
+    assert "video_download_control-0.26.0-py3-none-any.whl" in dockerfile
+    assert 'org.opencontainers.image.version="0.26.0"' in dockerfile
     assert not dockerfile.startswith("# syntax=")
     assert "requirements.build.lock" in dockerfile
     assert "requirements.runtime.lock" in dockerfile
@@ -75,8 +75,8 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
     assert dockerfile.count("python -m pip ") == 6
     assert (
         "COPY --from=wheel_builder "
-        "/project-wheel/video_download_control-0.25.0-py3-none-any.whl "
-        "/tmp/video_download_control-0.25.0-py3-none-any.whl"
+        "/project-wheel/video_download_control-0.26.0-py3-none-any.whl "
+        "/tmp/video_download_control-0.26.0-py3-none-any.whl"
     ) in dockerfile
 
     download_start = dockerfile.index("RUN python -m pip download")
@@ -129,7 +129,7 @@ def test_candidate_dockerfile_pins_base_and_requires_digest_tool_bundle() -> Non
         assert flag in dependency_install
     assert "--no-deps" in project_install
     assert "--no-index" in project_install
-    assert "/tmp/video_download_control-0.25.0-py3-none-any.whl" in project_install
+    assert "/tmp/video_download_control-0.26.0-py3-none-any.whl" in project_install
     for required in ("yt-dlp", "ffmpeg", "ffprobe", "bundle-manifest.json"):
         assert f"/opt/vdc-tools/{required}" in dockerfile
     assert ":latest" not in dockerfile
@@ -147,7 +147,7 @@ def test_python_build_and_runtime_lock_files_are_exact_and_hashed() -> None:
 
     assert build_input == "hatchling==1.27.0\n"
     assert 'requires = ["hatchling==1.27.0"]' in pyproject
-    assert 'version = "0.25.0"' in pyproject
+    assert 'version = "0.26.0"' in pyproject
 
     parsed_locks = [parse_hash_lock(lock) for lock in (build_lock, runtime_lock)]
     for lock, parsed in zip((build_lock, runtime_lock), parsed_locks, strict=True):
@@ -164,7 +164,9 @@ def test_python_build_and_runtime_lock_files_are_exact_and_hashed() -> None:
         "pluggy",
         "trove-classifiers",
     }
-    for direct_runtime in ("fastapi==0.141.1 \\", "uvicorn==0.52.4 \\"):
+    for direct_runtime in (
+        "fastapi==0.141.1 \\", "pillow==12.3.0 \\", "uvicorn==0.52.4 \\",
+    ):
         assert direct_runtime in runtime_lock
 
     uv_document = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
@@ -178,7 +180,7 @@ def test_python_build_and_runtime_lock_files_are_exact_and_hashed() -> None:
         for package in uv_document["package"]
         if package["name"] == "video-download-control"
     )
-    assert root["version"] == "0.25.0"
+    assert root["version"] == "0.26.0"
     pending = [dependency["name"] for dependency in root["dependencies"]]
     expected_names: set[str] = set()
     while pending:
@@ -206,7 +208,7 @@ def test_python_build_and_runtime_lock_files_are_exact_and_hashed() -> None:
     contract_start = runner.index("expected = {")
     contract_end = runner.index("raise SystemExit(", contract_start)
     runtime_contract = runner[contract_start:contract_end]
-    assert '"video-download-control": "0.25.0"' in runtime_contract
+    assert '"video-download-control": "0.26.0"' in runtime_contract
     for name, (locked_version, _) in runtime_packages.items():
         assert f'"{name}": "{locked_version}"' in runtime_contract
     for build_only in parsed_locks[0]:

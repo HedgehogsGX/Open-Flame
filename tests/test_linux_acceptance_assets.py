@@ -114,7 +114,7 @@ def test_linux_acceptance_assets_target_v018_schema_11_contract() -> None:
     for contract in (
         'RESTORE_NAME="vdc-schema11-acceptance-$RUN_ID"',
         "--backup-root ABSOLUTE_SCHEMA11_BACKUP_DIR",
-        '"video-download-control": "0.25.0"',
+        '"video-download-control": "0.26.0"',
         "SCHEMA_VERSION == 11",
         "schema11_exact_runtime_lock_and_no_real_exact_selector",
         "schema11_empty_database_ready",
@@ -124,10 +124,10 @@ def test_linux_acceptance_assets_target_v018_schema_11_contract() -> None:
 
     assert "schema10_restore" not in runner
     assert "ABSOLUTE_SCHEMA9_BACKUP_DIR" not in runner
-    assert checklist.startswith("# Iteration 0.25.0 target Linux/Docker acceptance")
+    assert checklist.startswith("# Iteration 0.26.0 target Linux/Docker acceptance")
     for contract in (
         "Schema 11 backup",
-        "video-download-control==0.25.0",
+        "video-download-control==0.26.0",
         "confirms Schema 11",
         "Schema 11 restore",
         "`schema11_restore`",

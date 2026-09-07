@@ -115,7 +115,7 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     directory, cache, work, manifest, calls, _ = release_fixture
     result = smoke.verify_wheel_release(directory, work, wheelhouse=cache, allow_network=True)
     assert result["status"] == "passed" and result["console_scripts_verified"] == 14
-    assert result["runtime_dependencies_verified"] == 13
+    assert result["runtime_dependencies_verified"] == 14
     assert result["ui_assets_verified"] == 2
     assert calls[0] == ("verify",)
     commands = [call[1] for call in calls[1:]]
@@ -138,7 +138,7 @@ def test_offline_commands_install_only_locked_runtime_and_verified_wheel(release
     expected = json.loads(probe[2])
     assert expected["product_identity"] == manifest["product_identity"]
     assert len(expected["scripts"]) == 14
-    assert len(expected["runtime"]) == 13
+    assert len(expected["runtime"]) == 14
     assert expected["ui_assets"] == {
         name.removeprefix("src/video_download_control/"):
         manifest["source_files"][name]["sha256"]

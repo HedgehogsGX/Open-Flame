@@ -148,7 +148,7 @@ def source_contract(files: dict[str, bytes]) -> tuple[dict, str]:
         require(name not in legal and name in files and hashlib.sha256(files[name]).hexdigest() == digest, "license_hash")
         legal[name] = digest
     require(set(legal) == {name for name in files if name.startswith("licenses/python/")}, "license_inventory")
-    require(len(legal) == 29, "license_inventory")
+    require(len(legal) == 30, "license_inventory")
     require(project["license-files"] == ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python/*/*"], "license_metadata")
     require(project.get("scripts") == PROJECT_SCRIPTS, "entrypoint_metadata")
     for name in ENTRYPOINTS:

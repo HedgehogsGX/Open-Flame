@@ -15,6 +15,7 @@ from video_download_control.uploads.schema import (
 def _make_upload_root(tmp_path: Path) -> Path:
     root = tmp_path / "upload-root"
     (root / "media").mkdir(parents=True)
+    (root / "assets").mkdir()
     ensure_upload_schema(root / "uploads.sqlite3")
     (root / ".worker.lock").write_bytes(b"0")
     return root
@@ -44,7 +45,7 @@ def test_cli_creates_and_restores_an_upload_backup(
         "file_count": 2,
         "manifest_sha256": created["manifest_sha256"],
         "operation": "create",
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "ok",
         "total_bytes": created["total_bytes"],
     }
@@ -70,7 +71,7 @@ def test_cli_creates_and_restores_an_upload_backup(
         "manifest_sha256": created["manifest_sha256"],
         "operation": "restore",
         "restore_root": str(restore_root),
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "ok",
         "total_bytes": restored["total_bytes"],
     }

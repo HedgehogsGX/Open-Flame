@@ -27,7 +27,8 @@ _SPEC.loader.exec_module(release)
 RUNTIME_MODULES = {
     "annotated-doc": "annotated_doc", "annotated-types": "annotated_types",
     "anyio": "anyio", "click": "click", "fastapi": "fastapi", "h11": "h11",
-    "idna": "idna", "pydantic": "pydantic", "pydantic-core": "pydantic_core",
+    "idna": "idna", "pillow": "PIL", "pydantic": "pydantic",
+    "pydantic-core": "pydantic_core",
     "starlette": "starlette", "typing-extensions": "typing_extensions",
     "typing-inspection": "typing_inspection", "uvicorn": "uvicorn",
 }
@@ -218,7 +219,7 @@ def verify_wheel_release(
             },
         }
         release.command(python, ["-c", INSTALLED_PROBE, json.dumps(expected)], work_dir)
-        report.update(status="passed", stage="complete", runtime_dependencies_verified=13,
+        report.update(status="passed", stage="complete", runtime_dependencies_verified=14,
                       console_scripts_verified=len(release.PROJECT_SCRIPTS),
                       ui_assets_verified=len(UI_ASSETS))
     except KeyboardInterrupt:

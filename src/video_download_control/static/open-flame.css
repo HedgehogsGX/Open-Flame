@@ -948,6 +948,21 @@ progress {
   margin-bottom: 6px;
 }
 
+.cover-item {
+  display: flow-root;
+}
+
+.cover-thumbnail {
+  width: min(168px, 38%);
+  max-height: 126px;
+  margin: 0 0 12px 18px;
+  float: right;
+  object-fit: cover;
+  border: 1px solid var(--of-border);
+  border-radius: 12px;
+  background: var(--of-surface-tertiary);
+}
+
 .page-footer {
   margin-top: 32px;
   color: var(--of-text-secondary);

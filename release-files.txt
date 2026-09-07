@@ -61,6 +61,7 @@ licenses/python/packaging-26.3/LICENSE
 licenses/python/packaging-26.3/LICENSE.APACHE
 licenses/python/packaging-26.3/LICENSE.BSD
 licenses/python/pathspec-1.1.1/LICENSE
+licenses/python/pillow-12.3.0/LICENSE
 licenses/python/pluggy-1.6.0/LICENSE
 licenses/python/pydantic-2.13.5/LICENSE
 licenses/python/pydantic_core-2.46.5/LICENSE
@@ -268,9 +269,11 @@ tests/test_upload_backup_restore.py
 tests/test_upload_backend.py
 tests/test_upload_lifecycle.py
 tests/test_upload_login.py
+tests/test_upload_platform_parameters.py
 tests/test_upload_resilience.py
 tests/test_upload_runtime_integrity.py
 tests/test_upload_schema2.py
+tests/test_upload_schema3.py
 tests/test_upload_service.py
 tests/test_upload_ui.py
 tests/test_validation.py
@@ -316,6 +319,7 @@ validation/iteration-0.24.3-debug-fixes.md
 validation/iteration-0.24.3-final-review.md
 validation/iteration-0.24.4-upload-data-lifecycle-evidence.md
 validation/iteration-0.25.0-t16-frontend-evidence.md
+validation/iteration-0.26.0-upload-parameters-evidence.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md
