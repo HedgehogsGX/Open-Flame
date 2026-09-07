@@ -1,0 +1,1329 @@
+"""Transactional service for reviewable, non-destructive edit renders."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import stat
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Event
+from typing import Any, BinaryIO, Iterator, Mapping
+from uuid import UUID, uuid4
+
+from .contracts import (
+    EditRecipe,
+    EditingError,
+    MediaProcessor,
+    RenderAsset,
+    RenderResult,
+    recipe_from_mapping,
+)
+from .schema import SCHEMA_VERSION, EditingSchemaError, ensure_editing_schema
+
+
+MAX_SOURCE_BYTES = 16 * 1024**3
+MAX_OUTPUT_BYTES = 8 * 1024**3
+EDITING_RESERVE_BYTES = 64 * 1024**2
+VERIFIED_MEDIA_CHUNK_BYTES = 1024 * 1024
+_VIDEO_SUFFIXES = frozenset({".mp4", ".mkv", ".mov", ".webm", ".m4v"})
+_ASSET_SUFFIXES = frozenset({".mp4", ".mkv", ".mov", ".webm", ".m4v", ".png", ".jpg", ".jpeg", ".srt", ".vtt", ".wav", ".m4a", ".aac"})
+_ASSET_KINDS = frozenset({"segment", "cover", "caption", "audio", "dubbed_video"})
+_ID = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+_SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_EMPTY_RECIPE = EditRecipe().to_dict()
+
+
+def default_editing_root(data_root: Path) -> Path:
+    """Keep derived media and its database beside the download data root."""
+
+    data_root = Path(data_root)
+    return data_root.with_name(data_root.name + "-edits")
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _identifier(value: object) -> str:
+    if not isinstance(value, str) or not _ID.fullmatch(value):
+        raise EditingError("invalid_identifier")
+    return value
+
+
+def _request_id(value: object) -> str:
+    if not isinstance(value, str) or not _REQUEST_ID.fullmatch(value):
+        raise EditingError("invalid_idempotency_key")
+    return value
+
+
+def _source_asset_identifier(value: object) -> str:
+    if not isinstance(value, str):
+        raise EditingError("invalid_source_asset_id")
+    try:
+        parsed = UUID(value)
+    except ValueError as exc:
+        raise EditingError("invalid_source_asset_id") from exc
+    if str(parsed) != value:
+        raise EditingError("invalid_source_asset_id")
+    return value
+
+
+def _text(value: object, maximum: int, *, required: bool = False) -> str:
+    if (not isinstance(value, str) or len(value) > maximum
+            or any(ord(character) < 32 and character not in "\n\t\r" for character in value)):
+        raise EditingError("invalid_metadata")
+    result = value.strip()
+    if required and not result:
+        raise EditingError("invalid_metadata")
+    return result
+
+
+def _canonical_recipe(recipe: EditRecipe | Mapping[str, Any]) -> tuple[EditRecipe, str, str]:
+    normalized = recipe_from_mapping(recipe)
+    encoded = json.dumps(
+        normalized.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+    return normalized, encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _digest(operation: str, payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        {"operation": operation, "payload": payload},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _plain(path: Path, *, directory: bool = False) -> os.stat_result:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise EditingError("editing_media_unavailable") from exc
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    expected = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    if (not expected or stat.S_ISLNK(info.st_mode)
+            or getattr(info, "st_file_attributes", 0) & reparse
+            or (not directory and info.st_nlink != 1)):
+        raise EditingError("unsafe_editing_file")
+    return info
+
+
+def _file_signature(info: os.stat_result) -> tuple[int, int, int, int]:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def _hash_plain_file(path: Path, *, maximum: int) -> tuple[int, str]:
+    before = _plain(path)
+    if not 0 < before.st_size <= maximum:
+        raise EditingError("editing_media_size_invalid")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if _file_signature(opened) != _file_signature(before):
+                raise EditingError("editing_media_changed")
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+            after_handle = os.fstat(handle.fileno())
+    except OSError as exc:
+        raise EditingError("editing_media_unavailable") from exc
+    after = _plain(path)
+    if (_file_signature(after_handle) != _file_signature(before)
+            or _file_signature(after) != _file_signature(before)):
+        raise EditingError("editing_media_changed")
+    return before.st_size, digest.hexdigest()
+
+
+def _open_verified_file(
+    path: Path,
+    *,
+    maximum: int,
+    expected_size: int,
+    expected_sha256: str,
+    error_code: str,
+) -> tuple[BinaryIO, os.stat_result, tuple[bytes, ...]]:
+    """Verify one managed file and retain that exact open handle for serving."""
+
+    handle: BinaryIO | None = None
+    try:
+        before = _plain(path)
+        if not 0 < before.st_size <= maximum or before.st_size != expected_size:
+            raise EditingError(error_code)
+        handle = path.open("rb")
+        opened = os.fstat(handle.fileno())
+        if _file_signature(opened) != _file_signature(before):
+            raise EditingError(error_code)
+        digest = hashlib.sha256()
+        chunk_digests: list[bytes] = []
+        total = 0
+        while chunk := handle.read(VERIFIED_MEDIA_CHUNK_BYTES):
+            total += len(chunk)
+            if total > expected_size:
+                raise EditingError(error_code)
+            digest.update(chunk)
+            chunk_digests.append(hashlib.sha256(chunk).digest())
+        finished = os.fstat(handle.fileno())
+        after = _plain(path)
+        if (
+            total != expected_size
+            or digest.hexdigest() != expected_sha256
+            or _file_signature(opened) != _file_signature(before)
+            or _file_signature(finished) != _file_signature(before)
+            or _file_signature(after) != _file_signature(before)
+        ):
+            raise EditingError(error_code)
+        handle.seek(0)
+        return handle, opened, tuple(chunk_digests)
+    except EditingError:
+        if handle is not None:
+            handle.close()
+        raise
+    except OSError as exc:
+        if handle is not None:
+            handle.close()
+        raise EditingError(error_code) from exc
+
+
+class EditingService:
+    """Owns Schema 1 records and immutable source/output copies.
+
+    The application owns the single render worker. Claims are fenced with a
+    random token so a stale worker cannot complete another worker's plan.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        processor: MediaProcessor | None = None,
+        *,
+        recover_interrupted: bool = True,
+    ):
+        self.root = Path(root)
+        self.processor = processor
+        self.database_path = self.root / "editing.sqlite3"
+        self.source_root = self.root / "sources"
+        self.asset_root = self.root / "assets"
+        self.staging_root = self.root / "staging"
+        self._prepare_root()
+        try:
+            ensure_editing_schema(self.database_path)
+        except EditingSchemaError as exc:
+            raise EditingError("editing_schema_invalid") from exc
+        if recover_interrupted:
+            self.recover_interrupted()
+
+    def _prepare_root(self) -> None:
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            _plain(self.root, directory=True)
+            for path in (self.source_root, self.asset_root, self.staging_root):
+                path.mkdir(exist_ok=True)
+                _plain(path, directory=True)
+        except OSError as exc:
+            raise EditingError("editing_storage_unavailable") from exc
+
+    @contextmanager
+    def _db(self) -> Iterator[sqlite3.Connection]:
+        try:
+            connection = sqlite3.connect(self.database_path, timeout=30)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=30000")
+            yield connection
+            connection.commit()
+        except sqlite3.Error as exc:
+            try:
+                connection.rollback()
+            except (UnboundLocalError, sqlite3.Error):
+                pass
+            raise EditingError("editing_database_unavailable") from exc
+        finally:
+            try:
+                connection.close()
+            except UnboundLocalError:
+                pass
+
+    def recover_interrupted(self, *, cleanup_orphans: bool = False) -> None:
+        """Fail local work safely and revoke queued confirmation after restart."""
+
+        interrupted: list[tuple[str, str]] = []
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            now = _now()
+            interrupted = [
+                (row["id"], row["claim_token"])
+                for row in db.execute(
+                    "SELECT id,claim_token FROM render_plans "
+                    "WHERE state IN ('running','canceling')"
+                )
+                if isinstance(row["id"], str)
+                and isinstance(row["claim_token"], str)
+                and _ID.fullmatch(row["id"])
+                and _ID.fullmatch(row["claim_token"])
+            ]
+            db.execute(
+                "UPDATE render_plans SET state='failed',code='render_interrupted',"
+                "claim_token=NULL,updated_at=?,finished_at=? "
+                "WHERE state IN ('running','canceling')",
+                (now, now),
+            )
+            db.execute(
+                "UPDATE render_plans SET state='review',code='restart_confirmation_required',"
+                "updated_at=?,confirmed_at=NULL WHERE state='queued'",
+                (now,),
+            )
+        for plan_id, claim_token in interrupted:
+            self._remove_output_dir(self.staging_root / plan_id / claim_token)
+        if cleanup_orphans:
+            self._cleanup_orphan_media()
+
+    def status(self) -> dict[str, Any]:
+        with self._db() as db:
+            counts = {
+                row["state"]: row["amount"]
+                for row in db.execute(
+                    "SELECT state,COUNT(*) amount FROM render_plans GROUP BY state"
+                )
+            }
+            project_count = db.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "processor_configured": self.processor is not None,
+            "project_count": project_count,
+            "plan_counts": counts,
+        }
+
+    def import_source(
+        self,
+        path: Path,
+        name: str,
+        expected_sha256: str,
+        source_asset_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        path = Path(path)
+        name = self._media_name(name, _VIDEO_SUFFIXES)
+        suffix = path.suffix.lower()
+        if suffix not in _VIDEO_SUFFIXES or Path(name).suffix.lower() != suffix:
+            raise EditingError("invalid_source_type")
+        if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
+            raise EditingError("invalid_source_hash")
+        if source_asset_id is not None:
+            source_asset_id = _source_asset_identifier(source_asset_id)
+        key = _request_id(idempotency_key) if idempotency_key is not None else None
+        request_digest = _digest("import_source", {
+            "name": name,
+            "sha256": expected_sha256,
+            "source_asset_id": source_asset_id,
+        })
+        if key is not None:
+            existing = self._request_result(key, "import_source", request_digest)
+            if existing is not None:
+                result = self.source(existing)
+                self.source_path(existing)
+                return result
+        if source_asset_id is not None:
+            with self._db() as db:
+                existing_row = db.execute(
+                    "SELECT * FROM sources WHERE source_asset_id=?", (source_asset_id,)
+                ).fetchone()
+            if existing_row is not None:
+                public = self._source_public(existing_row)
+                if public["sha256"] != expected_sha256 or public["name"] != name:
+                    raise EditingError("source_asset_conflict")
+                self._verified_source_row(existing_row)
+                if key is not None:
+                    self._record_request(key, "import_source", request_digest, public["id"])
+                return public
+
+        source_id = uuid4().hex
+        destination = self.source_root / f"{source_id}{suffix}"
+        size, actual = self._copy_and_hash(path, destination, MAX_SOURCE_BYTES)
+        if actual != expected_sha256:
+            self._discard_unregistered_file(destination)
+            raise EditingError("source_hash_mismatch")
+        now = _now()
+        converged_source_id: str | None = None
+        try:
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if key is not None:
+                    replay = self._request_result_in(db, key, "import_source", request_digest)
+                    if replay is not None:
+                        result = self._source_by_id(db, replay)
+                        converged_source_id = replay
+                if converged_source_id is None and source_asset_id is not None:
+                    existing_row = db.execute(
+                        "SELECT * FROM sources WHERE source_asset_id=?",
+                        (source_asset_id,),
+                    ).fetchone()
+                    if existing_row is not None:
+                        public = self._source_public(existing_row)
+                        if (
+                            public["sha256"] != expected_sha256
+                            or public["name"] != name
+                        ):
+                            raise EditingError("source_asset_conflict")
+                        if key is not None:
+                            self._insert_request(
+                                db,
+                                key,
+                                "import_source",
+                                request_digest,
+                                public["id"],
+                                now,
+                            )
+                        result = public
+                        converged_source_id = public["id"]
+                if converged_source_id is None:
+                    db.execute(
+                        "INSERT INTO sources(id,source_asset_id,name,suffix,size,sha256,created_at) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (source_id, source_asset_id, name, suffix, size, actual, now),
+                    )
+                    if key is not None:
+                        self._insert_request(
+                            db, key, "import_source", request_digest, source_id, now
+                        )
+                    result = self._source_by_id(db, source_id)
+        except Exception:
+            self._discard_unregistered_file(destination)
+            raise
+        if converged_source_id is not None:
+            self._discard_unregistered_file(destination)
+            # Hash the durable source only after releasing the write transaction.
+            # This branch can process a 16 GiB source and must not block all
+            # editing database readers while it verifies the winning copy.
+            self.source_path(converged_source_id)
+        return result
+
+    def sources(self) -> list[dict[str, Any]]:
+        with self._db() as db:
+            rows = db.execute("SELECT * FROM sources ORDER BY created_at,id").fetchall()
+        return [self._source_public(row) for row in rows]
+
+    def source(self, source_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            return self._source_by_id(db, _identifier(source_id))
+
+    def source_path(self, source_id: str) -> Path:
+        """Return a verified internal source path for preview/render code."""
+
+        with self._db() as db:
+            row = db.execute("SELECT * FROM sources WHERE id=?", (_identifier(source_id),)).fetchone()
+        if row is None:
+            raise EditingError("source_not_found")
+        return self._verified_source_row(row)
+
+    def project_source_path(self, project_id: str) -> Path:
+        with self._db() as db:
+            row = db.execute(
+                "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id WHERE p.id=?",
+                (_identifier(project_id),),
+            ).fetchone()
+        if row is None:
+            raise EditingError("project_not_found")
+        return self._verified_source_row(row)
+
+    def open_project_source(
+        self, project_id: str
+    ) -> tuple[BinaryIO, os.stat_result, tuple[bytes, ...], dict[str, Any]]:
+        with self._db() as db:
+            row = db.execute(
+                "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id "
+                "WHERE p.id=?",
+                (_identifier(project_id),),
+            ).fetchone()
+        if row is None:
+            raise EditingError("project_not_found")
+        _identifier(row["id"])
+        if row["suffix"] not in _VIDEO_SUFFIXES:
+            raise EditingError("editing_data_invalid")
+        handle, info, chunk_digests = _open_verified_file(
+            self.source_root / f"{row['id']}{row['suffix']}",
+            maximum=MAX_SOURCE_BYTES,
+            expected_size=row["size"],
+            expected_sha256=row["sha256"],
+            error_code="source_changed",
+        )
+        return handle, info, chunk_digests, self._source_public(row)
+
+    def create_project(
+        self,
+        source_id: str,
+        name: str,
+        idempotency_key: str,
+        recipe: EditRecipe | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        source_id = _identifier(source_id)
+        name = _text(name, 160, required=True)
+        key = _request_id(idempotency_key)
+        if recipe is None:
+            recipe_value = _EMPTY_RECIPE
+            encoded = json.dumps(recipe_value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            recipe_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        else:
+            _normalized, encoded, recipe_hash = _canonical_recipe(recipe)
+        request_digest = _digest("create_project", {
+            "source_id": source_id, "name": name, "recipe_sha256": recipe_hash
+        })
+        existing = self._request_result(key, "create_project", request_digest)
+        if existing is not None:
+            return self.project(existing)
+        with self._db() as db:
+            source_row = db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
+        if source_row is None:
+            raise EditingError("source_not_found")
+        self._verified_source_row(source_row)
+        project_id, now = uuid4().hex, _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, "create_project", request_digest)
+            if replay is not None:
+                return self._project_by_id(db, replay)
+            db.execute(
+                "INSERT INTO projects(id,source_id,name,current_version,created_at,updated_at) "
+                "VALUES(?,?,?,1,?,?)", (project_id, source_id, name, now, now),
+            )
+            db.execute(
+                "INSERT INTO drafts(project_id,version,recipe,recipe_sha256,created_at) "
+                "VALUES(?,1,?,?,?)", (project_id, encoded, recipe_hash, now),
+            )
+            self._insert_request(db, key, "create_project", request_digest, project_id, now)
+            return self._project_by_id(db, project_id)
+
+    def update_draft(
+        self,
+        project_id: str,
+        expected_version: int,
+        recipe: EditRecipe | Mapping[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        project_id = _identifier(project_id)
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 1:
+            raise EditingError("invalid_version")
+        key = _request_id(idempotency_key)
+        _normalized, encoded, recipe_hash = _canonical_recipe(recipe)
+        request_digest = _digest("update_draft", {
+            "project_id": project_id,
+            "expected_version": expected_version,
+            "recipe_sha256": recipe_hash,
+        })
+        existing = self._request_result(key, "update_draft", request_digest)
+        if existing is not None:
+            saved_project, saved_version = self._draft_result_id(existing)
+            return self.draft(saved_project, saved_version)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, "update_draft", request_digest)
+            if replay is not None:
+                saved_project, saved_version = self._draft_result_id(replay)
+                return self._draft_by_version(db, saved_project, saved_version)
+            project = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if project is None:
+                raise EditingError("project_not_found")
+            if project["current_version"] != expected_version:
+                raise EditingError("draft_version_conflict")
+            next_version = expected_version + 1
+            now = _now()
+            db.execute(
+                "INSERT INTO drafts(project_id,version,recipe,recipe_sha256,created_at) "
+                "VALUES(?,?,?,?,?)", (project_id, next_version, encoded, recipe_hash, now),
+            )
+            db.execute(
+                "UPDATE projects SET current_version=?,updated_at=? WHERE id=? AND current_version=?",
+                (next_version, now, project_id, expected_version),
+            )
+            self._insert_request(
+                db, key, "update_draft", request_digest,
+                f"{project_id}:{next_version}", now,
+            )
+            return self._draft_by_version(db, project_id, next_version)
+
+    def draft(self, project_id: str, version: int | None = None) -> dict[str, Any]:
+        project_id = _identifier(project_id)
+        with self._db() as db:
+            if version is None:
+                row = db.execute(
+                    "SELECT current_version FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+                if row is None:
+                    raise EditingError("project_not_found")
+                version = row["current_version"]
+            if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+                raise EditingError("invalid_version")
+            return self._draft_by_version(db, project_id, version)
+
+    def projects(self) -> list[dict[str, Any]]:
+        with self._db() as db:
+            rows = db.execute("SELECT * FROM projects ORDER BY updated_at DESC,id").fetchall()
+            return [self._project_public(db, row) for row in rows]
+
+    def project(self, project_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            return self._project_by_id(db, _identifier(project_id))
+
+    def create_plan(
+        self,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        project_id = _identifier(project_id)
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 1:
+            raise EditingError("invalid_version")
+        key = _request_id(idempotency_key)
+        request_digest = _digest("create_plan", {
+            "project_id": project_id, "expected_version": expected_version
+        })
+        existing = self._request_result(key, "create_plan", request_digest)
+        if existing is not None:
+            return self.plan(existing)
+        with self._db() as db:
+            project = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if project is None:
+                raise EditingError("project_not_found")
+            if project["current_version"] != expected_version:
+                raise EditingError("draft_version_conflict")
+            draft = db.execute(
+                "SELECT * FROM drafts WHERE project_id=? AND version=?",
+                (project_id, expected_version),
+            ).fetchone()
+            source_row = db.execute(
+                "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id WHERE p.id=?",
+                (project_id,),
+            ).fetchone()
+        if draft is None or source_row is None:
+            raise EditingError("editing_data_invalid")
+        self._draft_public(draft)
+        self._verified_source_row(source_row)
+        plan_id, now = uuid4().hex, _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, "create_plan", request_digest)
+            if replay is not None:
+                return self._plan_by_id(db, replay)
+            current = db.execute(
+                "SELECT current_version FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if current is None or current["current_version"] != expected_version:
+                raise EditingError("draft_version_conflict")
+            db.execute(
+                "INSERT INTO render_plans(id,project_id,draft_version,recipe,recipe_sha256,"
+                "state,code,created_at,updated_at) VALUES(?,?,?,?,?,'review',"
+                "'explicit_confirmation_required',?,?)",
+                (plan_id, project_id, expected_version, draft["recipe"], draft["recipe_sha256"], now, now),
+            )
+            self._insert_request(db, key, "create_plan", request_digest, plan_id, now)
+            return self._plan_by_id(db, plan_id)
+
+    def confirm_plan(self, plan_id: str) -> dict[str, Any]:
+        plan_id = _identifier(plan_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM render_plans WHERE id=?", (plan_id,)).fetchone()
+            if row is None:
+                raise EditingError("plan_not_found")
+            if row["state"] in {"queued", "running", "canceling", "ready"}:
+                return self._plan_public(db, row)
+            if row["state"] != "review":
+                raise EditingError("plan_not_reviewable")
+            recipe = self._recipe_from_row(row)
+            if recipe.translation.state == "blocked" or recipe.dubbing.state == "blocked":
+                raise EditingError("ai_operation_blocked")
+            source_row = db.execute(
+                "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id "
+                "WHERE p.id=?", (row["project_id"],),
+            ).fetchone()
+        if source_row is None:
+            raise EditingError("editing_data_invalid")
+        self._verified_source_row(source_row)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            now = _now()
+            changed = db.execute(
+                "UPDATE render_plans SET state='queued',code='',confirmed_at=?,updated_at=? "
+                "WHERE id=? AND state='review'", (now, now, plan_id),
+            ).rowcount
+            if not changed:
+                current = self._plan_by_id(db, plan_id)
+                if current["state"] in {"queued", "running", "canceling", "ready"}:
+                    return current
+                raise EditingError("plan_state_conflict")
+            return self._plan_by_id(db, plan_id)
+
+    def retry_plan(self, plan_id: str, idempotency_key: str) -> dict[str, Any]:
+        """Create a new review plan from one immutable terminal plan."""
+
+        plan_id, key = _identifier(plan_id), _request_id(idempotency_key)
+        request_digest = _digest("retry_plan", {"plan_id": plan_id})
+        existing = self._request_result(key, "retry_plan", request_digest)
+        if existing is not None:
+            return self.plan(existing)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, "retry_plan", request_digest)
+            if replay is not None:
+                return self._plan_by_id(db, replay)
+            original = db.execute("SELECT * FROM render_plans WHERE id=?", (plan_id,)).fetchone()
+            if original is None:
+                raise EditingError("plan_not_found")
+            if original["state"] not in {"failed", "canceled"}:
+                raise EditingError("plan_retry_not_allowed")
+            new_id, now = uuid4().hex, _now()
+            db.execute(
+                "INSERT INTO render_plans(id,project_id,draft_version,recipe,recipe_sha256,"
+                "state,code,created_at,updated_at,retry_of) VALUES(?,?,?,?,?,'review',"
+                "'explicit_confirmation_required',?,?,?)",
+                (new_id, original["project_id"], original["draft_version"], original["recipe"],
+                 original["recipe_sha256"], now, now, plan_id),
+            )
+            self._insert_request(db, key, "retry_plan", request_digest, new_id, now)
+            return self._plan_by_id(db, new_id)
+
+    def claim_next_plan(self) -> dict[str, Any] | None:
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT id FROM render_plans WHERE state='queued' ORDER BY confirmed_at,id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            token, now = uuid4().hex, _now()
+            changed = db.execute(
+                "UPDATE render_plans SET state='running',claim_token=?,started_at=?,updated_at=? "
+                "WHERE id=? AND state='queued'", (token, now, now, row["id"]),
+            ).rowcount
+            if not changed:
+                return None
+            result = self._plan_by_id(db, row["id"])
+            result["claim_token"] = token
+            return result
+
+    def cancel_plan(self, plan_id: str) -> dict[str, Any]:
+        plan_id = _identifier(plan_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM render_plans WHERE id=?", (plan_id,)).fetchone()
+            if row is None:
+                raise EditingError("plan_not_found")
+            now = _now()
+            if row["state"] in {"review", "queued"}:
+                db.execute(
+                    "UPDATE render_plans SET state='canceled',code='canceled',"
+                    "updated_at=?,finished_at=? WHERE id=?", (now, now, plan_id),
+                )
+            elif row["state"] == "running":
+                db.execute(
+                    "UPDATE render_plans SET state='canceling',code='cancellation_requested',"
+                    "updated_at=? WHERE id=?", (now, plan_id),
+                )
+            return self._plan_by_id(db, plan_id)
+
+    def plan_cancellation_requested(self, plan_id: str, claim_token: str) -> bool:
+        plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+        if row is None or row["claim_token"] != claim_token:
+            raise EditingError("stale_render_claim")
+        return row["state"] == "canceling"
+
+    def source_path_for_plan(self, plan_id: str) -> Path:
+        return self.source_identity_for_plan(plan_id)[0]
+
+    def source_identity_for_plan(self, plan_id: str) -> tuple[Path, int, str]:
+        """Return a verified path plus the immutable database identity."""
+
+        plan_id = _identifier(plan_id)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id "
+                "JOIN render_plans r ON r.project_id=p.id WHERE r.id=?",
+                (plan_id,),
+            ).fetchone()
+        if row is None:
+            raise EditingError("plan_not_found")
+        return self._verified_source_row(row), row["size"], row["sha256"]
+
+    def output_dir_for_plan(self, plan_id: str, claim_token: str) -> Path:
+        plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+        if row is None:
+            raise EditingError("plan_not_found")
+        if row["state"] not in {"running", "canceling"} or row["claim_token"] != claim_token:
+            raise EditingError("stale_render_claim")
+        plan_directory = self.staging_root / plan_id
+        directory = plan_directory / claim_token
+        try:
+            _plain(self.staging_root, directory=True)
+            if plan_directory.exists() or plan_directory.is_symlink():
+                _plain(plan_directory, directory=True)
+            else:
+                plan_directory.mkdir()
+                _plain(plan_directory, directory=True)
+            if directory.exists() or directory.is_symlink():
+                _plain(directory, directory=True)
+            else:
+                directory.mkdir()
+            _plain(directory, directory=True)
+        except (OSError, EditingError) as exc:
+            raise EditingError("editing_storage_unavailable") from exc
+        return directory
+
+    def complete_plan(
+        self, plan_id: str, claim_token: str, result: RenderResult
+    ) -> dict[str, Any]:
+        plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
+        if not isinstance(result, RenderResult) or not _SAFE_CODE.fullmatch(result.code):
+            raise EditingError("invalid_render_result")
+        if result.status in {"failed", "canceled"}:
+            return self.fail_plan(plan_id, claim_token, result.code, canceled=result.status == "canceled")
+        if result.status != "ready" or not result.assets or len(result.assets) > 201:
+            raise EditingError("invalid_render_result")
+        with self._db() as db:
+            state = db.execute(
+                "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+        if state is None:
+            raise EditingError("plan_not_found")
+        if state["claim_token"] != claim_token or state["state"] not in {"running", "canceling"}:
+            raise EditingError("stale_render_claim")
+        if state["state"] == "canceling":
+            return self.fail_plan(plan_id, claim_token, "canceled", canceled=True)
+
+        output_dir = self.output_dir_for_plan(plan_id, claim_token)
+        records: list[dict[str, Any]] = []
+        names: set[str] = set()
+        try:
+            for asset in result.assets:
+                if not isinstance(asset, RenderAsset) or asset.kind not in _ASSET_KINDS:
+                    raise EditingError("invalid_render_asset")
+                name = self._media_name(asset.name, _ASSET_SUFFIXES)
+                suffix = Path(name).suffix.lower()
+                source_path = Path(asset.path)
+                try:
+                    if source_path.parent.resolve(strict=True) != output_dir.resolve(strict=True):
+                        raise EditingError("invalid_render_asset")
+                except OSError as exc:
+                    raise EditingError("invalid_render_asset") from exc
+                if source_path.suffix.lower() != suffix or name in names:
+                    raise EditingError("invalid_render_asset")
+                names.add(name)
+                mime_type = _text(asset.mime_type, 120, required=True)
+                if "/" not in mime_type or any(character.isspace() for character in mime_type):
+                    raise EditingError("invalid_render_asset")
+                asset_id = uuid4().hex
+                destination = self.asset_root / f"{asset_id}{suffix}"
+                size, digest = self._copy_and_hash(source_path, destination, MAX_OUTPUT_BYTES)
+                if asset.size_bytes not in {0, size}:
+                    self._discard_unregistered_file(destination)
+                    raise EditingError("render_asset_size_mismatch")
+                if asset.sha256 and asset.sha256 != digest:
+                    self._discard_unregistered_file(destination)
+                    raise EditingError("render_asset_hash_mismatch")
+                ordinal = self._optional_integer(asset.ordinal, minimum=0, required=True)
+                duration_ms = self._optional_integer(asset.duration_ms, minimum=0)
+                width = self._optional_integer(asset.width, minimum=1)
+                height = self._optional_integer(asset.height, minimum=1)
+                container = _text(asset.container, 40)
+                video_codec = None if asset.video_codec is None else _text(asset.video_codec, 80)
+                audio_codec = None if asset.audio_codec is None else _text(asset.audio_codec, 80)
+                records.append({
+                    "id": asset_id, "plan_id": plan_id, "kind": asset.kind,
+                    "name": name, "suffix": suffix, "mime_type": mime_type,
+                    "size": size, "sha256": digest, "ordinal": ordinal,
+                    "duration_ms": duration_ms, "width": width, "height": height,
+                    "container": container, "video_codec": video_codec,
+                    "audio_codec": audio_codec, "path": destination,
+                })
+            now = _now()
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                current = db.execute(
+                    "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
+                ).fetchone()
+                if (current is None or current["claim_token"] != claim_token
+                        or current["state"] != "running"):
+                    raise EditingError("stale_render_claim")
+                db.executemany(
+                    "INSERT INTO assets(id,plan_id,kind,name,suffix,mime_type,size,sha256,"
+                    "ordinal,duration_ms,width,height,container,video_codec,audio_codec,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    [(row["id"], row["plan_id"], row["kind"], row["name"], row["suffix"],
+                      row["mime_type"], row["size"], row["sha256"], row["ordinal"],
+                      row["duration_ms"], row["width"], row["height"], row["container"],
+                      row["video_codec"], row["audio_codec"], now) for row in records],
+                )
+                db.execute(
+                    "UPDATE render_plans SET state='ready',code=?,claim_token=NULL,"
+                    "updated_at=?,finished_at=? WHERE id=? AND state='running' AND claim_token=?",
+                    (result.code, now, now, plan_id, claim_token),
+                )
+                completed = self._plan_by_id(db, plan_id)
+        except Exception:
+            for row in records:
+                self._discard_unregistered_file(row["path"])
+            raise
+        self._remove_output_dir(output_dir)
+        return completed
+
+    def fail_plan(
+        self,
+        plan_id: str,
+        claim_token: str,
+        code: str,
+        *,
+        canceled: bool = False,
+    ) -> dict[str, Any]:
+        plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
+        if not isinstance(code, str) or not _SAFE_CODE.fullmatch(code):
+            raise EditingError("invalid_render_result")
+        final_state = "canceled" if canceled else "failed"
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+            if row is None:
+                raise EditingError("plan_not_found")
+            if row["claim_token"] != claim_token or row["state"] not in {"running", "canceling"}:
+                raise EditingError("stale_render_claim")
+            now = _now()
+            db.execute(
+                "UPDATE render_plans SET state=?,code=?,claim_token=NULL,updated_at=?,finished_at=? "
+                "WHERE id=? AND claim_token=?", (final_state, code, now, now, plan_id, claim_token),
+            )
+            result = self._plan_by_id(db, plan_id)
+        self._remove_output_dir(self.staging_root / plan_id / claim_token)
+        return result
+
+    def process_next(self, cancel_event: Event | None = None) -> dict[str, Any] | None:
+        if self.processor is None:
+            raise EditingError("processor_not_configured")
+        claim = self.claim_next_plan()
+        if claim is None:
+            return None
+        plan_id, token = claim["id"], claim["claim_token"]
+        try:
+            source, source_size, source_sha256 = self.source_identity_for_plan(plan_id)
+            result = self.processor.render(
+                source,
+                self.output_dir_for_plan(plan_id, token),
+                recipe_from_mapping(claim["recipe"]),
+                cancel_event=cancel_event,
+                expected_source_size=source_size,
+                expected_source_sha256=source_sha256,
+            )
+            return self.complete_plan(plan_id, token, result)
+        except EditingError as exc:
+            try:
+                return self.fail_plan(plan_id, token, exc.code)
+            except EditingError:
+                raise exc
+        except Exception:
+            return self.fail_plan(plan_id, token, "processor_failed")
+
+    def plans(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        values: tuple[Any, ...] = ()
+        query = "SELECT * FROM render_plans"
+        if project_id is not None:
+            query += " WHERE project_id=?"
+            values = (_identifier(project_id),)
+        query += " ORDER BY created_at DESC,id"
+        with self._db() as db:
+            rows = db.execute(query, values).fetchall()
+            return [self._plan_public(db, row) for row in rows]
+
+    def plan(self, plan_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            return self._plan_by_id(db, _identifier(plan_id))
+
+    def assets(
+        self, plan_id: str | None = None, *, project_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        if plan_id is not None and project_id is not None:
+            raise EditingError("invalid_asset_filter")
+        query, values = "SELECT a.* FROM assets a", ()
+        if plan_id is not None:
+            query += " WHERE a.plan_id=?"
+            values = (_identifier(plan_id),)
+        elif project_id is not None:
+            query += " JOIN render_plans r ON r.id=a.plan_id WHERE r.project_id=?"
+            values = (_identifier(project_id),)
+        query += (
+            " ORDER BY a.created_at,a.plan_id,"
+            "CASE a.kind WHEN 'segment' THEN 0 WHEN 'dubbed_video' THEN 1 "
+            "WHEN 'cover' THEN 2 ELSE 3 END,a.ordinal,a.id"
+        )
+        with self._db() as db:
+            return [self._asset_public(row) for row in db.execute(query, values)]
+
+    def asset(self, asset_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM assets WHERE id=?", (_identifier(asset_id),)).fetchone()
+        if row is None:
+            raise EditingError("asset_not_found")
+        return self._asset_public(row)
+
+    def asset_path(self, asset_id: str) -> Path:
+        asset_id = _identifier(asset_id)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT a.*,r.state FROM assets a JOIN render_plans r ON r.id=a.plan_id WHERE a.id=?",
+                (asset_id,),
+            ).fetchone()
+        if row is None or row["state"] != "ready":
+            raise EditingError("asset_not_ready")
+        if row["suffix"] not in _ASSET_SUFFIXES:
+            raise EditingError("editing_data_invalid")
+        path = self.asset_root / f"{asset_id}{row['suffix']}"
+        size, digest = _hash_plain_file(path, maximum=MAX_OUTPUT_BYTES)
+        if size != row["size"] or digest != row["sha256"]:
+            raise EditingError("asset_changed")
+        return path
+
+    def open_asset(
+        self, asset_id: str
+    ) -> tuple[BinaryIO, os.stat_result, tuple[bytes, ...], dict[str, Any]]:
+        asset_id = _identifier(asset_id)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT a.*,r.state FROM assets a "
+                "JOIN render_plans r ON r.id=a.plan_id WHERE a.id=?",
+                (asset_id,),
+            ).fetchone()
+        if row is None or row["state"] != "ready":
+            raise EditingError("asset_not_ready")
+        if row["suffix"] not in _ASSET_SUFFIXES:
+            raise EditingError("editing_data_invalid")
+        handle, info, chunk_digests = _open_verified_file(
+            self.asset_root / f"{asset_id}{row['suffix']}",
+            maximum=MAX_OUTPUT_BYTES,
+            expected_size=row["size"],
+            expected_sha256=row["sha256"],
+            error_code="asset_changed",
+        )
+        return handle, info, chunk_digests, self._asset_public(row)
+
+    def _media_name(self, value: object, suffixes: frozenset[str]) -> str:
+        name = _text(value, 240, required=True)
+        if Path(name).name != name or name in {".", ".."} or Path(name).suffix.lower() not in suffixes:
+            raise EditingError("invalid_media_name")
+        return name
+
+    def _optional_integer(
+        self, value: object, *, minimum: int, required: bool = False
+    ) -> int | None:
+        if value is None and not required:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise EditingError("invalid_render_asset")
+        return value
+
+    def _copy_and_hash(self, source: Path, destination: Path, maximum: int) -> tuple[int, str]:
+        before = _plain(source)
+        if not 0 < before.st_size <= maximum:
+            raise EditingError("editing_media_size_invalid")
+        try:
+            _plain(destination.parent, directory=True)
+            usage = shutil.disk_usage(destination.parent)
+        except (OSError, EditingError) as exc:
+            raise EditingError("editing_storage_unavailable") from exc
+        if usage.free < before.st_size + EDITING_RESERVE_BYTES:
+            raise EditingError("editing_storage_full")
+        digest = hashlib.sha256()
+        try:
+            with source.open("rb") as reader, destination.open("xb") as writer:
+                opened = os.fstat(reader.fileno())
+                if _file_signature(opened) != _file_signature(before):
+                    raise EditingError("editing_media_changed")
+                while chunk := reader.read(1024 * 1024):
+                    digest.update(chunk)
+                    writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
+                after_handle = os.fstat(reader.fileno())
+            after = _plain(source)
+            copied = _plain(destination)
+        except Exception:
+            self._discard_unregistered_file(destination)
+            raise
+        if (_file_signature(after_handle) != _file_signature(before)
+                or _file_signature(after) != _file_signature(before)
+                or copied.st_size != before.st_size):
+            self._discard_unregistered_file(destination)
+            raise EditingError("editing_media_changed")
+        return before.st_size, digest.hexdigest()
+
+    @staticmethod
+    def _discard_unregistered_file(path: Path) -> None:
+        """Best-effort cleanup must not mask the durable operation result."""
+
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _cleanup_orphan_media(self) -> None:
+        """Remove only strict managed-looking files absent from the database."""
+
+        with self._db() as db:
+            registered_sources = {
+                f"{row['id']}{row['suffix']}"
+                for row in db.execute("SELECT id,suffix FROM sources")
+                if isinstance(row["id"], str)
+                and isinstance(row["suffix"], str)
+            }
+            registered_assets = {
+                f"{row['id']}{row['suffix']}"
+                for row in db.execute("SELECT id,suffix FROM assets")
+                if isinstance(row["id"], str)
+                and isinstance(row["suffix"], str)
+            }
+            active_claims = {
+                (row["id"], row["claim_token"])
+                for row in db.execute(
+                    "SELECT id,claim_token FROM render_plans "
+                    "WHERE state IN ('running','canceling')"
+                )
+                if isinstance(row["id"], str)
+                and isinstance(row["claim_token"], str)
+                and _ID.fullmatch(row["id"])
+                and _ID.fullmatch(row["claim_token"])
+            }
+        for root, registered, suffixes in (
+            (self.source_root, registered_sources, _VIDEO_SUFFIXES),
+            (self.asset_root, registered_assets, _ASSET_SUFFIXES),
+        ):
+            try:
+                _plain(root, directory=True)
+                with os.scandir(root) as iterator:
+                    entries = tuple(iterator)
+            except (OSError, EditingError) as exc:
+                raise EditingError("editing_storage_unavailable") from exc
+            for entry in entries:
+                if entry.name in registered:
+                    continue
+                candidate = Path(entry.name)
+                suffix = candidate.suffix.lower()
+                if (
+                    candidate.name != entry.name
+                    or suffix not in suffixes
+                    or candidate.suffix != suffix
+                    or not _ID.fullmatch(candidate.stem)
+                ):
+                    continue
+                path = root / entry.name
+                try:
+                    _plain(path)
+                except EditingError:
+                    continue
+                self._discard_unregistered_file(path)
+
+        try:
+            _plain(self.staging_root, directory=True)
+            with os.scandir(self.staging_root) as iterator:
+                plan_entries = tuple(iterator)
+        except (OSError, EditingError) as exc:
+            raise EditingError("editing_storage_unavailable") from exc
+        for plan_entry in plan_entries:
+            if not _ID.fullmatch(plan_entry.name):
+                continue
+            plan_directory = self.staging_root / plan_entry.name
+            try:
+                _plain(plan_directory, directory=True)
+                with os.scandir(plan_directory) as iterator:
+                    claim_entries = tuple(iterator)
+            except (OSError, EditingError):
+                continue
+            for claim_entry in claim_entries:
+                if not _ID.fullmatch(claim_entry.name):
+                    continue
+                claim = (plan_entry.name, claim_entry.name)
+                if claim in active_claims:
+                    continue
+                claim_directory = plan_directory / claim_entry.name
+                try:
+                    _plain(claim_directory, directory=True)
+                except EditingError:
+                    continue
+                self._remove_output_dir(claim_directory)
+
+    def _verified_source_row(self, row: sqlite3.Row) -> Path:
+        _identifier(row["id"])
+        if row["suffix"] not in _VIDEO_SUFFIXES:
+            raise EditingError("editing_data_invalid")
+        path = self.source_root / f"{row['id']}{row['suffix']}"
+        size, digest = _hash_plain_file(path, maximum=MAX_SOURCE_BYTES)
+        if size != row["size"] or digest != row["sha256"]:
+            raise EditingError("source_changed")
+        return path
+
+    def _source_public(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {key: row[key] for key in (
+            "id", "source_asset_id", "name", "size", "sha256", "created_at"
+        )}
+
+    def _source_by_id(self, db: sqlite3.Connection, source_id: str) -> dict[str, Any]:
+        row = db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
+        if row is None:
+            raise EditingError("source_not_found")
+        return self._source_public(row)
+
+    def _draft_public(self, row: sqlite3.Row) -> dict[str, Any]:
+        try:
+            raw_recipe = json.loads(row["recipe"])
+            if raw_recipe == _EMPTY_RECIPE:
+                canonical = _EMPTY_RECIPE
+            else:
+                canonical = recipe_from_mapping(raw_recipe).to_dict()
+            encoded = json.dumps(
+                canonical, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
+            if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != row["recipe_sha256"]:
+                raise EditingError("editing_data_invalid")
+        except (json.JSONDecodeError, EditingError) as exc:
+            raise EditingError("editing_data_invalid") from exc
+        return {
+            "project_id": row["project_id"], "version": row["version"],
+            "recipe": canonical, "recipe_sha256": row["recipe_sha256"],
+            "created_at": row["created_at"],
+        }
+
+    def _draft_by_version(self, db: sqlite3.Connection, project_id: str, version: int) -> dict[str, Any]:
+        row = db.execute(
+            "SELECT * FROM drafts WHERE project_id=? AND version=?", (project_id, version)
+        ).fetchone()
+        if row is None:
+            raise EditingError("draft_not_found")
+        return self._draft_public(row)
+
+    def _project_public(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        result = {key: row[key] for key in (
+            "id", "source_id", "name", "current_version", "created_at", "updated_at"
+        )}
+        source = db.execute(
+            "SELECT source_asset_id,name,size,sha256 FROM sources WHERE id=?", (row["source_id"],)
+        ).fetchone()
+        if source is None:
+            raise EditingError("editing_data_invalid")
+        result.update({
+            "source_asset_id": source["source_asset_id"],
+            "source_name": source["name"], "source_size": source["size"],
+            "source_sha256": source["sha256"],
+        })
+        result["draft"] = self._draft_by_version(db, row["id"], row["current_version"])
+        return result
+
+    def _project_by_id(self, db: sqlite3.Connection, project_id: str) -> dict[str, Any]:
+        row = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if row is None:
+            raise EditingError("project_not_found")
+        return self._project_public(db, row)
+
+    def _recipe_from_row(self, row: sqlite3.Row) -> EditRecipe:
+        try:
+            recipe = recipe_from_mapping(json.loads(row["recipe"]))
+            encoded = json.dumps(recipe.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        except (json.JSONDecodeError, EditingError) as exc:
+            raise EditingError("editing_data_invalid") from exc
+        if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != row["recipe_sha256"]:
+            raise EditingError("editing_data_invalid")
+        return recipe
+
+    def _plan_public(self, db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        recipe = self._recipe_from_row(row)
+        result = {key: row[key] for key in (
+            "id", "project_id", "draft_version", "recipe_sha256", "state", "code",
+            "created_at", "updated_at", "confirmed_at", "started_at", "finished_at", "retry_of",
+        )}
+        result["recipe"] = recipe.to_dict()
+        result["assets"] = [
+            self._asset_public(asset) for asset in db.execute(
+                "SELECT * FROM assets WHERE plan_id=? ORDER BY "
+                "CASE kind WHEN 'segment' THEN 0 WHEN 'dubbed_video' THEN 1 "
+                "WHEN 'cover' THEN 2 ELSE 3 END,ordinal,id",
+                (row["id"],)
+            )
+        ]
+        return result
+
+    def _plan_by_id(self, db: sqlite3.Connection, plan_id: str) -> dict[str, Any]:
+        row = db.execute("SELECT * FROM render_plans WHERE id=?", (plan_id,)).fetchone()
+        if row is None:
+            raise EditingError("plan_not_found")
+        return self._plan_public(db, row)
+
+    def _asset_public(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {key: row[key] for key in (
+            "id", "plan_id", "kind", "name", "mime_type", "size", "sha256",
+            "ordinal", "duration_ms", "width", "height", "container", "video_codec",
+            "audio_codec", "created_at"
+        )}
+
+    def _request_result(self, key: str, operation: str, digest: str) -> str | None:
+        with self._db() as db:
+            return self._request_result_in(db, key, operation, digest)
+
+    def _request_result_in(
+        self, db: sqlite3.Connection, key: str, operation: str, digest: str
+    ) -> str | None:
+        row = db.execute("SELECT * FROM requests WHERE id=?", (key,)).fetchone()
+        if row is None:
+            return None
+        if row["operation"] != operation or row["digest"] != digest:
+            raise EditingError("idempotency_conflict")
+        return row["result_id"]
+
+    def _insert_request(
+        self, db: sqlite3.Connection, key: str, operation: str,
+        digest: str, result_id: str, now: str,
+    ) -> None:
+        db.execute(
+            "INSERT INTO requests(id,operation,digest,result_id,created_at) VALUES(?,?,?,?,?)",
+            (key, operation, digest, result_id, now),
+        )
+
+    def _record_request(self, key: str, operation: str, digest: str, result_id: str) -> None:
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = self._request_result_in(db, key, operation, digest)
+            if existing is None:
+                self._insert_request(db, key, operation, digest, result_id, _now())
+            elif existing != result_id:
+                raise EditingError("idempotency_conflict")
+
+    def _draft_result_id(self, value: str) -> tuple[str, int]:
+        try:
+            project_id, version = value.split(":", 1)
+            return _identifier(project_id), int(version)
+        except (ValueError, EditingError) as exc:
+            raise EditingError("editing_data_invalid") from exc
+
+    def _remove_output_dir(self, path: Path) -> None:
+        try:
+            resolved_root = self.staging_root.resolve(strict=True)
+            resolved = path.resolve(strict=False)
+            if resolved_root not in resolved.parents or len(resolved.parts) < len(resolved_root.parts) + 2:
+                return
+            if path.exists() and not path.is_symlink():
+                shutil.rmtree(path)
+            parent = path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass

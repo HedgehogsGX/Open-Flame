@@ -376,6 +376,13 @@ def test_private_runtime_and_media_filenames_are_rejected_even_when_text(name: s
         release.privacy_check({name: b"synthetic fixture, not actual media or credentials"})
 
 
+def test_editing_runtime_tree_is_rejected_by_private_path_gate() -> None:
+    with pytest.raises(release.ReleaseError, match="^private_path$"):
+        release.privacy_check(
+            {"data-edits/sources/review.txt": b"synthetic non-media fixture"}
+        )
+
+
 @pytest.mark.parametrize("separator", ["/", "\\"])
 def test_windows_user_path_in_text_is_rejected_without_a_test_directory_bypass(separator: str) -> None:
     payload = ("C:" + separator + "Users" + separator + "SYNTHETIC-NOT-APPROVED" + separator + "private.txt").encode()

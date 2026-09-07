@@ -36,6 +36,7 @@ def test_sdist_excludes_self_reference_and_local_runtime_trees() -> None:
         "/validation/local/**",
         "/runtime-tools/**",
         "/data-uploads/**",
+        "/data-edits/**",
         "/dist/**",
         "/build/**",
         "/.venv/**",

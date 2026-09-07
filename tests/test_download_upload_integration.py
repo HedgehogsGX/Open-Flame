@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from video_download_control.adapters import ScriptedFakeAdapter
 from video_download_control.api import create_app
 from video_download_control.assets import AssetStore, NonEmptyTestVerifier
 from video_download_control.database import SCHEMA_VERSION
+from video_download_control.editing.contracts import RenderAsset, RenderResult
+from video_download_control.editing.service import default_editing_root
 from video_download_control.uploads.service import UploadService, default_upload_root
 from video_download_control.worker import Worker
 from video_download_control.worker_repository import WorkerRepository
@@ -87,6 +90,43 @@ class _NoRemoteBackend:
 
     def upload(self, *args, **kwargs):
         return self._forbidden("upload")
+
+
+class _OfflineEditProcessor:
+    def render(
+        self,
+        source,
+        output_dir,
+        recipe,
+        *,
+        cancel_event=None,
+        expected_source_size=None,
+        expected_source_sha256=None,
+    ):
+        assert source.read_bytes() == PAYLOAD
+        assert expected_source_size == len(PAYLOAD)
+        assert expected_source_sha256 == hashlib.sha256(PAYLOAD).hexdigest()
+        target = output_dir / "segment-001.mp4"
+        target.write_bytes(b"derived edit output\n")
+        return RenderResult(
+            status="ready",
+            code="render_complete",
+            assets=(
+                RenderAsset(
+                    kind="segment",
+                    path=target,
+                    name=target.name,
+                    mime_type="video/mp4",
+                    ordinal=1,
+                    duration_ms=1000,
+                    width=1280,
+                    height=720,
+                    container="mov,mp4,m4a,3gp,3g2,mj2",
+                    video_codec="h264",
+                    audio_codec="aac",
+                ),
+            ),
+        )
 
 
 @pytest.fixture
@@ -311,4 +351,76 @@ def test_nonvideo_ready_asset_cannot_create_an_upload_source(
     assert rejected.status_code == 404
     assert rejected.json() == {"detail": "asset_not_found"}
     assert not default_upload_root(settings.data_root).exists()
+    assert backend.actions == []
+
+
+def test_download_edit_output_copies_into_upload_without_platform_action(
+    handoff_app,
+    settings,
+):
+    client, app, backend = handoff_app
+    _, asset, original = _download(client, app, settings)
+    download_before = _download_snapshot(app)
+    original_before = original.read_bytes()
+    app.state.editing_manager.processor_factory = _OfflineEditProcessor
+    client.headers["X-Editing-CSRF"] = client.get(
+        "/api/v1/edits/session"
+    ).json()["csrf_token"]
+
+    page = client.get("/edits", params={"asset_id": asset["asset_id"]})
+    assert page.status_code == 200
+    assert not default_editing_root(settings.data_root).exists()
+    project_response = client.post(
+        f"/api/v1/edits/projects/assets/{asset['asset_id']}",
+        json={"name": "Offline edit handoff", "idempotency_key": "handoff-project"},
+    )
+    assert project_response.status_code == 201, project_response.text
+    project = project_response.json()
+    saved = client.put(
+        f"/api/v1/edits/projects/{project['id']}/draft",
+        json={
+            "expected_version": 1,
+            "idempotency_key": "handoff-draft",
+            "recipe": {
+                "segments": [{"start_ms": 0, "end_ms": 1000, "label": "clip"}],
+                "cover": None,
+                "translation": None,
+                "dubbing": None,
+            },
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    plan = client.post(
+        f"/api/v1/edits/projects/{project['id']}/plans",
+        json={"expected_version": 2, "idempotency_key": "handoff-plan"},
+    ).json()
+    assert plan["state"] == "review"
+    assert client.post(f"/api/v1/edits/plans/{plan['id']}/confirm").status_code == 200
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        plan = client.get(f"/api/v1/edits/plans/{plan['id']}").json()
+        if plan["state"] == "ready":
+            break
+        time.sleep(0.02)
+    assert plan["state"] == "ready"
+    output = plan["assets"][0]
+    edited_path = app.state.editing_manager.resolve_output(output["id"])[0]
+    assert edited_path.read_bytes() == b"derived edit output\n"
+    assert original.read_bytes() == original_before
+    assert _download_snapshot(app) == download_before
+    assert backend.actions == []
+
+    upload_page = client.get("/uploads", params={"edit_output_id": output["id"]})
+    assert upload_page.status_code == 200
+    assert client.get("/api/v1/uploads/sources").json() == []
+    imported = client.post(f"/api/v1/uploads/sources/edits/{output['id']}")
+    assert imported.status_code == 201, imported.text
+    upload_source = imported.json()
+    upload_path = default_upload_root(settings.data_root) / "media" / (
+        upload_source["id"] + ".mp4"
+    )
+    assert upload_path.read_bytes() == edited_path.read_bytes()
+    assert upload_path.resolve() != edited_path.resolve()
+    assert original.read_bytes() == original_before
+    assert _download_snapshot(app) == download_before
     assert backend.actions == []

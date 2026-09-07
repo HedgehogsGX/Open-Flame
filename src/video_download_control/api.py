@@ -55,6 +55,9 @@ from .credential_defaults import (
 )
 from .database import SCHEMA_VERSION, Database
 from .domain import ErrorCode, Platform
+from .editing.api import install_editing_routes
+from .editing.contracts import EditingError
+from .editing.media import MediaProcessor as EditingMediaProcessor
 from .importers import MAX_IMPORT_BYTES, BatchImportError, parse_batch_file
 from .local_short_links import LocalDirectShortLinkTransport
 from .observability import collect_metrics
@@ -398,22 +401,39 @@ def _verified_original_payload(
 
 
 class _VerifiedOriginalFileResponse(FileResponse):
-    """Serve a verified spool without reopening the registered filesystem path."""
+    """Serve a verified open handle without reopening its filesystem path."""
 
     def __init__(
         self,
         handle: BinaryIO,
         *,
         file_info: os.stat_result,
-        filename: str,
+        filename: str | None,
         expected_sha256: str,
+        media_type: str = "application/octet-stream",
+        content_disposition_type: str = "attachment",
+        verified_chunk_sha256: tuple[bytes, ...] | None = None,
+        verification_chunk_size: int = _VERIFIED_STREAM_CHUNK_BYTES,
     ) -> None:
         self._verified_handle = handle
         self._size_bytes = int(file_info.st_size)
+        self._verified_chunk_sha256 = verified_chunk_sha256
+        self._verification_chunk_size = verification_chunk_size
         try:
+            if verified_chunk_sha256 is not None:
+                if verification_chunk_size < 1:
+                    raise ValueError("verified chunk manifest is invalid")
+                expected_chunks = (
+                    self._size_bytes + verification_chunk_size - 1
+                ) // verification_chunk_size
+                if (
+                    len(verified_chunk_sha256) != expected_chunks
+                    or any(len(item) != 32 for item in verified_chunk_sha256)
+                ):
+                    raise ValueError("verified chunk manifest is invalid")
             super().__init__(
                 "<verified-original>",
-                media_type="application/octet-stream",
+                media_type=media_type,
                 filename=filename,
                 headers={
                     "Cache-Control": "private, no-store",
@@ -421,10 +441,32 @@ class _VerifiedOriginalFileResponse(FileResponse):
                     "ETag": f'"{expected_sha256}"',
                 },
                 stat_result=file_info,
+                content_disposition_type=content_disposition_type,
             )
         except BaseException:
             handle.close()
             raise
+
+    def _read_verified_chunk(self, index: int) -> bytes:
+        assert self._verified_chunk_sha256 is not None
+        start = index * self._verification_chunk_size
+        expected_size = min(
+            self._verification_chunk_size,
+            self._size_bytes - start,
+        )
+        self._verified_handle.seek(start)
+        remaining = expected_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = self._verified_handle.read(remaining)
+            if not chunk:
+                raise RuntimeError("verified original handle ended unexpectedly")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if hashlib.sha256(payload).digest() != self._verified_chunk_sha256[index]:
+            raise RuntimeError("verified original chunk changed before response")
+        return payload
 
     async def _send_span(
         self,
@@ -434,6 +476,34 @@ class _VerifiedOriginalFileResponse(FileResponse):
         *,
         more_after: bool,
     ) -> None:
+        if self._verified_chunk_sha256 is not None:
+            position = start
+            if position == end:
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": more_after,
+                    }
+                )
+                return
+            first = start // self._verification_chunk_size
+            last = (end - 1) // self._verification_chunk_size
+            for index in range(first, last + 1):
+                whole = await run_in_threadpool(self._read_verified_chunk, index)
+                chunk_start = index * self._verification_chunk_size
+                lower = max(start - chunk_start, 0)
+                upper = min(end - chunk_start, len(whole))
+                payload = whole[lower:upper]
+                position += len(payload)
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": payload,
+                        "more_body": position < end or more_after,
+                    }
+                )
+            return
         await run_in_threadpool(self._verified_handle.seek, start)
         position = start
         if position == end:
@@ -451,7 +521,7 @@ class _VerifiedOriginalFileResponse(FileResponse):
                 min(self.chunk_size, end - position),
             )
             if not chunk:
-                raise RuntimeError("verified original spool ended unexpectedly")
+                raise RuntimeError("verified original handle ended unexpectedly")
             position += len(chunk)
             await send(
                 {
@@ -590,14 +660,20 @@ class _VerifiedOriginalSnapshotResponse(Response):
         path: Path,
         *,
         file_info: os.stat_result,
-        filename: str,
+        filename: str | None,
         expected_sha256: str,
+        media_type: str = "application/octet-stream",
+        content_disposition_type: str = "attachment",
+        error_detail: str = "成品文件不可用",
     ) -> None:
-        super().__init__(content=None, media_type=self.media_type)
+        super().__init__(content=None, media_type=media_type)
         self._source_path = path
         self._file_info = file_info
         self._filename = filename
         self._expected_sha256 = expected_sha256
+        self._response_media_type = media_type
+        self._content_disposition_type = content_disposition_type
+        self._error_detail = error_detail
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         cancellation = threading.Event()
@@ -640,7 +716,7 @@ class _VerifiedOriginalSnapshotResponse(Response):
                 await _cancel_and_join(disconnect_task)
                 await JSONResponse(
                     status_code=409,
-                    content={"detail": "成品文件不可用"},
+                    content={"detail": self._error_detail},
                 )(scope, receive, send)
                 return
 
@@ -649,6 +725,8 @@ class _VerifiedOriginalSnapshotResponse(Response):
                 file_info=self._file_info,
                 filename=self._filename,
                 expected_sha256=self._expected_sha256,
+                media_type=self._response_media_type,
+                content_disposition_type=self._content_disposition_type,
             )
             payload = None
             send_task = asyncio.create_task(response(scope, receive, send))
@@ -996,12 +1074,15 @@ def create_app(
                 yield
             finally:
                 try:
-                    await run_in_threadpool(app.state.upload_manager.stop)
+                    await run_in_threadpool(app.state.editing_manager.stop)
                 finally:
-                    if owns_local_short_link_transport:
-                        assert isinstance(short_link_resolver, ControlledShortLinkResolver)
-                        short_link_resolver.transport.close()
-                    active_logger.emit("control.stopped")
+                    try:
+                        await run_in_threadpool(app.state.upload_manager.stop)
+                    finally:
+                        if owns_local_short_link_transport:
+                            assert isinstance(short_link_resolver, ControlledShortLinkResolver)
+                            short_link_resolver.transport.close()
+                        active_logger.emit("control.stopped")
         finally:
             upload_activity.release()
 
@@ -1040,9 +1121,33 @@ def create_app(
             raise HTTPException(status_code=409, detail="asset_file_unavailable") from None
         return path, registered["sha256"]
 
+    editing_processor_factory = None
+    if (
+        resolved_settings.tool_root is not None
+        and cached_toolchain_status.state == "ready"
+        and cached_toolchain_status.offline_smoke_passed
+    ):
+        editing_processor_factory = lambda: EditingMediaProcessor(
+            resolved_settings.tool_root
+        )
+    editing_manager = install_editing_routes(
+        app,
+        data_root=resolved_settings.data_root,
+        original_asset_resolver=upload_original_asset,
+        processor_factory=editing_processor_factory,
+    )
+
+    def upload_edited_output(output_id: str) -> tuple[Path, str, str]:
+        try:
+            return editing_manager.resolve_output(output_id)
+        except EditingError as exc:
+            status_code = 404 if exc.code in {"asset_not_found", "asset_not_ready"} else 409
+            raise HTTPException(status_code=status_code, detail=exc.code) from None
+
     install_upload_routes(
         app, data_root=resolved_settings.data_root,
         original_asset_resolver=upload_original_asset,
+        edited_output_resolver=upload_edited_output,
     )
 
     @app.exception_handler(CredentialDefaultsError)

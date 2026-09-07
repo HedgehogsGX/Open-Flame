@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from video_download_control.api import create_app
+from video_download_control.editing.web import EDITING_HTML
 from video_download_control.ui_assets import page_content_security_policy, ui_asset
 from video_download_control.uploads.web import UPLOAD_HTML
 from video_download_control.web import INDEX_HTML
@@ -74,9 +75,10 @@ def test_ui_asset_rejects_names_outside_the_fixed_allowlist(name: str) -> None:
     ("page", "active_path", "body_class"),
     [
         (INDEX_HTML, "/", "download-page"),
+        (EDITING_HTML, "/edits", "editing-page"),
         (UPLOAD_HTML, "/uploads", "upload-page"),
     ],
-    ids=("download", "upload"),
+    ids=("download", "editing", "upload"),
 )
 def test_pages_share_local_shell_navigation_and_theme_controls(
     page: str, active_path: str, body_class: str
@@ -124,7 +126,7 @@ def test_pages_share_local_shell_navigation_and_theme_controls(
         for attrs in parser.matching("a")
         if "nav-link" in _classes(attrs)
     ]
-    assert {attrs.get("href") for attrs in nav_links} == {"/", "/uploads"}
+    assert {attrs.get("href") for attrs in nav_links} == {"/", "/edits", "/uploads"}
     current = [attrs for attrs in nav_links if attrs.get("aria-current") == "page"]
     assert len(current) == 1
     assert current[0].get("href") == active_path
@@ -187,8 +189,8 @@ def test_http_assets_preserve_content_headers_and_upload_laziness(settings) -> N
 
 @pytest.mark.parametrize(
     ("path", "page"),
-    [("/", INDEX_HTML), ("/uploads", UPLOAD_HTML)],
-    ids=("download", "upload"),
+    [("/", INDEX_HTML), ("/edits", EDITING_HTML), ("/uploads", UPLOAD_HTML)],
+    ids=("download", "editing", "upload"),
 )
 def test_html_pages_bind_inline_business_script_with_self_only_csp(
     settings, path: str, page: str
@@ -393,3 +395,36 @@ process.stdout.write(JSON.stringify({normal: run(false), blocked: run(true)}));
     assert result["blocked"]["changed"]["theme"] == "light"
     assert result["normal"]["removed"] == ["no-js"]
     assert result["blocked"]["removed"] == ["no-js"]
+
+
+def test_editing_polling_preserves_record_dom_focus_and_upload_allowlist() -> None:
+    assert "setInterval(" not in EDITING_HTML
+    assert "if(recordsPromise)return recordsPromise" in EDITING_HTML
+    assert "if(pollPromise)return pollPromise" in EDITING_HTML
+    assert "setTimeout(poll,2000)" in EDITING_HTML
+
+    assert (
+        "capturedGeneration=projectSelectionGeneration,capturedProjectId="
+        "currentProjectId()" in EDITING_HTML
+    )
+    assert (
+        "capturedGeneration!==projectSelectionGeneration||capturedProjectId!=="
+        "currentProjectId()" in EDITING_HTML
+    )
+    for record_kind in ("projects", "plans", "outputs"):
+        assert f"renderIfChanged('{record_kind}'" in EDITING_HTML
+
+    assert "document.activeElement?.dataset?.focusKey" in EDITING_HTML
+    assert "querySelectorAll('[data-focus-key]')" in EDITING_HTML
+    for stable_key in (
+        "'project:'+id+':open'",
+        "key+'confirm'",
+        "key+'cancel'",
+        "key+'retry'",
+        "key+'download'",
+        "key+'upload'",
+    ):
+        assert stable_key in EDITING_HTML
+
+    assert "if(['segment','dubbed_video'].includes(kind))" in EDITING_HTML
+    assert "if(kind!=='cover')" not in EDITING_HTML

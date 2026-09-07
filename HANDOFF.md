@@ -1,29 +1,31 @@
 # 多平台视频下载项目开发交接
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
-> 最后更新：2026-09-07
-> 当前迭代：Iteration 0.26.0 — T17 三平台投稿参数、封面与定时发布（本地 G7 已完成；最终冻结与真实平台待验收）
-> 当前版本：`0.26.0`；下载数据库：Schema `11`；上传数据库：独立 Schema `3`；上传备份格式：`2`
+> 最后更新：2026-09-08
+> 当前迭代：Iteration 0.27.0 — T18 非破坏性编辑工作台、分段与封面（本地 G8 已完成；AI、最终冻结与真实平台待验收）
+> 当前版本：`0.27.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `1`；上传数据库：独立 Schema `3`；上传备份格式：`2`
 
 ## 本次交接入口
 
-用户要求按交接继续开发，并把首批三个平台的标题、标签、封面、发布时间及平台专属参数做成可核对的本地草稿。当前 `codex/uploader-first-platforms` 以 `c5b57ff7472d3eac7550bfe3f2b3129704f277b7` 为本轮起始基线，在 0.25.0 T16 前端之上开发 0.26.0 T17。包内文件不能嵌入自身最终提交和制品摘要；0.26.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
+用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音。当前 `codex/editing-workspace` 以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，在 0.26.0 T17 上传参数之上开发 0.27.0 T18。T18 已交付可用的本地分段与封面工作台，并为 AI 建立 provider、capability 和字幕时间轴合同；AI runtime、模型和试听尚未完成，因此页面保持 blocked。包内文件不能嵌入自身最终提交和制品摘要；0.27.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
-| 工作包 | 2026-09-07 本地状态 | 仍未完成的边界 |
+| 工作包 | 2026-09-08 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
 | T14 必要切片 | 已实现本地账号断开与墓碑、排队确认撤回、迟到登录/重启凭据 fencing、媒体占用与状态、活动引用删除保护、两步删除及同大小/同 SHA-256 恢复 | hash 去重、总配额、自动孤儿清理仍是后续；没有修改用户现有账号、媒体或 runtime |
 | T07 停机备份/恢复 | 上传备份格式 2 / Upload Schema 3 保存受管封面、定时值和平台参数；格式 1 / Schema 2 只读输入经 staging 迁移，并撤回需要复核的旧确认 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
 | T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
-| T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范继续用于 0.26.0 新控件 | 0.26.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
-| T17 投稿参数 | Bilibili/抖音/视频号均可按平台覆盖标题、简介、标签、受管封面和发布时间；另保存各平台专属字段，按账号生成独立草稿并逐任务明确确认 | 当前页面同一平台只有一套表单值，多账号会得到相同参数的独立任务；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
-| T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.26.0 最终 receipt 后的同一构建分别执行 |
+| T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传三页 | 0.27.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
+| T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
+| T18 编辑工作台 | 独立 `data-edits`/Schema 1；下载来源复核复制；版本化草稿与不可变计划；多个 H.264/AAC MP4 分段；PNG 封面抽帧、比例裁切、缩放与标题；确认、取消、重试；编辑视频显式复制到上传域 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
+| T19 AI | 严格 SRT/VTT 时间轴与 transcription/translation/speech provider 合同、能力状态已完成 | 自动听写、翻译、配音、逐段试听、模型安装/许可/隐私/性能验收均未完成；声音克隆首批禁用 |
+| T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.27.0 最终 receipt 后的同一构建分别执行 |
 
-当前树的三平台上传定向集合为 **465 passed in 92.83s**；全量为 **2367 passed、8 skipped in 362.91s**。8 个 skip 是目标 POSIX/Linux 环境门槛。最终只读代码审计未发现 P0～P2 或提交阻断项。以上均是本地 synthetic/offline 工程证据，不改变真实平台与最终发行状态。
+当前树的最终全量结果：`2450 passed, 8 skipped in 358.21s`。编辑定向、真实媒体 smoke 与浏览器证据见本轮记录；8 个 skip 分别对应 POSIX directory-fd、root/getfacl、Unix domain socket、POSIX replacement 与 permission-bit 环境门槛。以上均是本地 synthetic/offline 工程证据，不改变 AI、真实平台与最终发行状态。
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.26.0 T17 本地范围见 [三平台投稿参数记录](validation/iteration-0.26.0-upload-parameters-evidence.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.25.0 前端与冻结记录](validation/iteration-0.25.0-t16-frontend-evidence.md)和 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)只保留各自历史，不能证明 0.26.0。0.26.0 未执行真实登录、扫码、下载或上传。
+当前 0.27.0 T18 本地范围见 [编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.26.0 上传参数记录](validation/iteration-0.26.0-upload-parameters-evidence.md)、[0.25.0 前端记录](validation/iteration-0.25.0-t16-frontend-evidence.md)和 [0.24.4 上传数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)只保留各自历史，不能证明 0.27.0。本轮未执行真实登录、扫码、下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -142,17 +144,17 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 |---|---|---|
 | 产品 | 单机/NAS、单管理员、私有自托管 | FastAPI 已实现；Windows 本机可独立使用；无认证且强制 loopback |
 | 批量/并发 | 每批 1–50；单 Worker 进程总执行槽 2；单平台活动 Job 1 | 0.18 Windows app 与 standalone drain/poll 已接入真实调度循环，并由无网络屏障回归证明跨平台重叠与连续补位；SQLite claim 事务仍强制上限；历史真实样本不能证明本轮并发 |
-| 数据 | 下载 Schema 11；独立上传 Schema 2 | 下载继续保留旧 flat-v1/graph、Schema 10 治理和 run-scoped claim gate；上传精确 Schema 1 事务迁移到 Schema 2，新增账号/媒体生命周期，未知结构失败关闭；两个数据库、Cookie 与媒体根不混用 |
+| 数据 | 下载 Schema 11；独立编辑 Schema 1；独立上传 Schema 3 | 下载继续保留旧 flat-v1/graph、Schema 10 治理和 run-scoped claim gate；编辑域保存导入源、版本化草稿、render plan 与成品；上传旧 Schema 1/2 精确迁移到 Schema 3。三个数据库、Cookie 与各媒体根不混用，未知结构失败关闭 |
 | 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；0.17 固定脱敏 progress/phase 控制协议只在 download 启用，真实平台历史样本不等于本轮进度验收或平台整体验证 |
 | 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
 | 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
-| 资产 | 不可变原件 + 脱敏 manifest/sidecar | ready 列表含 thumbnail/caption DTO；原件与辅助产物分别由严格下载端点重验；API 不暴露本机路径或用户标题 |
-| 前端/API | 下载控制面及 Bilibili/抖音/视频号上传页 | 0.25.0 已完成 T16 生产页本地 G6：两页共用 Apple 风格语义 token、组件基础、系统/浅/深主题、本地静态资源、响应式与无障碍降级，并保留轮询输入、选区、焦点、扫码、来源清空、详情展开和任务选择；上传页继续提供账号断开、媒体状态/占用、受引用删除保护、精确恢复和两步确认；没有网页能力审批按钮 |
+| 资产 | 不可变下载原件 + 独立编辑源/成品 + 独立上传媒体 | ready 下载列表含 thumbnail/caption DTO；原件、辅助产物和编辑成品分别由严格端点重验；编辑输出须显式复制进上传域，API 不暴露本机路径或用户标题 |
+| 前端/API | 下载、编辑及 Bilibili/抖音/视频号上传三页 | 0.27.0 三页共用 Apple 风格语义 token、组件基础、系统/浅/深主题、本地静态资源、响应式与无障碍降级；编辑页保留显式导入、版本化保存、计划核对/确认、状态轮询和成品选择边界；上传页继续提供账号断开、媒体状态/占用、受引用删除保护、精确恢复和两步确认；AI 参数显示 blocked，没有网页能力审批按钮 |
 | 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
 | 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
-| 备份 | 下载与上传使用两套独立格式；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 保存 Upload Schema 2/登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock 并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。T07 本地 synthetic 完成，真实容量与异机灾备未做 |
+| 备份 | 下载与上传使用两套独立格式；编辑域尚无备份/恢复；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 以格式 2 保存 Upload Schema 3、登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。编辑 Schema 1、导入源和编辑成品当前不在这两套备份中 |
 | Stage 0 | CSV v3；七字段精确 identity | `product_version` 为版本 + 完整包载荷 hash；规范 source identity 防别名充样本；最新 partial run fail closed；报告 aggregate-only，导入只追加 evidence，approve/revoke 另走 revision CAS |
-| 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 0.19 project-only 包预检已通过 source-equivalence、metadata、法律文件、依赖、build identity 与隐私复核；最终重建须匹配冻结契约，精确 archive hash 只在包外报告；旧包记录保留为历史，第三方 binary/container/tool bundle 仍 blocked |
+| 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 0.27.0 当前源码继续执行 source-equivalence、metadata、法律文件、依赖、build identity 与隐私门禁；最终重建须匹配冻结契约，精确 archive hash 只在包外报告；旧包记录保留为历史，第三方 binary/container/tool bundle 与 AI 模型再分发仍 blocked |
 
 ## 3. 累计交付
 
@@ -398,7 +400,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先寻找与 0.25.0 `release/` 同级的 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就先完成该冻结流程，不直接跳到真实平台；`1178869bbf35212e734d3fda70876033e309a99d` 只是 T16 起始基线。若 receipt 完整，则保持同一制品身份进入 T11/T12；真实登录、扫码、下载或上传仍需用户另行明确授权。0.24.4 T10 只保留为中间历史，不能把旧结果或旧制品绑定给 0.25.0。
+继续前先读 [0.27.0 编辑工作台证据](validation/iteration-0.27.0-editing-workspace-evidence.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为已提交源码里程碑，不把它称为最终发行制品。后续源码开发从 T19 的隔离 AI runtime、字幕导入/听写、翻译 revision、标准音色配音和试听核对继续；真实登录、扫码、下载、上传或发布仍须用户另行明确授权。`d358f2a338129a9eec81e4055249b968b0068fbd` 只是 T18 起始基线，旧版本结果或制品不能绑定给 0.27.0。
 
 本地开发：
 
@@ -553,18 +555,30 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 5. 继续 Bilibili → Douyin → TikTok → Instagram 的授权样本及 Stage 0 验收，不因并发、spawned preflight 或旧单样本提升 `candidate`；目标 Linux/Docker、真凭据权限与第三方再分发仍单独闭合。
 6. 用户既有 loopback 8000 服务不得被开发流程终止或替换；本轮未更新它，也没有新增真实网络/Cookie/UI 证据。没有新的 commit/push 或第三方再分发授权。精确最终包身份和哈希以包外冻结后重建报告为准。
 
-### 7.9 Iteration 0.19.0 当前精确入口
+### 7.9 Iteration 0.19.0 历史入口（已由 7.10 取代）
 
 1. Windows 短链和默认 Cookie 前端通路已经接入，不再重复列为待实现功能；先读本轮证据与包外 final report，不将旧 0.18 package hash 用于当前源码。
 2. 后续优先验证完整 spawned local-app 的实际短链/下载行为，按 Bilibili → Douyin → TikTok → Instagram 使用授权样本；真实 Cookie 需要用户配置，不能从历史 profile 推断默认或从浏览器自行提取。工程 fake/synthetic 不提升 `candidate`。
 3. `--check` 允许原有 SQLite 初始化、日志和 claim gate 写入，但不领取、不打开浏览器、不注册 profile、不改变 Job 凭据。正常启动只对 v2 明确选择的平台准备默认；缺失/重复/禁用/到期或配置漂移应失败，不能悄悄匿名。
 4. JSON/import 默认 `use_default`；未配置的平台匿名。显式 `anonymous` 可用于新任务/failed flat retry；retry 无 body 保持旧绑定。source-level live/ready 去重仍不新建任务、更不改既有 Cookie，页面已说明。
-5. 一个 Worker、双槽、单平台上限、stop/claim fencing、私有 Attempt 副本清理与脱敏日志继续保留。保持 `.venv\Scripts\python.exe` 开发环境；无依赖变更时不要 `uv sync`。没有本轮 commit/push 授权。
+5. 一个 Worker、双槽、单平台上限、stop/claim fencing、私有 Attempt 副本清理与脱敏日志继续保留。保持 `.venv\Scripts\python.exe` 开发环境；无依赖变更时不要 `uv sync`。该历史轮次没有 commit/push 授权。
 6. 当前临时浏览器 smoke 为独立 synthetic control-only 18820，已完成两种模式创建/取消并停服；未启动或替换用户 8000。后续目标 Linux、真实私有 DACL、安装器和第三方 binary/container 再分发仍独立验收。
+
+### 7.10 Iteration 0.27.0 当前精确入口
+
+1. T18 已实现独立 Editing Schema 1、显式下载资产导入、版本化草稿、review/confirm render plan、本地分段与封面，以及 ready 视频成品显式导入上传；先读本轮证据与 `docs/EDITOR.md`，不要把 synthetic/offline 验收写成任意真实素材、AI 或平台通过。
+2. 自动听写、翻译和配音当前只有 provider/capability/timeline 合同；能力仍为 `blocked`。T19 应先建立独立 AI runtime 与固定模型 manifest，再实现字幕导入/听写、中文与 English 翻译 revision、标准音色逐 cue 音频、试听和审阅后混音。
+3. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件，也不得让“进入编辑”或“用于上传”的导航链接自动执行复制、渲染、建稿或投稿。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
+4. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。当前分段与封面依赖通过固定工具链 readiness/offline smoke 的 FFmpeg/ffprobe；不可退回 PATH 自动发现。编辑根的独占 lease 必须覆盖 worker 与已进入服务层的 API 操作，重启清理只处理严格受管名和严格双 ID staging。
+5. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。
 
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 
 ## 8. 迭代历史
+
+- **0.27.0 — 2026-09-07**：以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，完成 T18 非破坏性编辑工作台、分段与封面、下载→编辑→上传显式复制链路，以及 AI provider/capability/timeline 合同。AI runtime、模型、推理、试听、真实素材范围、真实平台与最终 release receipt 仍未完成。
+
+- **0.26.0 — 2026-09-07**：完成 T17/G7 三平台独立标题、简介、标签、受管封面、定时与平台字段，以及 Upload Schema 3/备份格式 2；真实平台逐字段接受、定时触发、封面裁切、发布和最终发行制品保持未验收。
 
 - **0.25.0 — 2026-09-07**：以 `1178869bbf35212e734d3fda70876033e309a99d` 为起始基线，完成 T16 下载/上传生产前端的共享 Apple 风格、主题、本地静态资源、响应式、状态稳定与无障碍降级，本地 G6 已完成。该基线不是最终提交；冻结全量、新 clean commit、五件制品、源码/wheel 独立安装与最终身份只由包外 receipt 记录。没有新增真实登录、扫码、下载、上传、平台审核、GitHub hosted CI 或目标 Linux/Docker T15 结论。
 

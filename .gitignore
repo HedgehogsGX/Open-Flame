@@ -13,6 +13,8 @@ htmlcov/
 !**/*.env.example
 data/
 data-uploads/
+data-edits/
+.data-edits.activity.lock
 validation/local/
 dist/
 build/

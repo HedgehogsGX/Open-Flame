@@ -47,6 +47,7 @@ async function fetch(url,options={}){state.requests.push({url,method:options.met
  else if(options.method==='DELETE'&&/\/covers\/[0-9a-f]{32}\/media$/.test(url)){const cover=state.covers.find(item=>url.includes(item.id));cover.media_present=false;cover.media_state='deleted';cover.media_deleted_at='2026-09-07T01:04:05+00:00';cover.can_delete=false;payload=cover;}
  else if(options.method==='DELETE'&&/\/sources\/[0-9a-f]{32}\/media$/.test(url)){const source=state.sources.find(item=>url.includes(item.id));source.media_present=false;source.media_state='deleted';source.media_deleted_at='2026-09-07T01:03:04+00:00';source.can_delete=false;state.storage.managed_bytes-=source.size;state.storage.present_source_count--;state.storage.deleted_source_count++;payload=source;}
  else if(options.method==='POST'&&/\/sources\/[0-9a-f]{32}\/media$/.test(url)){const source=state.sources.find(item=>url.includes(item.id));if(state.restoreHandler){const response=await state.restoreHandler(source,options);if(response)return response;}const previous=source.media_state;source.media_present=true;source.media_state='present';source.media_deleted_at=null;source.can_delete=source.active_reference_count===0;state.storage.managed_bytes+=source.size;state.storage.present_source_count++;if(previous==='deleted')state.storage.deleted_source_count--;if(previous==='missing')state.storage.missing_source_count--;for(const job of state.jobs)if(job.source_id===source.id){job.source_media_present=true;job.source_media_state='present';}payload=source;}
+ else if(options.method==='POST'&&/\/sources\/edits\/[0-9a-f]{32}$/.test(url)){payload={id:'9'.repeat(32),name:'segment-001.mp4',size:84,sha256:'8'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true};state.sources.unshift(payload);}
  else if(options.method==='POST'&&url.endsWith('/cancel')){const op=state.operations.find(item=>url.includes(item.id));if(op)op.state='canceled';payload=op||{state:'canceled'};}
  else if(options.method==='POST')payload={state:'draft'};
  else if(url.endsWith('/qr')){if(state.qrHandler)return state.qrHandler();return {ok:true,status:200,headers:new Headers({'Content-Type':'image/png'}),blob:async()=>new Blob(['synthetic-png'],{type:'image/png'})};}
@@ -60,12 +61,12 @@ let timer=0;const timers=new Map(),windowListeners=new Map();state.timers=timers
 state.fireTimer=async id=>{const item=timers.get(id);if(!item)throw new Error('Missing timer');timers.delete(id);await item.callback();};
 state.windowEvent=async(name,event={})=>{for(const callback of windowListeners.get(name)||[])await callback(event);};
 state.documentEvent=async(name,event={})=>{for(const callback of documentListeners.get(name)||[])await callback(event);};
-const context=vm.createContext({document,fetch,Headers,AbortController,Blob,URL,crypto:require('node:crypto'),location:{href:'http://127.0.0.1/uploads'},window:{addEventListener(name,callback){if(!windowListeners.has(name))windowListeners.set(name,[]);windowListeners.get(name).push(callback);}},setTimeout:(callback,delay)=>{const id=++timer;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id),__test:state});
+const context=vm.createContext({document,fetch,Headers,AbortController,Blob,URL,crypto:require('node:crypto'),location:{href:fixture.href||'http://127.0.0.1/uploads'},window:{addEventListener(name,callback){if(!windowListeners.has(name))windowListeners.set(name,[]);windowListeners.get(name).push(callback);}},setTimeout:(callback,delay)=>{const id=++timer;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id),__test:state});
 (async()=>{vm.runInContext(fixture.script,context);await state.turn();const result=await vm.runInContext('(async()=>{'+fixture.exercise+'})()',context);await state.turn();process.stdout.write(JSON.stringify(result));})().catch(error=>{process.stderr.write(String(error.stack));process.exitCode=1;});
 """
 
 
-def run_upload_ui(exercise, *, timezone=None):
+def run_upload_ui(exercise, *, timezone=None, href=None):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable for upload UI execution")
@@ -73,7 +74,12 @@ def run_upload_ui(exercise, *, timezone=None):
     parser.feed(UPLOAD_HTML)
     parser.close()
     assert len(parser.scripts) == 1
-    fixture = {"page": parser.root, "script": parser.scripts[0], "exercise": exercise}
+    fixture = {
+        "page": parser.root,
+        "script": parser.scripts[0],
+        "exercise": exercise,
+        "href": href,
+    }
     environment = os.environ.copy()
     if timezone is not None:
         environment["TZ"] = timezone
@@ -1140,6 +1146,29 @@ return {selectedAfterImport,selectedAfterPoll:$('source-id').value,sha:$('source
     assert result["selectedAfterImport"] == result["selectedAfterPoll"] == "9" * 32
     assert result["sha"] == "SHA-256：" + "8" * 64
     assert result["posts"] == ["/api/v1/uploads/sources?name=new.mp4"]
+
+
+def test_edit_output_query_requires_an_explicit_import_and_selects_the_copy():
+    output_id = "7" * 32
+    result = run_upload_ui(
+        r"""
+for(let index=0;index<5;index++)await __test.turn();
+const shownBefore=!$('edit-output-import').hidden;
+await $('import-edit-output').dispatch('click');
+for(let index=0;index<8;index++)await __test.turn();
+return {shownBefore,hiddenAfter:$('edit-output-import').hidden,selected:$('source-id').value,info:$('source-info').textContent,message:$('message').textContent,posts:__test.requests.filter(item=>item.method==='POST').map(item=>({url:item.url,nonce:item.headers['x-upload-csrf']}))};
+""",
+        href=f"http://127.0.0.1/uploads?edit_output_id={output_id}",
+    )
+    assert result["shownBefore"] is True
+    assert result["hiddenAfter"] is True
+    assert result["selected"] == "9" * 32
+    assert result["info"] == "SHA-256：" + "8" * 64
+    assert "编辑成品已导入" in result["message"]
+    assert result["posts"] == [{
+        "url": f"/api/v1/uploads/sources/edits/{output_id}",
+        "nonce": "synthetic-session-nonce",
+    }]
 
 
 @pytest.mark.parametrize("successor_state,label", [

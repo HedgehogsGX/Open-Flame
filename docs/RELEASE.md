@@ -20,7 +20,7 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 
 `--wheelhouse` 使用 `--no-index`，缺项失败，不回退联网；构建只需要 build lock 对应的五个包。命令失败保留独立输出目录供检查，不覆盖旧包、不自动清理数据。更换新的输出名重试。
 
-0.26.0 的 T17 最终冻结和此前 T10/T16 一样，必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在输出根目录、与 `release` 子目录同级生成 `release-receipt.json`，记录 `source_commit`、`working_tree_dirty=false`、完整 `product_identity`、五个发行文件各自的大小/SHA-256 及实际检查结果。receipt 必须直接摘要 `SHA256SUMS`；不要把 receipt 放进 `release`，也不要把最终值回填到被打包文档，否则会改变被绑定的提交与归档字节，形成自引用。
+0.27.0 的 T18 最终冻结和此前 T10/T16/T17 一样，必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在输出根目录、与 `release` 子目录同级生成 `release-receipt.json`，记录 `source_commit`、`working_tree_dirty=false`、完整 `product_identity`、五个发行文件各自的大小/SHA-256 及实际检查结果。receipt 必须直接摘要 `SHA256SUMS`；不要把 receipt 放进 `release`，也不要把最终值回填到被打包文档，否则会改变被绑定的提交与归档字节，形成自引用。
 
 只交付输出下的 **`release` 子目录**中的五个文件，不要交付整个输出目录：
 

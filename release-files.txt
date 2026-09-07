@@ -31,6 +31,7 @@ deployment/requirements.runtime.lock
 deployment/run-linux-acceptance.sh
 deployment/validate_tool_bundle.py
 docs/DESIGN_SYSTEM.md
+docs/EDITOR.md
 docs/CI.md
 docs/FOLLOW_UP_EXECUTION_PLAN.md
 docs/OPEN_SOURCE_DOWNLOADER_REVIEW.md
@@ -108,6 +109,15 @@ src/video_download_control/database.py
 src/video_download_control/desktop_launcher.py
 src/video_download_control/diagnostics.py
 src/video_download_control/domain.py
+src/video_download_control/editing/__init__.py
+src/video_download_control/editing/ai.py
+src/video_download_control/editing/api.py
+src/video_download_control/editing/contracts.py
+src/video_download_control/editing/media.py
+src/video_download_control/editing/schema.py
+src/video_download_control/editing/service.py
+src/video_download_control/editing/timeline.py
+src/video_download_control/editing/web.py
 src/video_download_control/egress_proxy_cli.py
 src/video_download_control/graph.py
 src/video_download_control/importers.py
@@ -211,6 +221,11 @@ tests/test_desktop_launcher.py
 tests/test_diagnostics.py
 tests/test_download_mvp_routes_e2e.py
 tests/test_download_upload_integration.py
+tests/test_editing_ai_contracts.py
+tests/test_editing_api.py
+tests/test_editing_media.py
+tests/test_editing_schema.py
+tests/test_editing_service.py
 tests/test_egress_policy.py
 tests/test_egress_proxy_cli.py
 tests/test_ffprobe_verifier.py
@@ -320,6 +335,7 @@ validation/iteration-0.24.3-final-review.md
 validation/iteration-0.24.4-upload-data-lifecycle-evidence.md
 validation/iteration-0.25.0-t16-frontend-evidence.md
 validation/iteration-0.26.0-upload-parameters-evidence.md
+validation/iteration-0.27.0-editing-workspace-evidence.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

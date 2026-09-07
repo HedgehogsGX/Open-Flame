@@ -103,7 +103,7 @@ def test_health_and_web_page(settings: Settings) -> None:
     }
     assert page.status_code == 200
     assert openapi.status_code == 200
-    assert openapi.json()["info"]["version"] == "0.26.0"
+    assert openapi.json()["info"]["version"] == "0.27.0"
     assert remote_docs.status_code == 404
     assert remote_redoc.status_code == 404
     assert "<title>Open-Flame · 下载</title>" in page.text

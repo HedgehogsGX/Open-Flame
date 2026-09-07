@@ -716,6 +716,82 @@ details[open] > summary {
   grid-column: 1 / -1;
 }
 
+.editor-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
+  align-items: start;
+  gap: 24px;
+  margin-top: 20px;
+}
+
+.preview-panel {
+  min-width: 0;
+  position: sticky;
+  top: 88px;
+  padding: 14px;
+  border: 1px solid var(--of-border);
+  border-radius: 16px;
+  background: var(--of-surface-tertiary);
+}
+
+.preview-panel video {
+  display: block;
+  width: 100%;
+  max-height: 62vh;
+  border-radius: 12px;
+  background: #000;
+}
+
+.segment-row:first-child {
+  border-top: 0;
+}
+
+.segment-fields,
+.capability-grid,
+.output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.segment-fields label {
+  margin-top: 0;
+}
+
+.segment-fields button {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.capability-grid {
+  margin-top: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.capability-card,
+.output-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--of-border);
+  border-radius: 16px;
+  background: var(--of-surface-tertiary);
+}
+
+.capability-card > :last-child,
+.output-card > :last-child {
+  margin-bottom: 0;
+}
+
+.output-card img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: var(--of-surface-secondary);
+}
+
 .item {
   min-width: 0;
   padding: 17px 0;
@@ -999,12 +1075,21 @@ progress {
 }
 
 @media (max-width: 1023px) {
-  .diagnostic-grid {
+  .diagnostic-grid,
+  .editor-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .diagnostic-panel.wide {
     grid-column: auto;
+  }
+
+  .preview-panel {
+    position: static;
+  }
+
+  .capability-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1048,6 +1133,12 @@ progress {
   }
 
   .status-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .segment-fields,
+  .capability-grid,
+  .output-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1255,6 +1346,9 @@ progress {
   .inline-confirm,
   .login-panel,
   .restore-panel,
+  .preview-panel,
+  .capability-card,
+  .output-card,
   #message {
     border: 1px solid CanvasText;
     forced-color-adjust: auto;

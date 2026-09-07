@@ -18,6 +18,7 @@ INDEX_HTML = """<!doctype html>
       </a>
       <nav class="primary-nav" aria-label="主要功能">
         <a class="nav-link" href="/" aria-current="page">下载</a>
+        <a class="nav-link" href="/edits">编辑</a>
         <a class="nav-link" href="/uploads">上传</a>
       </nav>
       <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观">
@@ -121,7 +122,7 @@ INDEX_HTML = """<!doctype html>
         </section>
       </div>
     </details>
-    <p class="page-footer">Open-Flame 0.26.0 · 本地优先 · 下载与上传数据相互隔离</p>
+    <p class="page-footer">Open-Flame 0.27.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
   </main>
   <script>
     const form = document.querySelector('#batch-form');
@@ -763,14 +764,21 @@ INDEX_HTML = """<!doctype html>
 
       const canUpload = kind === 'video' && typeof asset.asset_id === 'string';
       if (canUpload && !item._uploadLink) {
+        item._editLink = document.createElement('a');
+        item._editLink.textContent = '进入编辑';
+        item.insertBefore(item._editLink, item._artifactList || null);
         item._uploadLink = document.createElement('a');
         item._uploadLink.textContent = '用于上传';
         item.insertBefore(item._uploadLink, item._artifactList || null);
       }
       if (canUpload) {
+        item._editLink.href = '/edits?asset_id=' + encodeURIComponent(asset.asset_id);
+        item._editLink.setAttribute('aria-label', `将成品 ${index + 1} 复制到编辑工作台`);
         item._uploadLink.href = '/uploads?asset_id=' + encodeURIComponent(asset.asset_id);
         item._uploadLink.setAttribute('aria-label', `将成品 ${index + 1} 用于上传`);
       } else if (item._uploadLink) {
+        item._editLink.remove();
+        item._editLink = null;
         item._uploadLink.remove();
         item._uploadLink = null;
       }

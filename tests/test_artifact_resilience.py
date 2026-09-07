@@ -380,6 +380,71 @@ def test_verified_original_response_closes_rolled_spool_on_send_failure(
     assert handle.closed is True
 
 
+def test_verified_chunk_manifest_stops_before_sending_an_in_place_change(
+    tmp_path: Path,
+) -> None:
+    chunk_size = 1024
+    first = b"a" * chunk_size
+    second = b"b" * chunk_size
+    path = tmp_path / "registered.mp4"
+    path.write_bytes(first + second)
+    handle = path.open("rb")
+    response = _VerifiedOriginalFileResponse(
+        handle,
+        file_info=os.fstat(handle.fileno()),
+        filename="registered.mp4",
+        expected_sha256=hashlib.sha256(first + second).hexdigest(),
+        verified_chunk_sha256=(
+            hashlib.sha256(first).digest(),
+            hashlib.sha256(second).digest(),
+        ),
+        verification_chunk_size=chunk_size,
+    )
+    with path.open("r+b") as writer:
+        writer.seek(chunk_size)
+        writer.write(b"c" * chunk_size)
+        writer.flush()
+        os.fsync(writer.fileno())
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    async def request() -> None:
+        with pytest.raises(RuntimeError, match="verified original chunk changed"):
+            await response(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0", "spec_version": "2.4"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": "/registered.mp4",
+                    "raw_path": b"/registered.mp4",
+                    "query_string": b"",
+                    "root_path": "",
+                    "headers": [(b"host", b"testserver")],
+                    "client": ("testclient", 50000),
+                    "server": ("testserver", 80),
+                    "state": {},
+                },
+                receive,
+                send,
+            )
+
+    asyncio.run(request())
+    bodies = [
+        message["body"]
+        for message in messages
+        if message["type"] == "http.response.body"
+    ]
+    assert bodies == [first]
+    assert handle.closed is True
+
+
 def test_original_snapshot_response_outer_cancel_stops_copy_and_listener(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

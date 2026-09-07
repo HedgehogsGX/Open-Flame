@@ -365,6 +365,7 @@ def install_upload_routes(
     *,
     data_root: Path,
     original_asset_resolver: Callable[[str], tuple[Path, str]] | None = None,
+    edited_output_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
 ) -> None:
     """Install routes without touching upload directories, workers or accounts."""
     root = data_root.with_name(data_root.name + "-uploads")
@@ -566,6 +567,27 @@ def install_upload_routes(
         path, expected_sha256 = await run_in_threadpool(original_asset_resolver, asset_id)
         result = await invoke("import_source", path, "download-" + asset_id + path.suffix,
                               expected_sha256=expected_sha256)
+        return _public(result, _SOURCE_FIELDS)
+
+    @router.post("/sources/edits/{output_id}", status_code=201)
+    async def import_edited_output(output_id: str):
+        """Copy one verified editing output into the isolated upload store.
+
+        Resolving an editing output never creates an upload job.  The existing
+        local-draft and per-job confirmation boundary still applies after this
+        import completes.
+        """
+        if edited_output_resolver is None:
+            raise HTTPException(status_code=404, detail="edit_output_not_found")
+        path, expected_sha256, name = await run_in_threadpool(
+            edited_output_resolver, output_id
+        )
+        result = await invoke(
+            "import_source",
+            path,
+            name,
+            expected_sha256=expected_sha256,
+        )
         return _public(result, _SOURCE_FIELDS)
 
     @router.get(

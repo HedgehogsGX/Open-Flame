@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.26.0"
-description = "Local-first media downloads and explicitly confirmed multi-platform uploads"
+version = "0.27.0"
+description = "Local-first media downloads, reviewable editing, and explicitly confirmed multi-platform uploads"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "licenses/python/*/*"]
@@ -52,6 +52,7 @@ exclude = [
   "/validation/local/**",
   "/runtime-tools/**",
   "/data-uploads/**",
+  "/data-edits/**",
   "/dist/**",
   "/build/**",
   "/.venv/**",

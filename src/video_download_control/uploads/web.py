@@ -18,6 +18,7 @@ UPLOAD_HTML = r'''<!doctype html>
       </a>
       <nav class="primary-nav" aria-label="主要功能">
         <a class="nav-link" href="/">下载</a>
+        <a class="nav-link" href="/edits">编辑</a>
         <a class="nav-link" href="/uploads" aria-current="page">上传</a>
       </nav>
       <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观">
@@ -78,6 +79,7 @@ UPLOAD_HTML = r'''<!doctype html>
     <section class="card" aria-labelledby="source-heading">
       <div class="card-header"><div><p class="section-index">步骤 2</p><h2 id="source-heading">选择视频</h2><p class="muted">导入时会核验文件，并在上传存储中创建独立的受管副本。</p></div></div>
       <div id="asset-import" class="notice" hidden><p>已从下载器选择一份成品。导入后会核验文件并创建独立上传副本。</p><button id="import-asset" type="button">导入此下载成品</button></div>
+      <div id="edit-output-import" class="notice" hidden><p>已从编辑工作台选择一份派生成品。导入后会再次核验文件并创建独立上传副本。</p><button id="import-edit-output" type="button">导入此编辑成品</button></div>
       <form id="source-form" aria-labelledby="source-heading">
         <label for="source-file">选择本地视频（最多 2 GiB）</label>
         <input id="source-file" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" required>
@@ -179,7 +181,7 @@ UPLOAD_HTML = r'''<!doctype html>
       <div id="jobs"></div>
       <button id="more-jobs" class="secondary" type="button" hidden>加载更早任务</button>
     </section>
-    <p class="page-footer">Open-Flame 0.26.0 · 本地优先 · 下载与上传数据相互隔离</p>
+    <p class="page-footer">Open-Flame 0.27.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
   </main>
   <script>
 'use strict';
@@ -443,6 +445,7 @@ $('job-form').addEventListener('submit',event=>{
   mutate(async()=>{const created=await api('/jobs',{method:'POST',json:{...base,account_ids:accountIds,mode:'publish',target_overrides:targetOverrides,idempotency_key:draftSubmission.key}});if(Array.isArray(created)&&created.length){for(const item of created)pinJob(item);snapshot.jobs=applyUpdates(snapshot.jobs,created);}draftSubmission=null;message('本地草稿已创建。请在下方核对每份平台内容和参数，再确认执行。');});
 });
 const assetId=new URL(location.href).searchParams.get('asset_id');if(assetId&&/^[0-9a-f-]{36}$/.test(assetId)){$('asset-import').hidden=false;$('import-asset').addEventListener('click',()=>mutate(async()=>{const source=await api('/sources/assets/'+encodeURIComponent(assetId),{method:'POST'});await refresh();pinSource(source);snapshot.sources=applyUpdates(snapshot.sources,[source]);renderSources();$('source-id').value=source.id;showSource();$('asset-import').hidden=true;message('下载成品已导入，原下载文件保持不变。');}));}
+const editOutputId=new URL(location.href).searchParams.get('edit_output_id');if(editOutputId&&/^[0-9a-f]{32}$/.test(editOutputId)){$('edit-output-import').hidden=false;$('import-edit-output').addEventListener('click',()=>mutate(async()=>{const source=await api('/sources/edits/'+encodeURIComponent(editOutputId),{method:'POST'});await refresh();pinSource(source);snapshot.sources=applyUpdates(snapshot.sources,[source]);renderSources();$('source-id').value=source.id;showSource();$('edit-output-import').hidden=true;message('编辑成品已导入；编辑文件与下载原件均保持不变。');}));}
 window.addEventListener('pagehide',()=>{pageActive=false;suspendPageWork();});
 window.addEventListener('pageshow',event=>{if(!event.persisted)return;pageActive=true;return resumePageWork();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendPageWork();return;}return resumePageWork();});
