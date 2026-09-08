@@ -13,7 +13,7 @@
 - 非 AI 多分段可分别渲染。自动 AI 多分段必须首尾连续，听写 clip 使用首段起点到末段终点；含间隙的选择在创建远端 task 前以 `workflow_ai_segments_must_be_contiguous` 拒绝，避免外发未选择音频。
 - 上传准备仍按一个 edit output 建立一个 upload source 和一组账号任务。每段使用稳定幂等键，Workflow 在每段完成后保存 durable prefix checkpoint；进程或后段失败后，显式推进会从第一个未完成分段恢复，已经建立的任务继续保持 draft。
 - 所有 segment × account 草稿只调用一次 `confirm_many`。确认前逐 slot 核对 source、account 与 platform；retry 只允许在同一 slot 原位更新 current leaf ID，并要求使用新 revision 再确认。
-- 自动流程页暂不静默载入多分段预设：在专用多分段控件完成前，页面明确拒绝会丢失其余分段的回填。此保护不改变上传确认语义。
+- `d30a39d` 对应切片中的自动流程页曾暂时拒绝多分段预设，避免旧单段表单静默丢失后续分段。后续生产多分段控件及浏览器验证见[自动流程多分段界面记录](iteration-0.28.0-workflow-multisegment-ui.md)；上传确认语义保持不变。
 
 ## Schema 1 → 2
 

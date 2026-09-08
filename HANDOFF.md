@@ -2,12 +2,14 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出与三账号上传 fan-out 已接线并通过本地故障恢复验证；液态玻璃前端三套候选已在 ignored 本地预览生成，等待用户选定后再改生产页面；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
 
 2026-09-09 多分段自动流程切片：Workflow Schema 2 以 `outputs_json` 保存最多 10 个按 recipe ordinal 排列的视频输出；每个输出分别绑定上传 source，并按冻结账号顺序保存 account/platform/current job slot。最多 3 个账号形成不超过 30 个草稿，逐段准备通过稳定幂等键和 durable prefix checkpoint 恢复，但所有草稿仍要一起交给一次 `confirm_many`，任一校验失败时整批不会进入队列。retry 只原位替换当前 leaf job ID，并重新要求确认；Schema 1 只在精确结构、canonical profile/digest、单输出基数和状态/引用一致时事务迁移，矛盾数据库保持 Schema 1。自动 AI 多段只允许首尾连续，避免用 bounding clip 外发未选择的音频。证据见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)。
+
+2026-09-09 多分段生产界面：`/workflows` 已从单段表单改为 1–10 个有序分段，可添加、删除和完整恢复多段预设；提交前核对 100 ms 下限、七天范围、输入顺序、无重叠及 AI 首尾连续。每次分段变化都会撤销旧的 AI 外发同意。页面内限制最多 3 个账号，并显示计划成品、已准备 source、`segment × account` 投稿任务数与批量确认总数；无变化轮询不重建记录，重绘时恢复相同操作的键盘焦点。实现仅复用当前共享组件，未提前采用待选液态玻璃视觉。ignored Chromium 验证覆盖三段 body、10 段上限、预设、焦点和 320 px，无真实网络；证据见[多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)。
 
 2026-09-09 前端视觉准备：已按本地 `huashu-design`、`apple-design` 与 `emil-design-eng` 生成三套可运行液态玻璃候选，分别侧重雾面工具台、极光工作区和编辑式玻璃排版；生产 CSS/页面尚未采用新方向。候选位于 ignored 的 `validation/local/liquid-glass-directions-20260909/`，本机比较页为 `http://127.0.0.1:18832/validation/local/liquid-glass-directions-20260909/compare.html`。建议采用 A 的工作区结构和 C 的字体层级；用户选定后再实施四页统一视觉、窄屏、键盘、减少动态/透明度与浏览器 QA。
 
@@ -36,7 +38,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 保存最多 10 个有序输出并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；发布后还收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 仅完成 synthetic/offline 适配、迁移和恢复验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 与生产页面保存/配置最多 10 个有序输出，并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；发布后还收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 仅完成 synthetic/offline 适配、迁移、恢复和浏览器验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -592,7 +594,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 4. 渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
 5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`；每个 segment/source/account/platform slot 独立持久化，逐段创建失败从 durable prefix 幂等恢复，最多 30 个草稿只经一次完整批量确认。待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
-7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、内联 JS、依赖一致性和本机浏览器检查已通过；本轮既有定向集合 277 passed，3 项历史导航断言仍未包含早已存在的 `/workflows`，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；旧单段表单遇到多分段预设会明确拒绝，不会静默只恢复首段。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
+7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、内联 JS、依赖一致性和本机浏览器检查已通过；当前相关既有回归 263 passed，文档/发行回归 102 passed，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产自动流程页现可完整恢复 0–10 段，并显示最多 30 个投稿任务的 fan-out。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
 9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。液态玻璃三套 ignored 本地候选已经生成，生产四页必须在用户选定方向后实施。
 
@@ -600,7 +602,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 
 ## 8. 迭代历史
 
-- **0.28.0 — 2026-09-08 至 2026-09-09**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账；发布后开发又收敛 upload outcome，加入逐操作 AI authorization、输入/调用硬上限和 Editing Schema 4 脱敏远程调用账本。unknown 结果只能人工 reconciliation，完成与重试按账本失败关闭。本地 runtime/synthetic 工程证据不代表真实 OpenAI 质量、实际费用、三平台发布或新的发行冻结；以各轮证据和包外 receipt 为准。
+- **0.28.0 — 2026-09-08 至 2026-09-09**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账；发布后开发又收敛 upload outcome，加入逐操作 AI authorization、输入/调用硬上限、Editing Schema 4 脱敏远程调用账本、Workflow Schema 2 多输出及生产 1–10 段界面。unknown 结果只能人工 reconciliation，完成与重试按账本失败关闭。本地 runtime/synthetic 工程证据不代表真实 OpenAI 质量、实际费用、三平台发布或新的发行冻结；以各轮证据和包外 receipt 为准。
 
 - **0.27.0 — 2026-09-07**：以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，完成 T18 非破坏性编辑工作台、分段与封面、下载→编辑→上传显式复制链路，以及 AI provider/capability/timeline 合同。AI runtime、模型、推理、试听、真实素材范围、真实平台与最终 release receipt 仍未完成。
 
