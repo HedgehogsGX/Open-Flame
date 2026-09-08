@@ -23,6 +23,9 @@ from .web import WORKFLOW_HTML
 Identifier = Annotated[
     str, Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")
 ]
+Sha256Digest = Annotated[
+    str, Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+]
 RequestKey = Annotated[
     str, Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9_-]{8,128}$")
 ]
@@ -41,6 +44,7 @@ class ConfirmWorkflowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1, strict=True)
+    expected_profile_sha256: Sha256Digest | None = None
 
 
 def _origin(value: str) -> tuple[str, str, int] | None:
@@ -77,6 +81,7 @@ def _safe_error(exc: WorkflowError) -> HTTPException:
         "idempotency_conflict",
         "workflow_revision_conflict",
         "workflow_state_conflict",
+        "workflow_profile_changed",
     }:
         status = 409
     elif code in {
@@ -188,7 +193,10 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
     @router.post("/{workflow_id}/confirm-edit")
     async def confirm_edit(workflow_id: Identifier, payload: ConfirmWorkflowRequest):
         result = await invoke(
-            "confirm_edit", workflow_id, expected_revision=payload.expected_revision
+            "confirm_edit",
+            workflow_id,
+            expected_revision=payload.expected_revision,
+            expected_profile_sha256=payload.expected_profile_sha256,
         )
         manager.wake()
         return result
@@ -196,7 +204,10 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
     @router.post("/{workflow_id}/confirm-ai")
     async def confirm_ai(workflow_id: Identifier, payload: ConfirmWorkflowRequest):
         result = await invoke(
-            "confirm_ai", workflow_id, expected_revision=payload.expected_revision
+            "confirm_ai",
+            workflow_id,
+            expected_revision=payload.expected_revision,
+            expected_profile_sha256=payload.expected_profile_sha256,
         )
         manager.wake()
         return result

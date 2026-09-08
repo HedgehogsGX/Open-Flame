@@ -21,6 +21,11 @@ from starlette.concurrency import run_in_threadpool
 from ..ui_assets import page_content_security_policy
 from ..uploads.activity_lock import UploadActivityBusy, UploadActivityLease
 from .ai import default_capabilities
+from .ai_authorization import (
+    AiAuthorizationError,
+    parse_operation_authorization,
+    require_authorization_match,
+)
 from .ai_bridge import AiBridgeError
 from .ai_execution import AiTaskExecutor
 from .ai_render import AiRenderProcessor
@@ -82,6 +87,7 @@ class DubbingRequest(BaseModel):
     voice: str = Field(default="", max_length=120)
     state: Literal["disabled", "needs_review", "ready", "blocked"] = "disabled"
     replace_original_audio: bool = Field(default=False, strict=True)
+    authorization: dict[str, Any] | None = None
 
 
 class RecipeRequest(BaseModel):
@@ -115,6 +121,7 @@ class CreatePlanRequest(BaseModel):
 class ConfirmPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_recipe_sha256: Sha256Digest
+    expected_authorization_sha256: Sha256Digest | None = None
     ai_data_egress_accepted: bool = Field(default=False, strict=True)
 
 
@@ -149,6 +156,7 @@ class CreateTranscriptionTaskRequest(BaseModel):
     provider: AiToken
     model: AiToken
     options: TranscriptionOptionsRequest
+    expected_authorization_sha256: Sha256Digest
     idempotency_key: RequestKey
 
 
@@ -159,6 +167,7 @@ class CreateTranslationTaskRequest(BaseModel):
     model: AiToken
     source_revision_id: Identifier
     options: TranslationOptionsRequest
+    expected_authorization_sha256: Sha256Digest
     idempotency_key: RequestKey
 
 
@@ -171,6 +180,13 @@ AiTaskRequest = Annotated[
 class RetryAiTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     idempotency_key: RequestKey
+
+
+class ConfirmAiTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_request_sha256: Sha256Digest
+    expected_authorization_sha256: Sha256Digest
+    ai_data_egress_accepted: bool = Field(default=False, strict=True)
 
 
 class ReviewTimelineRequest(BaseModel):
@@ -233,6 +249,9 @@ def _safe_error(error: EditingError) -> HTTPException:
         "ai_model_operation_unsupported",
         "ai_provider_auth_missing",
         "ai_provider_auth_environment_invalid",
+        "ai_authorization_binding_required",
+        "ai_authorization_changed",
+        "ai_task_definition_changed",
     }:
         status = 409
     elif code in {
@@ -433,7 +452,9 @@ class EditingManager:
         return [*local, *self._ai_executor.capabilities()]
 
     @staticmethod
-    def _as_editing_error(error: AiBridgeError) -> EditingError:
+    def _as_editing_error(
+        error: AiBridgeError | AiAuthorizationError,
+    ) -> EditingError:
         return EditingError(error.code)
 
     def create_ai_task(
@@ -446,10 +467,20 @@ class EditingManager:
         idempotency_key: str,
         *,
         source_revision_id: str | None = None,
+        expected_authorization_sha256: str | None = None,
     ) -> dict[str, Any]:
+        if expected_authorization_sha256 is None:
+            raise EditingError("ai_authorization_binding_required")
         try:
-            self._ai_executor.verify_operation(operation, provider_id, model_id)
-        except AiBridgeError as error:
+            authorization = self._ai_executor.operation_authorization(
+                operation, provider_id, model_id
+            )
+            require_authorization_match(
+                authorization,
+                authorization,
+                expected_sha256=expected_authorization_sha256,
+            )
+        except (AiBridgeError, AiAuthorizationError) as error:
             raise self._as_editing_error(error) from None
         return self.invoke(
             "create_ai_task",
@@ -460,19 +491,86 @@ class EditingManager:
             options,
             idempotency_key,
             source_revision_id=source_revision_id,
+            authorization=authorization.to_dict(),
         )
 
-    def confirm_ai_task(self, task_id: str) -> dict[str, Any]:
+    def confirm_ai_task(
+        self,
+        task_id: str,
+        *,
+        expected_request_sha256: str | None = None,
+        expected_authorization_sha256: str | None = None,
+        ai_data_egress_accepted: bool = False,
+    ) -> dict[str, Any]:
         service = self._begin_operation()
         try:
             task = service.ai_task(task_id)
+            if expected_authorization_sha256 is None:
+                raise EditingError("invalid_ai_task_confirmation")
             try:
-                self._ai_executor.verify_operation(
+                current = self._ai_executor.operation_authorization(
                     task["operation"], task["provider"], task["model"]
                 )
-            except AiBridgeError as error:
+                authorization = require_authorization_match(
+                    task.get("authorization"),
+                    current,
+                    expected_sha256=expected_authorization_sha256,
+                )
+            except (AiBridgeError, AiAuthorizationError) as error:
                 raise self._as_editing_error(error) from None
-            result = service.confirm_ai_task(task_id)
+            if type(ai_data_egress_accepted) is not bool:
+                raise EditingError("invalid_ai_task_confirmation")
+            if authorization.execution == "remote" and not ai_data_egress_accepted:
+                raise EditingError("ai_data_egress_confirmation_required")
+            if expected_request_sha256 is None:
+                raise EditingError("invalid_ai_task_confirmation")
+            result = service.confirm_ai_task(
+                task_id,
+                expected_request_sha256=expected_request_sha256,
+            )
+            self._wake.set()
+            return result
+        finally:
+            self._finish_operation()
+
+    def confirm_plan(
+        self,
+        plan_id: str,
+        *,
+        expected_recipe_sha256: str | None = None,
+        expected_authorization_sha256: str | None = None,
+        ai_data_egress_accepted: bool = False,
+    ) -> dict[str, Any]:
+        service = self._begin_operation()
+        try:
+            plan = service.plan(plan_id)
+            recipe = recipe_from_mapping(plan["recipe"])
+            if recipe.dubbing.enabled:
+                if expected_authorization_sha256 is None:
+                    raise EditingError("invalid_plan_confirmation")
+                try:
+                    authorization = parse_operation_authorization(
+                        recipe.dubbing.authorization
+                    )
+                    current = self._ai_executor.operation_authorization(
+                        "synthesize",
+                        recipe.dubbing.provider,
+                        recipe.dubbing.model,
+                    )
+                    require_authorization_match(
+                        authorization,
+                        current,
+                        expected_sha256=expected_authorization_sha256,
+                    )
+                except (AiBridgeError, AiAuthorizationError) as error:
+                    raise self._as_editing_error(error) from None
+                if authorization.execution == "remote" and not ai_data_egress_accepted:
+                    raise EditingError("ai_data_egress_confirmation_required")
+            result = service.confirm_plan(
+                plan_id,
+                expected_recipe_sha256=expected_recipe_sha256,
+                ai_data_egress_accepted=ai_data_egress_accepted,
+            )
             self._wake.set()
             return result
         finally:
@@ -564,7 +662,9 @@ class EditingManager:
                     speech_provider = None
                     if recipe.dubbing.enabled:
                         speech_provider = self._ai_executor.speech_provider(
-                            recipe.dubbing.provider, recipe.dubbing.model
+                            recipe.dubbing.provider,
+                            recipe.dubbing.model,
+                            recipe.dubbing.authorization,
                         )
                     result = AiRenderProcessor(service.processor).render(
                         source,
@@ -952,6 +1052,7 @@ def install_editing_routes(
             options,
             payload.idempotency_key,
             source_revision_id=source_revision_id,
+            expected_authorization_sha256=payload.expected_authorization_sha256,
         )
 
     @router.get("/ai-tasks")
@@ -963,8 +1064,14 @@ def install_editing_routes(
         return await invoke("ai_task", task_id)
 
     @router.post("/ai-tasks/{task_id}/confirm")
-    async def confirm_ai_task(task_id: Identifier):
-        return await invoke_manager("confirm_ai_task", task_id)
+    async def confirm_ai_task(task_id: Identifier, payload: ConfirmAiTaskRequest):
+        return await invoke_manager(
+            "confirm_ai_task",
+            task_id,
+            expected_request_sha256=payload.expected_request_sha256,
+            expected_authorization_sha256=payload.expected_authorization_sha256,
+            ai_data_egress_accepted=payload.ai_data_egress_accepted,
+        )
 
     @router.post("/ai-tasks/{task_id}/cancel")
     async def cancel_ai_task(task_id: Identifier):
@@ -1007,7 +1114,7 @@ def install_editing_routes(
     ):
         if not manager.media_ready:
             raise HTTPException(status_code=409, detail="processor_not_configured")
-        result = await invoke(
+        result = await invoke_manager(
             "confirm_plan",
             plan_id,
             expected_recipe_sha256=(
@@ -1016,8 +1123,10 @@ def install_editing_routes(
             ai_data_egress_accepted=(
                 False if payload is None else payload.ai_data_egress_accepted
             ),
+            expected_authorization_sha256=(
+                None if payload is None else payload.expected_authorization_sha256
+            ),
         )
-        manager.wake()
         return result
 
     @router.post("/plans/{plan_id}/cancel")

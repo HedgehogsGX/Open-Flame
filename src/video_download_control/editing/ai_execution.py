@@ -16,6 +16,14 @@ from threading import Event, Lock
 from typing import Any
 
 from .ai import TranscriptionOptions
+from .ai_authorization import (
+    TRANSLATION_CUES_PER_REQUEST_UNIT,
+    AiAuthorizationError,
+    AiOperationAuthorization,
+    build_operation_authorization,
+    enforce_transcription_budget,
+    enforce_translation_budget,
+)
 from .ai_bridge import (
     AiBridgeError,
     AiRuntimeBridge,
@@ -171,6 +179,7 @@ class AiTaskExecutor:
             "runtime_id": inspected.get("runtime_id"),
             "runtime_version": inspected.get("runtime_version"),
             "protocol_schema": inspected.get("protocol_schema"),
+            "manifest_sha256": inspected.get("manifest_sha256"),
             "platform": inspected.get("platform"),
             "providers": inspected.get("providers", []),
             "models": inspected.get("models", []),
@@ -204,6 +213,8 @@ class AiTaskExecutor:
                     "provider_id": None,
                     "model_id": None,
                     "data_egress": [],
+                    "authorization": None,
+                    "authorization_sha256": None,
                     "reason_code": exc.code,
                 }
                 for operation in ("transcribe", "translate", "synthesize")
@@ -223,50 +234,58 @@ class AiTaskExecutor:
                 model_ids: Sequence[str | None] = provider.model_ids
                 for model_id in model_ids:
                     try:
-                        verified_provider, _model = bridge.runtime.verify_for_operation(
+                        verified_provider, model = bridge.runtime.verify_for_operation(
                             provider.id, operation, model_id
                         )
                         data_egress = operation_data_egress(
                             verified_provider, operation
                         )
+                        authorization = build_operation_authorization(
+                            bridge.runtime,
+                            verified_provider,
+                            model,
+                            operation,
+                            data_egress,
+                        )
                     except (AiRuntimeError, AiBridgeError) as exc:
+                        failure_codes.setdefault(operation, exc.code)
+                        continue
+                    except AiAuthorizationError as exc:
                         failure_codes.setdefault(operation, exc.code)
                         continue
                     credential_code = self._credential_code(verified_provider)
                     capability: dict[str, object] = {
-                            "operation": (
-                                "dub" if operation == "synthesize" else operation
-                            ),
-                            "label": (
-                                "自动听写"
-                                if operation == "transcribe"
-                                else "自动翻译"
-                                if operation == "translate"
-                                else "自动 AI 配音"
-                            ),
-                            "status": (
-                                "blocked" if credential_code else "unverified"
-                            ),
-                            "execution": (
-                                "remote"
-                                if provider.kind in {"http", "remote_plugin"}
-                                else "local"
-                            ),
-                            "description": (
-                                "运行时和模型完整性已验证；实际 provider 健康尚待任务执行验证。"
-                            ),
-                            "requirements": (
-                                ["provider_secret", "provider_health"]
-                                if credential_code
-                                else ["provider_health"]
-                            ),
-                            "provider_id": provider.id,
-                            "model_id": model_id,
-                            "data_egress": list(data_egress),
-                            "reason_code": (
-                                credential_code or "provider_health_required"
-                            ),
-                        }
+                        "operation": (
+                            "dub" if operation == "synthesize" else operation
+                        ),
+                        "label": (
+                            "自动听写"
+                            if operation == "transcribe"
+                            else "自动翻译"
+                            if operation == "translate"
+                            else "自动 AI 配音"
+                        ),
+                        "status": "blocked" if credential_code else "unverified",
+                        "execution": (
+                            "remote"
+                            if provider.kind in {"http", "remote_plugin"}
+                            else "local"
+                        ),
+                        "description": (
+                            "运行时和模型完整性已验证；实际 provider 健康尚待任务执行验证。"
+                        ),
+                        "requirements": (
+                            ["provider_secret", "provider_health"]
+                            if credential_code
+                            else ["provider_health"]
+                        ),
+                        "provider_id": provider.id,
+                        "model_id": model_id,
+                        "data_egress": list(data_egress),
+                        "authorization": authorization.to_dict(),
+                        "authorization_sha256": authorization.sha256,
+                        "reason_code": credential_code or "provider_health_required",
+                    }
                     if operation == "synthesize":
                         configured_voices = provider.config.get(
                             "standard_voice_ids", []
@@ -309,6 +328,8 @@ class AiTaskExecutor:
                     "provider_id": None,
                     "model_id": None,
                     "data_egress": [],
+                    "authorization": None,
+                    "authorization_sha256": None,
                     "reason_code": failure_codes.get(
                         operation, "ai_provider_operation_unsupported"
                     ),
@@ -316,27 +337,69 @@ class AiTaskExecutor:
             )
         return values
 
-    def verify_operation(
-        self, operation: str, provider_id: str, model_id: str
-    ) -> None:
+    def operation_authorization(
+        self,
+        operation: str,
+        provider_id: str,
+        model_id: str,
+    ) -> AiOperationAuthorization:
+        """Return the current verified binding before a task is persisted."""
+
         if operation not in _SUPPORTED_OPERATIONS:
             raise AiBridgeError("ai_operation_unsupported")
+        bridge = self._get_bridge()
         try:
-            provider, _model = self._get_bridge().runtime.verify_for_operation(
+            provider, model = bridge.runtime.verify_for_operation(
                 provider_id, operation, model_id
+            )
+            data_egress = operation_data_egress(provider, operation)
+            authorization = build_operation_authorization(
+                bridge.runtime,
+                provider,
+                model,
+                operation,
+                data_egress,
             )
         except AiRuntimeError as exc:
             raise AiBridgeError(exc.code) from exc
-        operation_data_egress(provider, operation)
+        except AiAuthorizationError as exc:
+            raise AiBridgeError(exc.code) from exc
         credential_code = self._credential_code(provider)
         if credential_code is not None:
             raise AiBridgeError(credential_code)
+        return authorization
+
+    def verify_operation(
+        self, operation: str, provider_id: str, model_id: str
+    ) -> None:
+        self.operation_authorization(operation, provider_id, model_id)
 
     def speech_provider(
-        self, provider_id: str, model_id: str
+        self,
+        provider_id: str,
+        model_id: str,
+        expected_authorization: object,
     ) -> RuntimeSpeechProvider:
-        self.verify_operation("synthesize", provider_id, model_id)
-        return RuntimeSpeechProvider(self._get_bridge(), provider_id, model_id)
+        bridge = self._get_bridge()
+        try:
+            authorization = bridge.require_operation_authorization(
+                "synthesize",
+                provider_id,
+                model_id,
+                expected_authorization,
+            )
+        except AiBridgeError:
+            raise
+        provider = bridge.runtime.provider(provider_id, "synthesize")
+        credential_code = self._credential_code(provider)
+        if credential_code is not None:
+            raise AiBridgeError(credential_code)
+        return RuntimeSpeechProvider(
+            bridge,
+            provider_id,
+            model_id,
+            authorization,
+        )
 
     def execute(
         self,
@@ -359,6 +422,16 @@ class AiTaskExecutor:
         model_id = _task_text(task, "model")
         options = _task_options(task)
         bridge = self._get_bridge()
+        authorization = bridge.require_operation_authorization(
+            operation,
+            provider_id,
+            model_id,
+            task.get("authorization"),
+        )
+        provider_definition = bridge.runtime.provider(provider_id, operation)
+        credential_code = self._credential_code(provider_definition)
+        if credential_code is not None:
+            raise AiBridgeError(credential_code)
 
         try:
             if operation == "transcribe":
@@ -366,9 +439,6 @@ class AiTaskExecutor:
                     raise AiBridgeError("ai_task_invalid")
                 if service.processor is None:
                     raise AiBridgeError("processor_not_configured")
-                provider = RuntimeTranscriptionProvider(
-                    bridge, provider_id, model_id
-                )
                 source, source_size, source_sha256 = service.project_source_identity(
                     project_id
                 )
@@ -379,6 +449,28 @@ class AiTaskExecutor:
                 ) as temporary:
                     clip_start_ms = options.get("clip_start_ms")
                     clip_end_ms = options.get("clip_end_ms")
+                    if clip_start_ms is not None:
+                        assert isinstance(clip_end_ms, int)
+                        duration_ms = clip_end_ms - clip_start_ms
+                    else:
+                        source_probe = service.processor.probe(
+                            source,
+                            cancel_event=cancel_event,
+                            expected_source_size=source_size,
+                            expected_source_sha256=source_sha256,
+                        )
+                        duration_ms = source_probe.duration_ms
+                    try:
+                        # Reject an over-budget duration before spending time
+                        # transcoding the local derivative. The exact byte
+                        # limit is checked again after FFmpeg finishes.
+                        enforce_transcription_budget(
+                            authorization,
+                            duration_ms=duration_ms,
+                            audio_bytes=0,
+                        )
+                    except AiAuthorizationError as exc:
+                        raise AiBridgeError(exc.code) from exc
                     media = service.processor.prepare_transcription_audio(
                         source,
                         Path(temporary) / "source-audio.m4a",
@@ -387,6 +479,26 @@ class AiTaskExecutor:
                         clip_start_ms=clip_start_ms,
                         clip_end_ms=clip_end_ms,
                         cancel_event=cancel_event,
+                    )
+                    try:
+                        audio_bytes = Path(media).stat().st_size
+                    except OSError as exc:
+                        raise AiBridgeError(
+                            "ai_transcription_audio_unavailable"
+                        ) from exc
+                    try:
+                        enforce_transcription_budget(
+                            authorization,
+                            duration_ms=duration_ms,
+                            audio_bytes=audio_bytes,
+                        )
+                    except AiAuthorizationError as exc:
+                        raise AiBridgeError(exc.code) from exc
+                    provider = RuntimeTranscriptionProvider(
+                        bridge,
+                        provider_id,
+                        model_id,
+                        authorization,
                     )
                     result = provider.transcribe(
                         media,
@@ -440,7 +552,27 @@ class AiTaskExecutor:
                 glossary.append((str(item[0]), str(item[1])))
             source_language = _task_text(options, "source_language")
             target_language = _task_text(options, "target_language")
-            provider = RuntimeTranslationProvider(bridge, provider_id, model_id)
+            batch_count = (
+                len(cues) + TRANSLATION_CUES_PER_REQUEST_UNIT - 1
+            ) // TRANSLATION_CUES_PER_REQUEST_UNIT
+            glossary_characters = sum(
+                len(source) + len(target) for source, target in glossary
+            )
+            try:
+                enforce_translation_budget(
+                    authorization,
+                    cues,
+                    request_count=batch_count,
+                    additional_characters=batch_count * glossary_characters,
+                )
+            except AiAuthorizationError as exc:
+                raise AiBridgeError(exc.code) from exc
+            provider = RuntimeTranslationProvider(
+                bridge,
+                provider_id,
+                model_id,
+                authorization,
+            )
             result = provider.translate(
                 cues,
                 source_language=source_language,

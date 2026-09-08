@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Mapping, Protocol, Sequence
 
+from .ai_authorization import AiOperationAuthorization, parse_operation_authorization
+
 
 class EditingError(ValueError):
     """A stable public error code that never contains a filesystem path."""
@@ -49,6 +51,7 @@ class DubbingSpec:
     voice: str = ""
     state: str = "disabled"
     replace_original_audio: bool = False
+    authorization: AiOperationAuthorization | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,17 @@ class EditRecipe:
     dubbing: DubbingSpec = DubbingSpec()
 
     def to_dict(self) -> dict[str, Any]:
+        dubbing: dict[str, Any] = {
+            "enabled": self.dubbing.enabled,
+            "language": self.dubbing.language,
+            "provider": self.dubbing.provider,
+            "model": self.dubbing.model,
+            "voice": self.dubbing.voice,
+            "state": self.dubbing.state,
+            "replace_original_audio": self.dubbing.replace_original_audio,
+        }
+        if self.dubbing.authorization is not None:
+            dubbing["authorization"] = self.dubbing.authorization.to_dict()
         return {
             "segments": [
                 {"start_ms": item.start_ms, "end_ms": item.end_ms, "label": item.label}
@@ -80,15 +94,7 @@ class EditRecipe:
                 "model": self.translation.model,
                 "state": self.translation.state,
             },
-            "dubbing": {
-                "enabled": self.dubbing.enabled,
-                "language": self.dubbing.language,
-                "provider": self.dubbing.provider,
-                "model": self.dubbing.model,
-                "voice": self.dubbing.voice,
-                "state": self.dubbing.state,
-                "replace_original_audio": self.dubbing.replace_original_audio,
-            },
+            "dubbing": dubbing,
         }
 
 
@@ -207,11 +213,18 @@ def _dubbing(value: object) -> DubbingSpec:
         value = {}
     if not isinstance(value, Mapping):
         raise EditingError("invalid_dubbing")
-    _exact_keys(value, {"enabled", "language", "provider", "model", "voice", "state", "replace_original_audio"})
+    _exact_keys(value, {"enabled", "language", "provider", "model", "voice", "state", "replace_original_audio", "authorization"})
     enabled = _boolean(value.get("enabled", False))
     state = value.get("state", "needs_review" if enabled else "disabled")
     if state not in {"disabled", "needs_review", "ready", "blocked"}:
         raise EditingError("invalid_dubbing")
+    raw_authorization = value.get("authorization")
+    authorization: AiOperationAuthorization | None = None
+    if raw_authorization is not None:
+        try:
+            authorization = parse_operation_authorization(raw_authorization)
+        except (TypeError, ValueError):
+            raise EditingError("invalid_dubbing") from None
     result = DubbingSpec(
         enabled=enabled,
         language=_token(value.get("language", ""), 32, required=enabled),
@@ -220,8 +233,18 @@ def _dubbing(value: object) -> DubbingSpec:
         voice=_token(value.get("voice", ""), 120, required=enabled),
         state=state,
         replace_original_audio=_boolean(value.get("replace_original_audio", False)),
+        authorization=authorization,
     )
-    if enabled == (state == "disabled"):
+    if (
+        enabled == (state == "disabled")
+        or authorization is not None
+        and (
+            not enabled
+            or authorization.operation != "synthesize"
+            or authorization.provider_id != result.provider
+            or authorization.model_id != result.model
+        )
+    ):
         raise EditingError("invalid_dubbing")
     return result
 

@@ -64,6 +64,15 @@ _UPLOAD_INPUT_KEYS = {
 }
 _UPLOAD_KEYS = _UPLOAD_INPUT_KEYS | {"account_bindings"}
 _COVER_KEYS = {"cover_landscape_asset_id", "cover_portrait_asset_id"}
+_LEGACY_AI_KEYS = frozenset({"transcription_provider", "transcription_model"})
+_DIGEST_AI_KEYS = _LEGACY_AI_KEYS | frozenset({
+    "transcription_authorization_sha256",
+    "translation_authorization_sha256",
+})
+_BOUND_AI_KEYS = _DIGEST_AI_KEYS | frozenset({
+    "transcription_authorization",
+    "translation_authorization",
+})
 
 
 class UploadManager(Protocol):
@@ -344,13 +353,27 @@ class LocalWorkflowAdapter:
         if (
             not normalized.translation.enabled
             or not isinstance(ai, Mapping)
-            or set(ai) != {"transcription_provider", "transcription_model"}
         ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        ai_keys = set(ai)
+        if ai_keys in {_LEGACY_AI_KEYS, _DIGEST_AI_KEYS}:
+            return AiSnapshot("attention", code="ai_authorization_required")
+        if ai_keys != _BOUND_AI_KEYS:
             raise WorkflowError("workflow_domain_data_invalid")
         transcription_provider = ai.get("transcription_provider")
         transcription_model = ai.get("transcription_model")
         if not isinstance(transcription_provider, str) or not isinstance(
             transcription_model, str
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        transcription_authorization_sha256 = ai.get(
+            "transcription_authorization_sha256"
+        )
+        translation_authorization_sha256 = ai.get(
+            "translation_authorization_sha256"
+        )
+        if not isinstance(transcription_authorization_sha256, str) or not isinstance(
+            translation_authorization_sha256, str
         ):
             raise WorkflowError("workflow_domain_data_invalid")
 
@@ -376,6 +399,7 @@ class LocalWorkflowAdapter:
                     **clip_options,
                 },
                 f"wf-{workflow_id}-transcribe",
+                expected_authorization_sha256=transcription_authorization_sha256,
             )
             transcript = self._advance_ai_task(
                 transcription,
@@ -406,6 +430,7 @@ class LocalWorkflowAdapter:
                 },
                 f"wf-{workflow_id}-translate",
                 source_revision_id=source_revision_id,
+                expected_authorization_sha256=translation_authorization_sha256,
             )
             translated = self._advance_ai_task(
                 translation,
@@ -492,7 +517,24 @@ class LocalWorkflowAdapter:
                 return AiSnapshot("review", code="ai_restart_confirmation_required")
             if not authorization[0]:
                 return AiSnapshot("review", code=confirmation_code)
-            task = self.editing_manager.confirm_ai_task(task_id)
+            request_sha256 = task.get("request_sha256")
+            authorization_sha256 = task.get("authorization_sha256")
+            task_authorization = task.get("authorization")
+            if (
+                not isinstance(request_sha256, str)
+                or not isinstance(authorization_sha256, str)
+                or not isinstance(task_authorization, Mapping)
+                or task_authorization.get("execution") not in {"local", "remote"}
+            ):
+                return AiSnapshot("attention", code="ai_authorization_required")
+            task = self.editing_manager.confirm_ai_task(
+                task_id,
+                expected_request_sha256=request_sha256,
+                expected_authorization_sha256=authorization_sha256,
+                ai_data_egress_accepted=(
+                    task_authorization["execution"] == "remote"
+                ),
+            )
             authorization[0] = False
             state = task.get("state")
         if state in {"queued", "running", "canceling"}:
@@ -579,12 +621,26 @@ class LocalWorkflowAdapter:
         if (
             not normalized.translation.enabled
             or not isinstance(ai, Mapping)
-            or set(ai) != {"transcription_provider", "transcription_model"}
         ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        ai_keys = set(ai)
+        if ai_keys in {_LEGACY_AI_KEYS, _DIGEST_AI_KEYS}:
+            raise WorkflowError("ai_authorization_required")
+        if ai_keys != _BOUND_AI_KEYS:
             raise WorkflowError("workflow_domain_data_invalid")
         provider = ai.get("transcription_provider")
         model = ai.get("transcription_model")
         if not isinstance(provider, str) or not isinstance(model, str):
+            raise WorkflowError("workflow_domain_data_invalid")
+        transcription_authorization_sha256 = ai.get(
+            "transcription_authorization_sha256"
+        )
+        translation_authorization_sha256 = ai.get(
+            "translation_authorization_sha256"
+        )
+        if not isinstance(transcription_authorization_sha256, str) or not isinstance(
+            translation_authorization_sha256, str
+        ):
             raise WorkflowError("workflow_domain_data_invalid")
         try:
             clip_options: dict[str, int] = {}
@@ -610,6 +666,7 @@ class LocalWorkflowAdapter:
                     **clip_options,
                 },
                 f"wf-{workflow_id}-transcribe",
+                expected_authorization_sha256=transcription_authorization_sha256,
             )
             current = self._latest_ai_task(transcription)
             if current.get("state") in {"review", "queued", "running", "canceling"}:
@@ -649,6 +706,7 @@ class LocalWorkflowAdapter:
                 },
                 f"wf-{workflow_id}-translate",
                 source_revision_id=source_revision_id,
+                expected_authorization_sha256=translation_authorization_sha256,
             )
             current = self._latest_ai_task(translation)
             if current.get("state") in {"review", "queued", "running", "canceling"}:
@@ -736,13 +794,23 @@ class LocalWorkflowAdapter:
             recipe_sha256 = plan.get("recipe_sha256")
             if not isinstance(recipe_sha256, str):
                 raise WorkflowError("workflow_domain_data_invalid")
-            self.editing_manager.invoke(
-                "confirm_plan",
+            recipe_value = plan.get("recipe")
+            if not isinstance(recipe_value, Mapping):
+                raise WorkflowError("workflow_domain_data_invalid")
+            parsed_recipe = recipe_from_mapping(recipe_value)
+            authorization = parsed_recipe.dubbing.authorization
+            if parsed_recipe.dubbing.enabled and authorization is None:
+                raise WorkflowError("ai_authorization_required")
+            self.editing_manager.confirm_plan(
                 plan_id,
                 expected_recipe_sha256=recipe_sha256,
-                ai_data_egress_accepted=True,
+                expected_authorization_sha256=(
+                    None if authorization is None else authorization.sha256
+                ),
+                ai_data_egress_accepted=(
+                    authorization is not None and authorization.execution == "remote"
+                ),
             )
-            self.editing_manager.wake()
         except EditingError as error:
             _domain_failure(error, "editing_failed")
 

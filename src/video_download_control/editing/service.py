@@ -627,6 +627,7 @@ class EditingService:
         idempotency_key: str,
         *,
         source_revision_id: str | None = None,
+        authorization: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create one immutable, explicitly reviewable transcription/translation task."""
 
@@ -638,6 +639,7 @@ class EditingService:
                 model_id=model_id,
                 source_revision_id=source_revision_id,
                 options=options,
+                authorization=authorization,
             )
         except (AiPipelineError, TypeError, ValueError) as exc:
             raise EditingError("invalid_ai_request") from exc
@@ -703,14 +705,28 @@ class EditingService:
             )
             return self._ai_task_by_id(db, task_id)
 
-    def confirm_ai_task(self, task_id: str) -> dict[str, Any]:
+    def confirm_ai_task(
+        self,
+        task_id: str,
+        *,
+        expected_request_sha256: str | None = None,
+    ) -> dict[str, Any]:
         task_id = _identifier(task_id)
+        if expected_request_sha256 is not None and (
+            not isinstance(expected_request_sha256, str)
+            or not _SHA256.fullmatch(expected_request_sha256)
+        ):
+            raise EditingError("invalid_ai_task_confirmation")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM ai_tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 raise EditingError("ai_task_not_found")
             task, request = self._ai_task_from_row(row)
+            if expected_request_sha256 is not None and not hmac.compare_digest(
+                request.request_sha256, expected_request_sha256
+            ):
+                raise EditingError("ai_task_definition_changed")
             if task["state"] in {"queued", "running", "canceling", "succeeded"}:
                 return task
             if task["state"] != "review":
@@ -748,6 +764,8 @@ class EditingService:
             if original is None:
                 raise EditingError("ai_task_not_found")
             original_public, request = self._ai_task_from_row(original)
+            if request.authorization is None:
+                raise EditingError("ai_authorization_binding_required")
             retryable = original_public["state"] in {"failed", "canceled"}
             if original_public["state"] == "succeeded":
                 result_revision_id = original_public.get("result_revision_id")
@@ -1231,8 +1249,13 @@ class EditingService:
                 and recipe.translation.state != "ready"
             ) or (recipe.dubbing.enabled and recipe.dubbing.state != "ready"):
                 raise EditingError("ai_operation_not_ready")
-            if recipe.dubbing.enabled and (
-                expected_recipe_sha256 is None or not ai_data_egress_accepted
+            if recipe.dubbing.enabled and expected_recipe_sha256 is None:
+                raise EditingError("ai_data_egress_confirmation_required")
+            if (
+                recipe.dubbing.enabled
+                and recipe.dubbing.authorization is not None
+                and recipe.dubbing.authorization.execution == "remote"
+                and not ai_data_egress_accepted
             ):
                 raise EditingError("ai_data_egress_confirmation_required")
             source_row = db.execute(
@@ -1276,6 +1299,9 @@ class EditingService:
                 raise EditingError("plan_not_found")
             if original["state"] not in {"failed", "canceled"}:
                 raise EditingError("plan_retry_not_allowed")
+            recipe = self._recipe_from_row(original)
+            if recipe.dubbing.enabled and recipe.dubbing.authorization is None:
+                raise EditingError("ai_authorization_binding_required")
             successor = db.execute(
                 "SELECT id FROM render_plans WHERE retry_of=?", (plan_id,)
             ).fetchone()
@@ -1285,7 +1311,6 @@ class EditingService:
                     db, key, "retry_plan", request_digest, successor_id, _now()
                 )
                 return self._plan_by_id(db, successor_id)
-            recipe = self._recipe_from_row(original)
             original_binding = db.execute(
                 "SELECT * FROM plan_timeline_bindings WHERE plan_id=?",
                 (plan_id,),
@@ -2024,6 +2049,11 @@ class EditingService:
             "created_at", "updated_at", "confirmed_at", "started_at", "finished_at", "retry_of",
         )}
         result["recipe"] = recipe.to_dict()
+        result["dubbing_authorization_sha256"] = (
+            None
+            if recipe.dubbing.authorization is None
+            else recipe.dubbing.authorization.sha256
+        )
         binding = db.execute(
             "SELECT revision_id,cues_sha256,parent_id,parent_cues_sha256 "
             "FROM plan_timeline_bindings WHERE plan_id=?",
@@ -2264,6 +2294,16 @@ class EditingService:
                 "code": code,
                 "request_sha256": request.request_sha256,
                 "options": dict(request.request["options"]),
+                "authorization": (
+                    None
+                    if request.authorization is None
+                    else request.authorization.to_dict()
+                ),
+                "authorization_sha256": (
+                    None
+                    if request.authorization is None
+                    else request.authorization.sha256
+                ),
                 "retry_of": retry_of,
                 "result_revision_id": result_revision_id,
                 **timestamps,

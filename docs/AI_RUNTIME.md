@@ -1,6 +1,6 @@
 # Open-Flame 0.28.0 可选 AI Runtime
 
-Open-Flame 0.28.0 使用独立的轻量 AI runtime 执行自动听写、分段文字翻译和标准音色配音。它与主应用 `.venv`、下载数据、编辑数据库和上传 runtime 分离；runtime 只包含官方 CPython embeddable 文件、Open-Flame worker、协议和标准库 OpenAI provider，不安装 OpenAI SDK，也不捆绑模型权重。
+Open-Flame 0.28.0 使用独立的轻量 AI runtime 执行自动听写、分段文字翻译和标准音色配音。它与主应用 `.venv`、下载数据、编辑数据库和上传 runtime 分离；runtime 只包含官方 CPython embeddable 文件、Open-Flame worker、协议和标准库 OpenAI provider，不安装 OpenAI SDK，也不捆绑模型权重。发布后源码进一步加入逐 operation 的精确 authorization 和调用前输入硬上限，仍未增加常驻 AI 服务、SDK 或本地模型权重。
 
 当前 builder 只在 Windows x64 上构建，技术门禁只接受结构与运行身份符合要求的 64-bit CPython 3.12 或 3.13 embeddable ZIP；运维上只应使用 Python.org 官方归档。推荐基线为 CPython **3.13.15**：
 
@@ -72,6 +72,8 @@ try {
 
 `manifest.json` 精确声明 Python、worker、协议、provider、模型及每个 runtime 文件的大小和 SHA-256。加载 runtime 时会枚举完整文件集合并重新计算全部散列；文件新增、缺失、内容变化、manifest 结构变化、symlink/junction/reparse 重定向或平台/Python 身份不符都会失败关闭。每次执行模型操作前，还会重新核对 manifest 以及该 provider、模型、Python、worker 和协议所需的文件。
 
+执行路径会在准备完受限输入后、把可执行路径交给 subprocess runner 前再次复核，并在返回后复核；听写派生音频先复制为私有 scratch 中的固定副本并重新核对大小/SHA-256。这个机制用于发现意外漂移与失败关闭，不是抵抗可用同一系统账号同时改写应用/runtime 的攻击者的密码学 attestation。当前 runtime 只应在受信任的单用户主机使用，维护或替换 runtime 时必须先停止应用；后续仍需为安装器与执行器加入跨进程 runtime lease 或不可变 snapshot。
+
 构建后或启动应用前可执行只读检查：
 
 ```powershell
@@ -112,7 +114,7 @@ Remove-Item Env:OPEN_FLAME_AI_OPENAI_API_KEY
 | 分段翻译 | `gpt-5.6-luna` | 通过 Responses API 的严格 JSON Schema 返回 `segment_id` 与 `target_text`；本地再次核对 cue 数量、ID、顺序和时间，最多每批 50 个 cue，并受 4 MiB 请求边界约束。 |
 | 自动配音 | `gpt-4o-mini-tts` | 每个 cue 单独请求 WAV；单次文字最多 4096 字符，语速范围为 0.88～1.12。生成后由本地渲染器测量、对齐并混音。 |
 
-配置这些模型 ID 不代表当前 API 账号一定能调用它们，也不冻结供应商侧价格或行为。实际可用性必须用该账号执行有授权的真实样本另行记录。
+配置这些模型 ID 不代表当前 API 账号一定能调用它们，也不冻结供应商侧价格或行为。authorization 会绑定 manifest 中的 model ID 和本地声明 revision，但远端 alias 仍可能在相同名称下由供应商改变实现、行为、价格或可用性，本地摘要无法自动证明这类服务端变化。实际可用性必须用该账号执行有授权的真实样本另行记录。
 
 首批只允许以下 13 个内置标准音色：
 
@@ -122,19 +124,42 @@ alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin,
 
 它们全部按非克隆音色处理；Open-Flame 0.28.0 不接受 custom voice、用户声音样本或声音克隆。UI 只列出 provider manifest 公布且 `is_clone` 不为真的音色。中文和其他语言的自然度、发音、风格及最终听感仍需真人试听，不能由 manifest 或一次生成自动判定。
 
+### 4.1 逐操作 authorization
+
+能力接口为每个 `provider × model × operation` 生成一份 canonical authorization 及 SHA-256。authorization 只包含可公开核对的定义，不含 API key、endpoint、媒体正文或 provider 响应，并精确绑定：
+
+- authorization schema、runtime ID/version、AI protocol schema 和当前 manifest SHA-256；
+- provider ID/kind、model ID 与 manifest 中的本地声明 revision；
+- `transcribe`、`translate` 或 `synthesize` operation、`local`/`remote` 执行类型与该 operation 的精确 data egress；
+- 本次 operation 的 effective limits。
+
+新 AI task 把完整 authorization 写入不可变 request；配音把它写入不可变 recipe；单 URL 自动流程把三项完整 authorization 及其摘要写入冻结 profile。页面创建或确认时提交自己看到的绑定，服务层对 request/recipe/profile 做定义 CAS，并与刚重新核验的 runtime 能力比较。worker 领取后、构造 provider 前及真正调用前还会再比较；任何缺失、格式错误、摘要不一致、manifest/model 声明变化或 operation 不匹配都会失败关闭。
+
+旧 AI task、recipe 和 Workflow profile 保持可读，便于解释历史状态；它们没有精确 authorization，因此不能直接确认、重试或执行。操作者须刷新能力后按当前定义重建任务、计划或流程。authorization 也不是跨 runtime 升级的永久许可。
+
+核心进程规定的精确有效上限如下。当前版本没有自定义降额入口；持久化 authorization 必须与这些值完全一致，也不能通过修改 runtime manifest 替换或抬高：
+
+| 操作 | 一次 authorization 的硬上限 | 计数口径 |
+| --- | --- | --- |
+| 听写 | 30 分钟、25 MiB 派生音频、1 次 provider 请求 | 完整选择范围和最终 M4A 在首次请求前一并核对 |
+| 翻译 | 1000 cues、60000 输入字符、20 个调用单位 | 每 50 cues 估算一个调用单位；重复发送的 glossary 字符按每个单位计入 |
+| 配音 | 600 cues、60000 输入字符、600 次调用 | 每个有文字的 cue 最多一次 Speech 调用；空 B-roll 不调用 |
+
+这些硬上限只约束本机在一次已确认操作中允许送入 provider 的工作量。它们不是货币价格、token/秒数账单、账户额度或实际 usage ledger，也不能证明 provider 未对 unknown 请求计费。
+
 ## 5. 媒体处理与时间轴审核
 
-听写前，Open-Flame 在本机使用固定 FFmpeg 从不可变编辑源派生临时音频：移除视频、字幕、数据和 metadata，编码为 **mono、24 kHz、32 kbit/s AAC M4A**，并在上传前再次核对文件身份、大小和 SHA-256。发送给听写 API 的是该派生音频，不是原始视频文件。`/workflows` 会把 recipe 的第一个分段作为听写 clip，只编码并发送该范围，再把返回时间加回源时间轴；编辑页直接建立听写任务时当前没有 clip 控件，默认编码完整编辑源。当前单请求实现限制**实际选择范围**不超过 **90 分钟**、派生文件不超过 **25 MiB**；不会偷偷截断、分片或降级上传，超过任一上限就失败并要求操作者调整输入。
+听写前，Open-Flame 在本机使用固定 FFmpeg 从不可变编辑源派生临时音频：移除视频、字幕、数据和 metadata，编码为 **mono、24 kHz、32 kbit/s AAC M4A**，并在上传前再次核对文件身份、大小和 SHA-256。发送给听写 API 的是该派生音频，不是原始视频文件。`/workflows` 会把 recipe 的第一个分段作为听写 clip，只编码并发送该范围，再把返回时间加回源时间轴；编辑页直接建立听写任务时当前没有 clip 控件，默认编码完整编辑源。本地派生器仍有 90 分钟的媒体处理边界，但当前 authorization 在首次 provider 请求前施加更严格的 **30 分钟且 25 MiB** 有效上限；不会偷偷截断、分片或降级上传，超过任一上限就失败并要求操作者调整输入。
 
 推荐的人工审核顺序是：
 
-1. 在编辑页建立听写任务，核对 provider、模型和云端外发范围，再明确确认执行。
+1. 在编辑页建立听写任务，核对 provider、模型本地声明 revision、runtime manifest 摘要、硬上限和云端外发范围，再明确确认执行。
 2. 听写结果保存为 `review` 时间轴。页面展开全部 cue，显示整数毫秒起止时间、原文、语言和可选 speaker；批准或拒绝前不会把它用作翻译来源。
 3. 从已批准字幕建立翻译任务，明确确认执行。译文时间轴按相同 cue ID 和时间显示原文与译文；必须整份批准后才能写入 ready 编辑草稿。
 4. 选择标准音色、语速和“替换原声/压低原声后叠加”，生成待确认编辑计划。配音逐 cue 生成 WAV；音频超过字幕时间槽时返回 `ai_speech_timing_overflow`，不会截断文字或顺延并覆盖后续 cue。
 5. 确认本地渲染计划后，时间轴按每个已选分段过滤并从 0 ms 重新计时，分别生成 segment-local VTT 与 `dubbed_video`。分段边界切入 cue 会以 `ai_segment_boundary_splits_cue` 拒绝；没有 cue 的 B-roll 分段使用空 VTT 与本地静音，不调用 Speech API。保留原声时固定把原声压到 22% 后再混入配音；下载原件与此前编辑输出保持不变。上传仍有单独的账号和发布确认域。
 
-单 URL 自动流程未授权“自动确认编辑”时，会在听写与翻译结果处停到 `awaiting_ai_review`，并引导到编辑页查看完整时间轴。若操作者主动启用自动确认编辑，该授权也允许流程确认 AI 调用和批准返回时间轴；这会跳过逐项人工停顿，应只用于已经接受该处理范围和结果风险的流程。
+单 URL 自动流程未授权“自动确认编辑”时，会在听写与翻译结果处停到 `awaiting_ai_review`，并引导到编辑页查看完整时间轴。若操作者主动启用自动确认编辑，该授权也允许流程确认 AI 调用和批准返回时间轴；profile 会冻结各 operation 的 authorization，确认时仍须与当前 runtime 做 CAS。这会跳过逐项人工停顿，应只用于已经接受该精确处理范围和结果风险的流程。runtime、model 声明、外发范围或 limits 变化后，旧流程不会继承新的能力，必须重建。
 
 ## 6. 云端外发、费用与取消边界
 
@@ -146,10 +171,10 @@ OpenAI provider 是远程 provider。当前执行会发送：
 
 这些内容会离开本机并由 OpenAI API 处理。manifest 对可能外发的数据类型作保守声明，页面在任务确认处显示该范围。请在发起前确认媒体和文字有权交给云服务处理，并根据当前供应商条款、保留政策和所在地区要求作出决定。
 
-每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。Open-Flame 0.28.0 不提供准确费用预估、预算上限、供应商账单核对或远程 request ID reconciliation，操作者应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled` 当作供应商已撤销或未计费的证明。AI task 或配音计划重试会建立待确认后继，确认后重新发送完整步骤；已完成的批次/cue 可能再次计费。
+每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。当前已提供上一节的固定输入/调用硬上限，但仍不提供准确价格预估、供应商账单核对、持久化 usage ledger 或远程 request ID reconciliation；操作者仍应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled` 当作供应商已撤销或未计费的证明。AI task 或配音计划重试会建立待确认后继，确认后重新发送完整步骤；已完成的批次/cue 可能再次计费。下一工程切片将以 Editing Schema 4 保存脱敏的远端调用 ledger 和 accepted/unknown/reconciled outcome，再决定是否允许重试。
 
 ## 7. 当前验证边界
 
 构建成功、`--check` 返回 `ready`、页面列出 provider/model 或本地渲染 smoke 通过，只能证明对应本机 runtime 结构、散列、协议和本地媒体路径满足当前代码合同。
 
-当前 0.28.0 开发证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收。** 因此不能据此声称云模型在当前账号可用、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
+当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget 的本地通过只能证明定义绑定和超限失败关闭，不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。

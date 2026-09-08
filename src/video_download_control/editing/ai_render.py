@@ -26,6 +26,12 @@ from .ai import (
     SpeechProvider,
     Voice,
 )
+from .ai_authorization import (
+    AiAuthorizationError,
+    enforce_synthesis_budget,
+    require_authorization_match,
+)
+from .ai_bridge import AiBridgeError
 from .ai_pipeline import AiPipelineError, canonical_timeline
 from .contracts import (
     DubbingSpec,
@@ -493,6 +499,33 @@ class AiRenderProcessor:
                 _window_cues(canonical.cues, start_ms, end_ms)
                 for start_ms, end_ms in windows
             )
+            if dubbing.enabled:
+                # Bind the approved recipe to the authorization carried by the
+                # verified provider instance, then account for every cue that
+                # will cause a synthesis request. The provider rechecks the
+                # current runtime before ``voices()`` can load a plugin or
+                # contact a remote service.
+                if speech_provider is None or not isinstance(
+                    speech_provider, SpeechProvider
+                ):
+                    raise EditingError("ai_speech_provider_required")
+                try:
+                    provider_authorization = getattr(
+                        speech_provider, "expected_authorization", None
+                    )
+                    authorization = require_authorization_match(
+                        dubbing.authorization,
+                        provider_authorization,
+                    )
+                    synthesis_cues = tuple(
+                        cue for cue_group in windowed_cues for cue in cue_group
+                    )
+                    enforce_synthesis_budget(
+                        authorization,
+                        synthesis_cues,
+                    )
+                except (AiAuthorizationError, AiBridgeError) as exc:
+                    raise EditingError(exc.code) from exc
 
             outputs: list[RenderAsset] = []
             completed_bytes = 0
@@ -667,6 +700,8 @@ class AiRenderProcessor:
         try:
             capability = speech_provider.capability()
             raw_voices = speech_provider.voices(spec.language)
+        except (AiAuthorizationError, AiBridgeError) as exc:
+            raise EditingError(exc.code) from exc
         except Exception:
             raise EditingError("ai_speech_provider_unavailable") from None
         if not isinstance(raw_voices, tuple) or len(raw_voices) > 512:
@@ -755,6 +790,8 @@ class AiRenderProcessor:
                 )
             except EditingError:
                 raise
+            except (AiAuthorizationError, AiBridgeError) as exc:
+                raise EditingError(exc.code) from exc
             except Exception:
                 if cancel_event is not None and cancel_event.is_set():
                     raise CommandCancelled("AI speech rendering was cancelled") from None

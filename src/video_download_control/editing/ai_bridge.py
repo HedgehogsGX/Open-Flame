@@ -39,6 +39,12 @@ from .ai import (
     TranslationRevision,
     Voice,
 )
+from .ai_authorization import (
+    AiAuthorizationError,
+    AiOperationAuthorization,
+    build_operation_authorization,
+    require_authorization_match,
+)
 from .ai_protocol import (
     MAX_PROGRESS_LINE_BYTES,
     MAX_PROGRESS_LINES,
@@ -223,6 +229,47 @@ def _copy_verified_audio(
                 pass
 
 
+def _copy_verified_input(
+    source: Path,
+    destination: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    maximum: int,
+) -> None:
+    """Freeze one already verified provider input inside the private scratch dir."""
+
+    descriptor: int | None = None
+    valid = False
+    try:
+        descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with source.open("rb") as origin, os.fdopen(descriptor, "wb") as target:
+            descriptor = None
+            shutil.copyfileobj(origin, target, length=1024 * 1024)
+            target.flush()
+            os.fsync(target.fileno())
+        copied_size, copied_digest = file_sha256(destination, maximum=maximum)
+        if copied_size != expected_size or copied_digest != expected_sha256:
+            raise AiBridgeError("ai_source_changed")
+        valid = True
+    except AiBridgeError:
+        raise
+    except (OSError, AiProtocolError) as exc:
+        raise AiBridgeError("ai_source_unavailable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not valid:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 class _ProgressReader:
     def __init__(
         self,
@@ -303,13 +350,47 @@ class AiRuntimeBridge:
             raise AiBridgeError("ai_provider_auth_missing")
         return {provider.auth_env: secret}
 
+    def require_operation_authorization(
+        self,
+        operation: str,
+        provider_id: str,
+        model_id: str | None,
+        expected_authorization: object,
+    ) -> AiOperationAuthorization:
+        """Re-hash one operation and match the exact persisted authorization.
+
+        This check does not resolve credentials.  Callers can therefore place
+        it immediately before provider setup without exposing a secret when a
+        legacy or changed binding must be rejected.
+        """
+
+        try:
+            provider, model = self.runtime.verify_for_operation(
+                provider_id, operation, model_id
+            )
+            data_egress = operation_data_egress(provider, operation)
+            current = build_operation_authorization(
+                self.runtime,
+                provider,
+                model,
+                operation,
+                data_egress,
+            )
+            return require_authorization_match(expected_authorization, current)
+        except AiAuthorizationError as exc:
+            raise AiBridgeError(exc.code) from exc
+        except AiRuntimeError as exc:
+            raise AiBridgeError(exc.code) from exc
+
     @staticmethod
-    def _source_identity(payload: Mapping[str, object]) -> tuple[Path, int, str] | None:
+    def _source_identity(
+        payload: Mapping[str, object], *, maximum: int = MAX_MEDIA_BYTES
+    ) -> tuple[Path, int, str] | None:
         if "media_path" not in payload:
             return None
         path = Path(str(payload["media_path"]))
         try:
-            size, digest = file_sha256(path, maximum=MAX_MEDIA_BYTES)
+            size, digest = file_sha256(path, maximum=maximum)
         except AiProtocolError as exc:
             raise AiBridgeError("ai_source_unavailable") from exc
         if size != payload.get("media_size") or digest != payload.get("media_sha256"):
@@ -338,6 +419,7 @@ class AiRuntimeBridge:
         progress: ProgressCallback,
         cancelled: CancelCallback,
         audio_destination: Path | None = None,
+        expected_authorization: object = None,
     ) -> dict[str, object]:
         """Run a validated operation and return its validated payload only."""
 
@@ -355,9 +437,11 @@ class AiRuntimeBridge:
                     "payload": dict(payload),
                 }
             )
-            provider, _model = self.runtime.verify_for_operation(
-                provider_id, operation, model_id
-            )
+            # Structural request validation can use the immutable in-memory
+            # manifest.  The full artifact re-hash is performed at the final
+            # authorization gate inside the run lock below.
+            provider = self.runtime.provider(provider_id, operation)
+            self.runtime.model(provider, model_id, operation)
             operation_data_egress(provider, operation)
         except AiProtocolError as exc:
             raise AiBridgeError(exc.code) from exc
@@ -368,6 +452,24 @@ class AiRuntimeBridge:
         with self._run_lock:
             if cancelled():
                 raise AiBridgeError("ai_operation_canceled")
+            authorization: AiOperationAuthorization | None = None
+            if operation != "health":
+                # This is the final core-side gate before a credential is
+                # resolved or the isolated provider process can be started.
+                authorization = self.require_operation_authorization(
+                    operation,
+                    provider_id,
+                    model_id,
+                    expected_authorization,
+                )
+                provider = self.runtime.provider(provider_id, operation)
+            else:
+                try:
+                    provider, _model = self.runtime.verify_for_operation(
+                        provider_id, operation, model_id
+                    )
+                except AiRuntimeError as exc:
+                    raise AiBridgeError(exc.code) from exc
             scratch = Path(
                 tempfile.mkdtemp(prefix=f"ai-{request_id[:8]}-", dir=self.work_root)
             )
@@ -375,6 +477,7 @@ class AiRuntimeBridge:
             request_path = scratch / "request.json"
             output_path = scratch / "output.wav"
             source_identity: tuple[Path, int, str] | None = None
+            provider_input_identity: tuple[Path, int, str] | None = None
             try:
                 request_payload = dict(request["payload"])
                 if operation == "synthesize":
@@ -384,7 +487,32 @@ class AiRuntimeBridge:
                     request = validate_request({**request, "payload": request_payload})
                 elif audio_destination is not None:
                     raise AiBridgeError("ai_audio_destination_invalid")
-                source_identity = self._source_identity(request_payload)
+                source_maximum = (
+                    int(authorization.limits["max_audio_bytes"])
+                    if operation == "transcribe" and authorization is not None
+                    else MAX_MEDIA_BYTES
+                )
+                source_identity = self._source_identity(
+                    request_payload,
+                    maximum=source_maximum,
+                )
+                if operation == "transcribe" and source_identity is not None:
+                    source_path, source_size, source_digest = source_identity
+                    stable_input = scratch / "input.m4a"
+                    _copy_verified_input(
+                        source_path,
+                        stable_input,
+                        expected_size=source_size,
+                        expected_sha256=source_digest,
+                        maximum=source_maximum,
+                    )
+                    request_payload["media_path"] = str(stable_input)
+                    provider_input_identity = (
+                        stable_input,
+                        source_size,
+                        source_digest,
+                    )
+                    request = validate_request({**request, "payload": request_payload})
                 write_json_atomic(request_path, request, maximum=MAX_REQUEST_BYTES)
                 progress_reader = _ProgressReader(request_id, progress)
                 command = CommandSpec(
@@ -413,6 +541,23 @@ class AiRuntimeBridge:
                     stderr_limit_bytes=64 * 1024,
                     stdout_line_observer=progress_reader,
                 )
+                # Scratch preparation and bounded input copying can take time.
+                # Re-hash the exact runtime binding again immediately before
+                # handing executable paths to the subprocess runner.
+                if operation != "health":
+                    self.require_operation_authorization(
+                        operation,
+                        provider_id,
+                        model_id,
+                        expected_authorization,
+                    )
+                else:
+                    try:
+                        self.runtime.verify_for_operation(
+                            provider_id, operation, model_id
+                        )
+                    except AiRuntimeError as exc:
+                        raise AiBridgeError(exc.code) from exc
                 try:
                     command_result = self.runner.run(
                         command,
@@ -431,12 +576,21 @@ class AiRuntimeBridge:
                 if progress_reader.failure is not None:
                     raise progress_reader.failure
                 self._verify_source_after(source_identity)
-                try:
-                    self.runtime.verify_for_operation(
-                        provider_id, operation, model_id
+                self._verify_source_after(provider_input_identity)
+                if operation != "health":
+                    self.require_operation_authorization(
+                        operation,
+                        provider_id,
+                        model_id,
+                        expected_authorization,
                     )
-                except AiRuntimeError as exc:
-                    raise AiBridgeError(exc.code) from exc
+                else:
+                    try:
+                        self.runtime.verify_for_operation(
+                            provider_id, operation, model_id
+                        )
+                    except AiRuntimeError as exc:
+                        raise AiBridgeError(exc.code) from exc
                 try:
                     result = validate_result(
                         read_json_file(result_path, maximum=MAX_RESULT_BYTES),
@@ -535,10 +689,12 @@ class RuntimeTranscriptionProvider:
         bridge: AiRuntimeBridge,
         provider_id: str,
         model_id: str | None,
+        expected_authorization: object = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
+        self.expected_authorization = expected_authorization
 
     def capability(self) -> ProviderCapability:
         provider = self.bridge.runtime.provider(self.provider_id, "transcribe")
@@ -587,6 +743,7 @@ class RuntimeTranscriptionProvider:
             },
             progress=progress,
             cancelled=cancelled,
+            expected_authorization=self.expected_authorization,
         )
         language = str(payload["language"])
         return tuple(
@@ -611,10 +768,12 @@ class RuntimeTranslationProvider:
         bridge: AiRuntimeBridge,
         provider_id: str,
         model_id: str | None,
+        expected_authorization: object = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
+        self.expected_authorization = expected_authorization
 
     def capability(self) -> ProviderCapability:
         provider = self.bridge.runtime.provider(self.provider_id, "translate")
@@ -660,6 +819,7 @@ class RuntimeTranslationProvider:
             },
             progress=progress,
             cancelled=cancelled,
+            expected_authorization=self.expected_authorization,
         )
         revision = TranslationRevision(
             source_language=str(payload["source_language"]),
@@ -684,12 +844,25 @@ class RuntimeSpeechProvider:
         bridge: AiRuntimeBridge,
         provider_id: str,
         model_id: str | None,
+        expected_authorization: object = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
+        self.expected_authorization = expected_authorization
         self._voices: tuple[Voice, ...] | None = None
         self._voices_lock = Lock()
+
+    @property
+    def authorization(self) -> AiOperationAuthorization:
+        """Return the still-current authorization bound to this provider."""
+
+        return self.bridge.require_operation_authorization(
+            "synthesize",
+            self.provider_id,
+            self.model_id,
+            self.expected_authorization,
+        )
 
     def capability(self) -> ProviderCapability:
         provider = self.bridge.runtime.provider(self.provider_id, "synthesize")
@@ -713,6 +886,11 @@ class RuntimeSpeechProvider:
     def voices(self, language: str) -> tuple[Voice, ...]:
         with self._voices_lock:
             if self._voices is None:
+                # ``health`` may load a plugin or contact a remote provider.
+                # Recheck the synthesis binding before that provider-specific
+                # work begins. Cached metadata makes no provider call and does
+                # not need another full artifact hash for every cue.
+                self.authorization
                 health = self.bridge.health(self.provider_id, self.model_id)
                 self._voices = tuple(
                     Voice(
@@ -763,6 +941,7 @@ class RuntimeSpeechProvider:
             progress=progress,
             cancelled=cancelled,
             audio_destination=Path(output),
+            expected_authorization=self.expected_authorization,
         )
         audio = payload["audio"]
         return SpeechClip(

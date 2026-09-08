@@ -2,7 +2,7 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-08
-> 当前迭代：Iteration 0.28.0 发布后开发 — 自动流程结果、幂等与账号失效收敛；下一步为 AI 同意绑定、费用上限与复用预设
+> 当前迭代：Iteration 0.28.0 发布后开发 — 自动流程结果收敛及逐操作 AI 精确授权/输入硬预算；下一步为 Schema 4 远端调用账本、unknown outcome 与非密钥复用预设
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `3`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `1`；上传备份格式：`2`
 
 ## 本次交接入口
@@ -10,6 +10,8 @@
 用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 `0592b6f96c8eef60381b31b1e78e5ebf6d7c6a1d` 的 0.28.0 五件制品已由 ignored 的 `validation/local/release-v028-0592b6f-final/release-receipt.json` 绑定并通过独立源码/wheel 验收；这份 receipt 只证明该冻结提交。当前发布后开发进一步让 workflow 区分“平台接收投稿”“平台保存草稿”和合法的混合结果，远端结果不确定时仍优先停止核对；上传账号失效会标记账号并撤回同账号尚未执行的确认；浏览器幂等键只在响应丢失重试期间复用，成功后同参数可重新运行；后台 reconciliation 在无进展时有界退避。证据见 [自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)。
+
+随后源码把每项 AI 同意冻结为可摘要的 authorization，绑定 runtime ID/version、协议版本、manifest SHA-256、provider kind、model ID 与本地声明 revision、operation、精确 data egress 和有效硬上限。AI task request、配音 recipe 与 Workflow profile 都持久化该绑定，并在创建、确认、worker 领取及 provider 调用前执行摘要/定义 CAS；旧记录仍可读取，但缺少绑定或当前 runtime 已变化时必须按当前能力重建，不能沿用旧确认。当前硬上限为听写 30 分钟且 25 MiB、翻译 1000 cues/60000 输入字符/20 个按 50 cues 估算的调用单位、TTS 600 cues/60000 输入字符/600 次调用。它们只限制一次授权可发送的输入和调用数量，不是价格估算或 usage ledger。证据见 [AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)。
 
 | 工作包 | 2026-09-08 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
@@ -20,7 +22,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 3；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 AI 与自动流程 | `data-ai-runtime` 离线 builder、CPython 3.12/3.13 identity、OpenAI `whisper-1`/`gpt-5.6-luna`/`gpt-4o-mini-tts`、时间轴审核、segment-local 字幕/配音及 `data-workflows` 可恢复状态机已接线；发布后已收敛幂等键、账号失效、真实 upload outcome 与轮询退避 | 下一切片为逐操作 runtime/model 同意绑定、执行前硬费用上限、非密钥复用预设及平台 receipt/reconciliation；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、账号失效、幂等和轮询，并完成逐操作 authorization、三处持久化、执行前 CAS 与固定输入/调用硬上限 | 下一切片为 Schema 4 远端调用 ledger、accepted/unknown/reconciled outcome、非密钥复用预设及完整 URL 链路本地 smoke；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -28,7 +30,7 @@
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.28.0 本地范围见 [AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
+当前 0.28.0 本地范围见 [AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -403,7 +405,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读 [0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。下一步应在同一冻结构建上完成真实 OpenAI 账号样本、中文/English 真人试听、费用核对，以及 Bilibili、抖音、视频号逐平台发布验收；真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读 [0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。工程下一步是 Editing Schema 4 的远端调用 ledger 与 accepted/unknown/reconciled outcome、可复用的非密钥自动化预设，再执行完整 URL→AI→编辑→三平台上传草稿的本地 smoke；这些完成后仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 
@@ -478,6 +480,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 23. 上传 activity lock 只协调采用当前 shared/exclusive 合同的应用、active/standby 服务与备份工具。旧版本、手工 SQLite 连接、自写文件 writer 或绕过锁的进程不在完整保证内；停机备份仍要求操作者确认它们全部停止。下载和上传备份必须分别创建与演练。
 24. T09 工作流目前只完成本地静态合同和负向测试。GitHub hosted 四格结果为 **NOT RUN**，required checks 与 branch protection 为 **NOT CONFIGURED**；Windows 上跳过的 root/POSIX/getfacl 合同仍归 T15。
 25. 0.25.0 T16 本地 G6 没有执行真实登录、扫码、下载或上传，也没有运行 GitHub hosted CI 或目标 Linux/Docker T15。T11/T12 仍须绑定最终 0.25.0 构建分别记录 PASS/FAIL/BLOCKED/NOT RUN；T13 与 T15 不因本地前端完成而关闭。
+26. AI authorization 固定的是本地 runtime manifest、provider/model 声明、operation、外发范围和输入/调用上限。远端模型 ID 仍可能是供应商可更新的 alias；供应商在相同 ID 下改变模型行为、价格或可用性时，本地摘要不会自动发现。当前也没有远端调用 usage ledger、价格核算或 request ID reconciliation，因此硬上限不能证明账单金额，unknown outcome 后仍须停止并核对。runtime 在 provider 启动前后重复散列，听写输入使用私有稳定副本，但跨平台按路径启动不构成抵抗同系统账号并发改写者的密码学 attestation；维护 runtime 前须停止应用，跨进程 lease/不可变 snapshot 仍是发布前加固项。
 
 ## 7. 历史收尾与后续精确入口
 
@@ -569,18 +572,21 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 
 ### 7.10 Iteration 0.28.0 当前精确入口
 
-1. T19 已实现独立 AI runtime、持久化 AI task/timeline、Editing Schema 3、标准音色配音、Workflow Schema 1，以及 URL→下载→编辑→所选三平台上传草稿的可恢复编排；先读本轮证据、`docs/AI_RUNTIME.md` 与 `docs/EDITOR.md`，不要把 runtime 完整性或 synthetic/offline 验收写成真实云模型或平台通过。
-2. 自动流程把首个已选分段的派生音频发送给听写；单 cue 统一限制 4096 字符。渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
-3. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`，待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
-4. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
-5. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
-6. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。
+1. T19 已实现独立 AI runtime、持久化 AI task/timeline、Editing Schema 3、标准音色配音、Workflow Schema 1，以及 URL→下载→编辑→所选三平台上传草稿的可恢复编排；T20 已追加真实 upload outcome 收敛与逐操作 AI 精确 authorization。先读本轮证据、`docs/AI_RUNTIME.md` 与 `docs/EDITOR.md`，不要把 runtime 完整性或 synthetic/offline 验收写成真实云模型或平台通过。
+2. AI authorization 的摘要绑定 runtime ID/version、protocol、manifest、provider kind、model ID/本地声明 revision、operation、data egress 与有效 limits；task request、dubbing recipe 和 Workflow profile 保存该值。创建、确认、worker 与 provider 前都要与当前能力重新比对；旧记录可读但不能继续执行，须按当前能力重建。
+3. 自动流程把首个已选分段的派生音频发送给听写；在 provider 前执行 30 分钟/25 MiB 硬上限。翻译最多 1000 cues、60000 输入字符和 20 个按 50 cues 估算的调用单位；TTS 最多 600 cues、60000 输入字符和 600 次调用。这些是本地输入/调用上限，不是供应商价格或已计费 usage ledger。
+4. 渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
+5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`，待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
+6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
+7. 下一工程切片是 Editing Schema 4 的远端调用 ledger，明确 pending/accepted/unknown/reconciled 状态并保留可脱敏 request identity；随后加入不含密钥或账号 session 的复用预设，再跑完整 URL 链路本地 smoke。远端 alias 漂移、实际价格与平台结果仍须外部验收。
+8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
+9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。
 
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 
 ## 8. 迭代历史
 
-- **0.28.0 — 2026-09-08**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账。本地 runtime/synthetic 工程证据不代表真实 OpenAI 质量、费用、三平台发布或最终冻结；以本轮证据和包外 receipt 为准。
+- **0.28.0 — 2026-09-08**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账；发布后开发又收敛 upload outcome，并加入逐操作 AI authorization 与输入/调用硬上限。本地 runtime/synthetic 工程证据不代表真实 OpenAI 质量、实际费用、三平台发布或新的发行冻结；以各轮证据和包外 receipt 为准。
 
 - **0.27.0 — 2026-09-07**：以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，完成 T18 非破坏性编辑工作台、分段与封面、下载→编辑→上传显式复制链路，以及 AI provider/capability/timeline 合同。AI runtime、模型、推理、试听、真实素材范围、真实平台与最终 release receipt 仍未完成。
 

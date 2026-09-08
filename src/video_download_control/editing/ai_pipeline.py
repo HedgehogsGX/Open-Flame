@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Any, Literal, Mapping, Sequence
 
 from .ai import TranslationRevision
+from .ai_authorization import AiOperationAuthorization, parse_operation_authorization
 from .timeline import MAX_CUES, TimelineCue, TimelineError, serialize_webvtt
 
 
@@ -38,6 +39,7 @@ class CanonicalAiRequest:
     source_revision_id: str | None
     source_language: str | None
     target_language: str | None
+    authorization: AiOperationAuthorization | None
     request: dict[str, Any]
     request_json: str
     request_sha256: str
@@ -108,6 +110,7 @@ def canonical_ai_request(
     model_id: str,
     source_revision_id: str | None,
     options: Mapping[str, Any],
+    authorization: AiOperationAuthorization | Mapping[str, Any] | None = None,
 ) -> CanonicalAiRequest:
     """Return one exact request representation suitable for hashing and replay."""
 
@@ -195,6 +198,19 @@ def canonical_ai_request(
     else:
         raise AiPipelineError("unsupported AI operation")
 
+    normalized_authorization: AiOperationAuthorization | None = None
+    if authorization is not None:
+        try:
+            normalized_authorization = parse_operation_authorization(authorization)
+        except (TypeError, ValueError):
+            raise AiPipelineError("invalid AI authorization") from None
+        if (
+            normalized_authorization.operation != operation
+            or normalized_authorization.provider_id != provider_id
+            or normalized_authorization.model_id != model_id
+        ):
+            raise AiPipelineError("AI authorization does not match request")
+
     request = {
         "model_id": model_id,
         "operation": operation,
@@ -203,6 +219,8 @@ def canonical_ai_request(
         "provider_id": provider_id,
         "source_revision_id": source_revision_id,
     }
+    if normalized_authorization is not None:
+        request["authorization"] = normalized_authorization.to_dict()
     encoded = json.dumps(
         request, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
@@ -217,6 +235,7 @@ def canonical_ai_request(
         source_revision_id=source_revision_id,
         source_language=source_language,
         target_language=target_language,
+        authorization=normalized_authorization,
         request=request,
         request_json=encoded,
         request_sha256=sha256(encoded_bytes).hexdigest(),
@@ -246,7 +265,9 @@ def decode_ai_request(value: object, expected_sha256: object) -> CanonicalAiRequ
         "provider_id",
         "source_revision_id",
     }
-    _exact_keys(raw, required, required)
+    _exact_keys(raw, required | {"authorization"}, required)
+    if "authorization" in raw and raw["authorization"] is None:
+        raise AiPipelineError("invalid stored AI request")
     canonical = canonical_ai_request(
         project_id=raw["project_id"],
         operation=raw["operation"],
@@ -254,6 +275,7 @@ def decode_ai_request(value: object, expected_sha256: object) -> CanonicalAiRequ
         model_id=raw["model_id"],
         source_revision_id=raw["source_revision_id"],
         options=raw["options"],
+        authorization=raw.get("authorization"),
     )
     if canonical.request_json != value or canonical.request_sha256 != expected_sha256:
         raise AiPipelineError("stored AI request changed")

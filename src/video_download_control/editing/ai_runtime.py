@@ -201,6 +201,7 @@ class AiRuntime:
             "runtime_id": RUNTIME_ID,
             "runtime_version": RUNTIME_VERSION,
             "protocol_schema": PROTOCOL_SCHEMA,
+            "manifest_sha256": self.manifest_sha256,
             "platform": self.platform,
             "providers": [
                 {
@@ -808,6 +809,7 @@ def inspect_ai_runtime(root: Path) -> dict[str, object]:
             "runtime_id": RUNTIME_ID,
             "runtime_version": RUNTIME_VERSION,
             "protocol_schema": PROTOCOL_SCHEMA,
+            "manifest_sha256": None,
             "providers": [],
             "models": [],
         }

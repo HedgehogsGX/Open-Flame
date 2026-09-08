@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import sqlite3
@@ -14,6 +15,11 @@ from threading import RLock
 from typing import Any, Iterator
 from uuid import UUID, uuid4
 
+from ..editing.ai_authorization import (
+    AiAuthorizationError,
+    AiOperationAuthorization,
+    parse_operation_authorization,
+)
 from ..editing.contracts import EditingError, recipe_from_mapping
 from .contracts import UploadSnapshot, WorkflowDomainAdapter
 from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
@@ -22,6 +28,7 @@ from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
 _REQUEST_KEY = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ACTIVE_STATES = {
     "created",
     "downloading",
@@ -86,8 +93,34 @@ def _text(value: object, maximum: int, *, required: bool = False) -> str:
     return result
 
 
+def _bound_ai_authorization(
+    value: object,
+    *,
+    operation: str,
+    provider: str,
+    model: str,
+    expected_sha256: str,
+) -> AiOperationAuthorization:
+    try:
+        authorization = parse_operation_authorization(value)
+    except AiAuthorizationError:
+        raise WorkflowError("invalid_workflow_profile") from None
+    if (
+        authorization is None
+        or authorization.operation != operation
+        or authorization.provider_id != provider
+        or authorization.model_id != model
+        or not hmac.compare_digest(authorization.sha256, expected_sha256)
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    return authorization
+
+
 def _profile(
-    value: Mapping[str, Any], *, bound_accounts: bool = False
+    value: Mapping[str, Any],
+    *,
+    bound_accounts: bool = False,
+    require_ai_authorization: bool = False,
 ) -> tuple[dict[str, Any], str, str]:
     if not isinstance(value, Mapping) or set(value) != {
         "edit_recipe",
@@ -122,10 +155,6 @@ def _profile(
     ):
         raise WorkflowError("workflow_requires_single_video_output")
     ai_enabled = parsed_recipe.translation.enabled or parsed_recipe.dubbing.enabled
-    if ai_enabled and not ai_data_egress_accepted:
-        raise WorkflowError("ai_data_egress_confirmation_required")
-    if not ai_enabled and ai_data_egress_accepted:
-        raise WorkflowError("invalid_workflow_profile")
     if parsed_recipe.translation.enabled and not parsed_recipe.dubbing.enabled:
         raise WorkflowError("workflow_translation_requires_dubbing")
     raw_ai = value.get("ai")
@@ -140,10 +169,29 @@ def _profile(
             )
         if any(_AI_TOKEN.fullmatch(item) is None for item in runtime_tokens):
             raise WorkflowError("invalid_workflow_profile")
-        if not isinstance(raw_ai, Mapping) or set(raw_ai) != {
+        legacy_ai_keys = {
             "transcription_provider",
             "transcription_model",
-        }:
+        }
+        digest_ai_keys = legacy_ai_keys | {
+            "transcription_authorization_sha256",
+            "translation_authorization_sha256",
+        }
+        bound_ai_keys = digest_ai_keys | {
+            "transcription_authorization",
+            "translation_authorization",
+        }
+        raw_ai_keys = frozenset(raw_ai) if isinstance(raw_ai, Mapping) else frozenset()
+        if (
+            not isinstance(raw_ai, Mapping)
+            or raw_ai_keys
+            not in {
+                frozenset(legacy_ai_keys),
+                frozenset(digest_ai_keys),
+                frozenset(bound_ai_keys),
+            }
+            or (require_ai_authorization and raw_ai_keys != frozenset(bound_ai_keys))
+        ):
             raise WorkflowError("invalid_workflow_profile")
         transcription_provider = raw_ai.get("transcription_provider")
         transcription_model = raw_ai.get("transcription_model")
@@ -163,14 +211,64 @@ def _profile(
             == parsed_recipe.translation.target_language.casefold()
         ):
             raise WorkflowError("workflow_translation_languages_match")
-        normalized_ai: dict[str, str] | None = {
+        normalized_ai: dict[str, Any] | None = {
             "transcription_provider": transcription_provider,
             "transcription_model": transcription_model,
         }
+        if raw_ai_keys in {frozenset(digest_ai_keys), frozenset(bound_ai_keys)}:
+            for field in (
+                "transcription_authorization_sha256",
+                "translation_authorization_sha256",
+            ):
+                digest = raw_ai.get(field)
+                if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+                    raise WorkflowError("invalid_workflow_profile")
+                normalized_ai[field] = digest
+        if raw_ai_keys == frozenset(bound_ai_keys):
+            transcription_authorization = _bound_ai_authorization(
+                raw_ai.get("transcription_authorization"),
+                operation="transcribe",
+                provider=transcription_provider,
+                model=transcription_model,
+                expected_sha256=normalized_ai["transcription_authorization_sha256"],
+            )
+            translation_authorization = _bound_ai_authorization(
+                raw_ai.get("translation_authorization"),
+                operation="translate",
+                provider=parsed_recipe.translation.provider,
+                model=parsed_recipe.translation.model,
+                expected_sha256=normalized_ai["translation_authorization_sha256"],
+            )
+            normalized_ai["transcription_authorization"] = (
+                transcription_authorization.to_dict()
+            )
+            normalized_ai["translation_authorization"] = (
+                translation_authorization.to_dict()
+            )
+            authorizations = [transcription_authorization, translation_authorization]
+            if parsed_recipe.dubbing.authorization is not None:
+                authorizations.append(parsed_recipe.dubbing.authorization)
+            ai_requires_data_egress = any(
+                authorization.execution == "remote" for authorization in authorizations
+            )
+        else:
+            # Historical profiles did not persist enough data to prove local
+            # execution. Preserve their original conservative egress contract.
+            ai_requires_data_egress = True
+        if require_ai_authorization and (
+            not parsed_recipe.dubbing.enabled
+            or parsed_recipe.dubbing.authorization is None
+        ):
+            raise WorkflowError("ai_authorization_required")
     else:
         if raw_ai is not None:
             raise WorkflowError("invalid_workflow_profile")
         normalized_ai = None
+        ai_requires_data_egress = False
+    if ai_requires_data_egress and not ai_data_egress_accepted:
+        raise WorkflowError("ai_data_egress_confirmation_required")
+    if not ai_requires_data_egress and ai_data_egress_accepted:
+        raise WorkflowError("invalid_workflow_profile")
     raw_upload = value.get("upload")
     if not isinstance(raw_upload, Mapping):
         raise WorkflowError("invalid_workflow_profile")
@@ -347,7 +445,9 @@ class WorkflowService:
         if not source_url.startswith(("https://", "http://")):
             raise WorkflowError("invalid_source_url")
         name = _text(name, 160, required=True)
-        normalized, _encoded, intent_profile_digest = _profile(profile)
+        normalized, _encoded, intent_profile_digest = _profile(
+            profile, require_ai_authorization=True
+        )
         request_payload = {
             "source_url": source_url,
             "name": name,
@@ -374,7 +474,9 @@ class WorkflowService:
                 dict(item) for item in account_bindings
             ]
             normalized, encoded, profile_digest = _profile(
-                normalized, bound_accounts=True
+                normalized,
+                bound_accounts=True,
+                require_ai_authorization=True,
             )
             with self._db() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -510,20 +612,40 @@ class WorkflowService:
                     return self.get(workflow_id)
             return self._attention(workflow_id, "workflow_progress_limit")
 
-    def confirm_edit(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+    def confirm_edit(
+        self,
+        workflow_id: str,
+        *,
+        expected_revision: int,
+        expected_profile_sha256: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
-            record = self._expected(workflow_id, expected_revision)
+            record = self._expected(
+                workflow_id, expected_revision, expected_profile_sha256
+            )
+            if record["profile"]["ai"] is not None and expected_profile_sha256 is None:
+                raise WorkflowError("workflow_profile_confirmation_required")
             if record["state"] != "awaiting_edit_confirmation" or not record["edit_plan_id"]:
                 raise WorkflowError("workflow_state_conflict")
             self.adapter.confirm_edit(record["edit_plan_id"])
             self._transition(workflow_id, "rendering", "")
             return self.advance(workflow_id)
 
-    def confirm_ai(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+    def confirm_ai(
+        self,
+        workflow_id: str,
+        *,
+        expected_revision: int,
+        expected_profile_sha256: str | None = None,
+    ) -> dict[str, Any]:
         """Authorize exactly the AI action or result review currently waiting."""
 
         with self._lock:
-            record = self._expected(workflow_id, expected_revision)
+            record = self._expected(
+                workflow_id, expected_revision, expected_profile_sha256
+            )
+            if expected_profile_sha256 is None:
+                raise WorkflowError("workflow_profile_confirmation_required")
             if record["state"] != "awaiting_ai_review" or not record["edit_project_id"]:
                 raise WorkflowError("workflow_state_conflict")
             snapshot = self.adapter.advance_ai(
@@ -872,13 +994,28 @@ class WorkflowService:
             raise WorkflowError("workflow_not_found")
         return value
 
-    def _expected(self, workflow_id: str, revision: int) -> dict[str, Any]:
+    def _expected(
+        self,
+        workflow_id: str,
+        revision: int,
+        expected_profile_sha256: str | None = None,
+    ) -> dict[str, Any]:
         workflow_id = self._identifier(workflow_id)
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
             raise WorkflowError("invalid_revision")
         record = self.get(workflow_id)
         if record["revision"] != revision:
             raise WorkflowError("workflow_revision_conflict")
+        if expected_profile_sha256 is not None:
+            if (
+                not isinstance(expected_profile_sha256, str)
+                or not _SHA256.fullmatch(expected_profile_sha256)
+            ):
+                raise WorkflowError("invalid_workflow_profile_confirmation")
+            if not hmac.compare_digest(
+                record["profile_sha256"], expected_profile_sha256
+            ):
+                raise WorkflowError("workflow_profile_changed")
         return record
 
     def _set_refs(self, workflow_id: str, **values: object) -> None:
