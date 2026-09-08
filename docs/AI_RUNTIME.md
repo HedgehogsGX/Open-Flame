@@ -1,6 +1,6 @@
 # Open-Flame 0.28.0 可选 AI Runtime
 
-Open-Flame 0.28.0 使用独立的轻量 AI runtime 执行自动听写、分段文字翻译和标准音色配音。它与主应用 `.venv`、下载数据、编辑数据库和上传 runtime 分离；runtime 只包含官方 CPython embeddable 文件、Open-Flame worker、协议和标准库 OpenAI provider，不安装 OpenAI SDK，也不捆绑模型权重。发布后源码进一步加入逐 operation 的精确 authorization 和调用前输入硬上限，仍未增加常驻 AI 服务、SDK 或本地模型权重。
+Open-Flame 0.28.0 使用独立的轻量 AI runtime 执行自动听写、分段文字翻译和标准音色配音。它与主应用 `.venv`、下载数据、编辑数据库和上传 runtime 分离；runtime 只包含官方 CPython embeddable 文件、Open-Flame worker、协议和标准库 OpenAI provider，不安装 OpenAI SDK，也不捆绑模型权重。发布后源码进一步加入逐 operation 的精确 authorization、调用前输入硬上限和 Editing Schema 4 脱敏远程调用账本，仍未增加常驻 AI 服务、SDK 或本地模型权重。
 
 当前 builder 只在 Windows x64 上构建，技术门禁只接受结构与运行身份符合要求的 64-bit CPython 3.12 或 3.13 embeddable ZIP；运维上只应使用 Python.org 官方归档。推荐基线为 CPython **3.13.15**：
 
@@ -147,6 +147,27 @@ alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin,
 
 这些硬上限只约束本机在一次已确认操作中允许送入 provider 的工作量。它们不是货币价格、token/秒数账单、账户额度或实际 usage ledger，也不能证明 provider 未对 unknown 请求计费。
 
+### 4.2 Schema 4 远程调用账本
+
+远程 `transcribe`、`translate` 和 `synthesize` 在进入隔离 provider 之前必须取得 Editing Schema 4 账本记录。本地 operation 不建立记录；`health` 是能力/运行时检查，也不写入账本或消耗 `request_units`。当前 OpenAI provider 的 `health` 只返回本地声明的 operation 和标准音色，不发出 OpenAI API 请求；它仍不能证明账号权限、模型可用性、网络、配额或价格。
+
+`ai_invocations` 只保存 32 位 owner/invocation ID、operation、ordinal、attempt、`request_units`、authorization/owner definition/request fingerprint SHA-256、固定状态/reason code/reconciliation 结论和时间戳。它不保存媒体或文字正文、API key、环境变量值、本机路径、endpoint、HTTP header、provider request ID 或响应。定义字段不可修改，状态只允许以下单向转换：
+
+```text
+reserved → dispatched → responded
+reserved → released
+reserved → dispatched → unknown → reconciled
+```
+
+- `reserved` 在远程执行边界前持久化；若调用尚未 dispatch 就失败或取消，记录成为 `released`。
+- `dispatched` 在 runner 取得请求前持久化；只有经过协议和本地输出验证的响应才成为 `responded`。dispatch 后出现 timeout、取消、进程错误或结果无法验证时，记录保守成为 `unknown`。
+- 重启恢复同样把遗留 `reserved` 释放，把遗留 `dispatched` 标为 `unknown`，不会静默重放。
+- `unknown` 只能带当前 `revision`、`acknowledge=true` 和固定结论 `not_accepted`、`accepted_without_result`、`abandoned` 之一转为 `reconciled`；没有自由文本，也不能撤销供应商侧请求或证明未计费。
+
+Owner 完成前必须没有 `reserved`、`dispatched` 或 `unknown`。这些状态也阻止重试；已人工核对为 `accepted_without_result` 或 `abandoned` 后仍阻止重试，避免在已接受或已放弃的调用上建立重复后继。`responded`、`released`、`reconciled/not_accepted` 只表示账本允许继续评估，仍须满足原 AI task/render plan 的终态、唯一后继、authorization CAS 和再次确认规则。
+
+听写 operation 记录 1 个单位；配音按每个有文字的 cue 建立 ordinal 记录，每项 1 个单位。翻译把整项 task 记录为一个 invocation envelope，`request_units=ceil(cues/50)`，上限 20。这个数用于在真正执行前冻结本地 authorization 工作量；OpenAI provider 还会根据 4 MiB 请求 envelope 缩小每批 cue，因此实际 HTTP 请求可能多于这个估算。`request_units` 不是精确 HTTP 请求计数、token usage、价格估算、供应商 request ID 或账单收据。
+
 ## 5. 媒体处理与时间轴审核
 
 听写前，Open-Flame 在本机使用固定 FFmpeg 从不可变编辑源派生临时音频：移除视频、字幕、数据和 metadata，编码为 **mono、24 kHz、32 kbit/s AAC M4A**，并在上传前再次核对文件身份、大小和 SHA-256。发送给听写 API 的是该派生音频，不是原始视频文件。`/workflows` 会把 recipe 的第一个分段作为听写 clip，只编码并发送该范围，再把返回时间加回源时间轴；编辑页直接建立听写任务时当前没有 clip 控件，默认编码完整编辑源。本地派生器仍有 90 分钟的媒体处理边界，但当前 authorization 在首次 provider 请求前施加更严格的 **30 分钟且 25 MiB** 有效上限；不会偷偷截断、分片或降级上传，超过任一上限就失败并要求操作者调整输入。
@@ -171,10 +192,10 @@ OpenAI provider 是远程 provider。当前执行会发送：
 
 这些内容会离开本机并由 OpenAI API 处理。manifest 对可能外发的数据类型作保守声明，页面在任务确认处显示该范围。请在发起前确认媒体和文字有权交给云服务处理，并根据当前供应商条款、保留政策和所在地区要求作出决定。
 
-每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。当前已提供上一节的固定输入/调用硬上限，但仍不提供准确价格预估、供应商账单核对、持久化 usage ledger 或远程 request ID reconciliation；操作者仍应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled` 当作供应商已撤销或未计费的证明。AI task 或配音计划重试会建立待确认后继，确认后重新发送完整步骤；已完成的批次/cue 可能再次计费。下一工程切片将以 Editing Schema 4 保存脱敏的远端调用 ledger 和 accepted/unknown/reconciled outcome，再决定是否允许重试。
+每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。当前固定输入/调用硬上限与 Schema 4 账本用于阻止越权工作量和不确定结果的静默重放，但仍不提供准确价格预估、供应商账单核对、token/音频 usage ledger 或远程 request ID reconciliation。操作者仍应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled`、`unknown` 或人工 reconciliation 当作供应商已撤销、已返回结果或未计费的证明。允许的重试仍会建立待确认后继并重新执行完整步骤；已完成的批次/cue 可能再次计费。
 
 ## 7. 当前验证边界
 
 构建成功、`--check` 返回 `ready`、页面列出 provider/model 或本地渲染 smoke 通过，只能证明对应本机 runtime 结构、散列、协议和本地媒体路径满足当前代码合同。
 
-当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget 的本地通过只能证明定义绑定和超限失败关闭，不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
+当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger 的三个 ignored 本地 validator、Python compileall、编辑/自动流程页内联 JavaScript 语法检查、依赖一致性检查和本机浏览器检查已经通过；focused 既有测试当前仍为 41 passed、3 failed，三项失败都仍在断言旧 Editing Schema 1，测试文件按仓库策略未修改。详见 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。

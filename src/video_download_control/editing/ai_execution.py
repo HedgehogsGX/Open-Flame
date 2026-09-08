@@ -27,11 +27,13 @@ from .ai_authorization import (
 from .ai_bridge import (
     AiBridgeError,
     AiRuntimeBridge,
+    RemoteInvocationFactory,
     RuntimeSpeechProvider,
     RuntimeTranscriptionProvider,
     RuntimeTranslationProvider,
     operation_data_egress,
 )
+from .ai_ledger import AiInvocationLedger, AiInvocationLedgerError
 from .ai_runtime import AiRuntimeError, inspect_ai_runtime
 from .contracts import EditingError
 from .service import EditingService
@@ -92,6 +94,113 @@ def _timeline_cues(value: Mapping[str, Any]) -> tuple[TimelineCue, ...]:
     if [cue.order for cue in cues] != list(range(len(cues))):
         raise AiBridgeError("ai_source_timeline_invalid")
     return tuple(cues)
+
+
+class _LedgerInvocation:
+    """Adapt one durable ledger row to the bridge lifecycle contract."""
+
+    def __init__(
+        self,
+        ledger: AiInvocationLedger,
+        *,
+        operation: str,
+        ordinal: int,
+        request_units: int,
+        request_fingerprint: str,
+        authorization: AiOperationAuthorization,
+        owner_claim_token: str,
+        ai_task_id: str | None = None,
+        render_plan_id: str | None = None,
+    ) -> None:
+        self._ledger = ledger
+        self._claim_token = owner_claim_token
+        self._record = ledger.reserve(
+            operation=operation,
+            ordinal=ordinal,
+            attempt=1,
+            request_units=request_units,
+            request_fingerprint=request_fingerprint,
+            authorization=authorization,
+            owner_claim_token=owner_claim_token,
+            ai_task_id=ai_task_id,
+            render_plan_id=render_plan_id,
+        )
+
+    def _identity(self) -> tuple[str, int]:
+        invocation_id = self._record.get("id")
+        revision = self._record.get("revision")
+        if (
+            not isinstance(invocation_id, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", invocation_id)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 0
+        ):
+            raise AiInvocationLedgerError("ai_invocation_invalid")
+        return invocation_id, revision
+
+    def dispatch(self) -> None:
+        invocation_id, revision = self._identity()
+        self._record = self._ledger.dispatch(
+            invocation_id,
+            revision,
+            owner_claim_token=self._claim_token,
+        )
+
+    def respond(self) -> None:
+        invocation_id, revision = self._identity()
+        self._record = self._ledger.respond(
+            invocation_id,
+            revision,
+            owner_claim_token=self._claim_token,
+        )
+
+    def release(self, code: str) -> None:
+        invocation_id, revision = self._identity()
+        self._record = self._ledger.release(
+            invocation_id,
+            revision,
+            owner_claim_token=self._claim_token,
+            reason_code=code,
+        )
+
+    def mark_unknown(self, code: str) -> None:
+        invocation_id, revision = self._identity()
+        self._record = self._ledger.unknown(
+            invocation_id,
+            revision,
+            owner_claim_token=self._claim_token,
+            reason_code=code,
+        )
+
+
+def _task_invocation_factory(
+    service: EditingService,
+    *,
+    operation: str,
+    ordinal: int,
+    request_units: int,
+    authorization: AiOperationAuthorization,
+    task_id: str,
+    claim_token: str,
+) -> RemoteInvocationFactory | None:
+    if authorization.execution != "remote":
+        return None
+    ledger = AiInvocationLedger(service.database_path)
+
+    def reserve(request_fingerprint: str) -> _LedgerInvocation:
+        return _LedgerInvocation(
+            ledger,
+            operation=operation,
+            ordinal=ordinal,
+            request_units=request_units,
+            request_fingerprint=request_fingerprint,
+            authorization=authorization,
+            owner_claim_token=claim_token,
+            ai_task_id=task_id,
+        )
+
+    return reserve
 
 
 class AiTaskExecutor:
@@ -379,6 +488,10 @@ class AiTaskExecutor:
         provider_id: str,
         model_id: str,
         expected_authorization: object,
+        *,
+        service: EditingService | None = None,
+        render_plan_id: str | None = None,
+        owner_claim_token: str | None = None,
     ) -> RuntimeSpeechProvider:
         bridge = self._get_bridge()
         try:
@@ -394,11 +507,38 @@ class AiTaskExecutor:
         credential_code = self._credential_code(provider)
         if credential_code is not None:
             raise AiBridgeError(credential_code)
+        invocation_factory = None
+        if authorization.execution == "remote":
+            if (
+                service is None
+                or not isinstance(render_plan_id, str)
+                or not isinstance(owner_claim_token, str)
+            ):
+                raise AiBridgeError("ai_remote_ledger_required")
+            ledger = AiInvocationLedger(service.database_path)
+
+            def for_ordinal(ordinal: int) -> RemoteInvocationFactory:
+                def reserve(request_fingerprint: str) -> _LedgerInvocation:
+                    return _LedgerInvocation(
+                        ledger,
+                        operation="synthesize",
+                        ordinal=ordinal,
+                        request_units=1,
+                        request_fingerprint=request_fingerprint,
+                        authorization=authorization,
+                        owner_claim_token=owner_claim_token,
+                        render_plan_id=render_plan_id,
+                    )
+
+                return reserve
+
+            invocation_factory = for_ordinal
         return RuntimeSpeechProvider(
             bridge,
             provider_id,
             model_id,
             authorization,
+            invocation_factory,
         )
 
     def execute(
@@ -499,6 +639,15 @@ class AiTaskExecutor:
                         provider_id,
                         model_id,
                         authorization,
+                        _task_invocation_factory(
+                            service,
+                            operation="transcribe",
+                            ordinal=0,
+                            request_units=1,
+                            authorization=authorization,
+                            task_id=task_id,
+                            claim_token=claim_token,
+                        ),
                     )
                     result = provider.transcribe(
                         media,
@@ -572,6 +721,15 @@ class AiTaskExecutor:
                 provider_id,
                 model_id,
                 authorization,
+                _task_invocation_factory(
+                    service,
+                    operation="translate",
+                    ordinal=0,
+                    request_units=batch_count,
+                    authorization=authorization,
+                    task_id=task_id,
+                    claim_token=claim_token,
+                ),
             )
             result = provider.translate(
                 cues,

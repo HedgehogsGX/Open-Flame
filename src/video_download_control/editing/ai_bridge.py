@@ -6,6 +6,7 @@ core environment.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from ..subprocess_runner import (
@@ -86,6 +87,98 @@ class AiBridgeError(RuntimeError):
             else "ai_bridge_failed"
         )
         super().__init__(self.code)
+
+
+class RemoteInvocationLifecycle(Protocol):
+    """Persist one already-reserved remote invocation without seeing payloads."""
+
+    def dispatch(self) -> None: ...
+
+    def respond(self) -> None: ...
+
+    def release(self, code: str) -> None: ...
+
+    def mark_unknown(self, code: str) -> None: ...
+
+
+RemoteInvocationFactory = Callable[[str], RemoteInvocationLifecycle]
+
+
+class _InvocationGuard:
+    """Close every reserved invocation according to the last durable boundary."""
+
+    def __init__(self, lifecycle: RemoteInvocationLifecycle) -> None:
+        if any(
+            not callable(getattr(lifecycle, name, None))
+            for name in ("dispatch", "respond", "release", "mark_unknown")
+        ):
+            raise AiBridgeError("ai_remote_ledger_invalid")
+        self.lifecycle = lifecycle
+        self.state = "reserved"
+
+    @staticmethod
+    def _call(lifecycle: RemoteInvocationLifecycle, name: str, *args: str) -> None:
+        try:
+            getattr(lifecycle, name)(*args)
+        except AiBridgeError:
+            raise
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            if not isinstance(code, str) or not _CODE.fullmatch(code):
+                code = "ai_remote_ledger_unavailable"
+            raise AiBridgeError(code) from exc
+
+    def dispatch(self) -> None:
+        if self.state != "reserved":
+            raise AiBridgeError("ai_remote_ledger_conflict")
+        self._call(self.lifecycle, "dispatch")
+        self.state = "dispatched"
+
+    def respond(self) -> None:
+        if self.state != "dispatched":
+            raise AiBridgeError("ai_remote_ledger_conflict")
+        self._call(self.lifecycle, "respond")
+        self.state = "responded"
+
+    def release(self, code: str) -> None:
+        if self.state == "reserved":
+            self._call(self.lifecycle, "release", code)
+            self.state = "released"
+
+    def fail(self, code: str) -> str:
+        if self.state == "reserved":
+            self.release(code)
+        elif self.state == "dispatched":
+            self._call(self.lifecycle, "mark_unknown", code)
+            self.state = "unknown"
+        return self.state
+
+
+def _request_fingerprint(request: Mapping[str, object]) -> str:
+    """Hash the validated provider request without volatile local paths."""
+
+    payload = request.get("payload")
+    if not isinstance(payload, Mapping):
+        raise AiBridgeError("ai_request_invalid")
+    stable_payload = dict(payload)
+    stable_payload.pop("media_path", None)
+    stable_payload.pop("output_path", None)
+    try:
+        encoded = json.dumps(
+            {
+                "schema": request.get("schema"),
+                "operation": request.get("operation"),
+                "provider_id": request.get("provider_id"),
+                "model_id": request.get("model_id"),
+                "payload": stable_payload,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, UnicodeError) as exc:
+        raise AiBridgeError("ai_request_invalid") from exc
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def operation_data_egress(
@@ -420,6 +513,7 @@ class AiRuntimeBridge:
         cancelled: CancelCallback,
         audio_destination: Path | None = None,
         expected_authorization: object = None,
+        invocation_factory: RemoteInvocationFactory | None = None,
     ) -> dict[str, object]:
         """Run a validated operation and return its validated payload only."""
 
@@ -478,6 +572,7 @@ class AiRuntimeBridge:
             output_path = scratch / "output.wav"
             source_identity: tuple[Path, int, str] | None = None
             provider_input_identity: tuple[Path, int, str] | None = None
+            invocation: _InvocationGuard | None = None
             try:
                 request_payload = dict(request["payload"])
                 if operation == "synthesize":
@@ -513,6 +608,7 @@ class AiRuntimeBridge:
                         source_digest,
                     )
                     request = validate_request({**request, "payload": request_payload})
+                request_fingerprint = _request_fingerprint(request)
                 write_json_atomic(request_path, request, maximum=MAX_REQUEST_BYTES)
                 progress_reader = _ProgressReader(request_id, progress)
                 command = CommandSpec(
@@ -558,6 +654,29 @@ class AiRuntimeBridge:
                         )
                     except AiRuntimeError as exc:
                         raise AiBridgeError(exc.code) from exc
+                if operation != "health" and authorization is not None:
+                    if authorization.execution == "remote":
+                        if not callable(invocation_factory):
+                            raise AiBridgeError("ai_remote_ledger_required")
+                        try:
+                            invocation = _InvocationGuard(
+                                invocation_factory(request_fingerprint)
+                            )
+                        except AiBridgeError:
+                            raise
+                        except Exception as exc:
+                            code = getattr(exc, "code", None)
+                            if not isinstance(code, str) or not _CODE.fullmatch(code):
+                                code = "ai_remote_ledger_unavailable"
+                            raise AiBridgeError(code) from exc
+                    elif invocation_factory is not None:
+                        raise AiBridgeError("ai_remote_ledger_invalid")
+                elif invocation_factory is not None:
+                    raise AiBridgeError("ai_remote_ledger_invalid")
+                if cancelled():
+                    raise AiBridgeError("ai_operation_canceled")
+                if invocation is not None:
+                    invocation.dispatch()
                 try:
                     command_result = self.runner.run(
                         command,
@@ -569,7 +688,9 @@ class AiRuntimeBridge:
                     raise AiBridgeError("ai_operation_timeout") from exc
                 except CommandOutputLimitExceeded as exc:
                     raise AiBridgeError("ai_worker_output_limit") from exc
-                except (SubprocessPolicyError, CommandProcessError) as exc:
+                except SubprocessPolicyError as exc:
+                    raise AiBridgeError("ai_worker_unavailable") from exc
+                except CommandProcessError as exc:
                     raise AiBridgeError("ai_worker_unavailable") from exc
                 except SubprocessExecutionError as exc:
                     raise AiBridgeError("ai_worker_failed") from exc
@@ -645,11 +766,37 @@ class AiRuntimeBridge:
                         {"path": str(audio_destination), "size": size, "sha256": digest}
                     )
                     result_payload["audio"] = audio_value
+                if invocation is not None:
+                    invocation.respond()
                 return result_payload
-            except AiBridgeError:
+            except AiBridgeError as exc:
+                if invocation is not None:
+                    try:
+                        final_state = invocation.fail(exc.code)
+                    except AiBridgeError as ledger_error:
+                        raise ledger_error from exc
+                    if final_state == "unknown":
+                        raise AiBridgeError("ai_remote_result_unknown") from exc
                 raise
             except (AiProtocolError, AiRuntimeError) as exc:
-                raise AiBridgeError(getattr(exc, "code", "ai_bridge_failed")) from exc
+                code = getattr(exc, "code", "ai_bridge_failed")
+                if invocation is not None:
+                    try:
+                        final_state = invocation.fail(code)
+                    except AiBridgeError as ledger_error:
+                        raise ledger_error from exc
+                    if final_state == "unknown":
+                        raise AiBridgeError("ai_remote_result_unknown") from exc
+                raise AiBridgeError(code) from exc
+            except BaseException as exc:
+                if invocation is not None:
+                    try:
+                        final_state = invocation.fail("ai_bridge_failed")
+                    except AiBridgeError as ledger_error:
+                        raise ledger_error from exc
+                    if final_state == "unknown":
+                        raise AiBridgeError("ai_remote_result_unknown") from exc
+                raise
             finally:
                 _remove_tree(scratch, self.work_root)
 
@@ -690,11 +837,13 @@ class RuntimeTranscriptionProvider:
         provider_id: str,
         model_id: str | None,
         expected_authorization: object = None,
+        invocation_factory: RemoteInvocationFactory | None = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
         self.expected_authorization = expected_authorization
+        self.invocation_factory = invocation_factory
 
     def capability(self) -> ProviderCapability:
         provider = self.bridge.runtime.provider(self.provider_id, "transcribe")
@@ -744,6 +893,7 @@ class RuntimeTranscriptionProvider:
             progress=progress,
             cancelled=cancelled,
             expected_authorization=self.expected_authorization,
+            invocation_factory=self.invocation_factory,
         )
         language = str(payload["language"])
         return tuple(
@@ -769,11 +919,13 @@ class RuntimeTranslationProvider:
         provider_id: str,
         model_id: str | None,
         expected_authorization: object = None,
+        invocation_factory: RemoteInvocationFactory | None = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
         self.expected_authorization = expected_authorization
+        self.invocation_factory = invocation_factory
 
     def capability(self) -> ProviderCapability:
         provider = self.bridge.runtime.provider(self.provider_id, "translate")
@@ -820,6 +972,7 @@ class RuntimeTranslationProvider:
             progress=progress,
             cancelled=cancelled,
             expected_authorization=self.expected_authorization,
+            invocation_factory=self.invocation_factory,
         )
         revision = TranslationRevision(
             source_language=str(payload["source_language"]),
@@ -845,11 +998,13 @@ class RuntimeSpeechProvider:
         provider_id: str,
         model_id: str | None,
         expected_authorization: object = None,
+        invocation_factory: Callable[[int], RemoteInvocationFactory] | None = None,
     ) -> None:
         self.bridge = bridge
         self.provider_id = provider_id
         self.model_id = model_id
         self.expected_authorization = expected_authorization
+        self.invocation_factory = invocation_factory
         self._voices: tuple[Voice, ...] | None = None
         self._voices_lock = Lock()
 
@@ -917,6 +1072,52 @@ class RuntimeSpeechProvider:
         progress: ProgressCallback,
         cancelled: CancelCallback,
     ) -> SpeechClip:
+        return self._synthesize(
+            text,
+            output,
+            options,
+            progress=progress,
+            cancelled=cancelled,
+            ordinal=None,
+        )
+
+    def synthesize_ledgered(
+        self,
+        text: str,
+        output: Path,
+        options: SpeechOptions,
+        *,
+        ordinal: int,
+        progress: ProgressCallback,
+        cancelled: CancelCallback,
+    ) -> SpeechClip:
+        """Synthesize one cue bound to its immutable original timeline ordinal."""
+
+        if (
+            isinstance(ordinal, bool)
+            or not isinstance(ordinal, int)
+            or not 0 <= ordinal <= 999_999
+        ):
+            raise AiBridgeError("ai_remote_ledger_invalid")
+        return self._synthesize(
+            text,
+            output,
+            options,
+            progress=progress,
+            cancelled=cancelled,
+            ordinal=ordinal,
+        )
+
+    def _synthesize(
+        self,
+        text: str,
+        output: Path,
+        options: SpeechOptions,
+        *,
+        progress: ProgressCallback,
+        cancelled: CancelCallback,
+        ordinal: int | None,
+    ) -> SpeechClip:
         allowed = {
             voice.id
             for voice in self.voices(options.language)
@@ -924,6 +1125,13 @@ class RuntimeSpeechProvider:
         }
         if options.voice_id not in allowed:
             raise AiBridgeError("ai_voice_not_allowed")
+        invocation_factory = None
+        if ordinal is not None and self.invocation_factory is not None:
+            if not callable(self.invocation_factory):
+                raise AiBridgeError("ai_remote_ledger_invalid")
+            invocation_factory = self.invocation_factory(ordinal)
+            if not callable(invocation_factory):
+                raise AiBridgeError("ai_remote_ledger_invalid")
         payload = self.bridge.run(
             operation="synthesize",
             provider_id=self.provider_id,
@@ -942,6 +1150,7 @@ class RuntimeSpeechProvider:
             cancelled=cancelled,
             audio_destination=Path(output),
             expected_authorization=self.expected_authorization,
+            invocation_factory=invocation_factory,
         )
         audio = payload["audio"]
         return SpeechClip(
@@ -960,4 +1169,6 @@ __all__ = [
     "RuntimeSpeechProvider",
     "RuntimeTranscriptionProvider",
     "RuntimeTranslationProvider",
+    "RemoteInvocationFactory",
+    "RemoteInvocationLifecycle",
 ]

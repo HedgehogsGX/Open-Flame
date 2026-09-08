@@ -44,6 +44,8 @@ const stateNames={created:'已创建',downloading:'下载中',preparing_edit:'�
 const codeNames={submission_acknowledged:'平台已确认接收投稿；审核、定时执行与公开状态仍须后台核对',platform_draft_saved:'视频号平台草稿已保存，尚未发布',upload_account_invalid:'上传账号登录态已失效；请重新登录并重建自动流程',upload_outcome_invalid:'上传结果与本次发布方式不一致，请到平台后台核对',upload_outcome_mixed:'所选账号返回了不同类型的上传结果，请逐个平台核对',upload_outcome_missing:'上传结果缺少可确认的类型，请到平台后台核对',download_multiple_assets:'下载产生多个视频，请手动选择',edit_multiple_outputs:'编辑产生多个视频，请手动选择',upload_unknown:'平台结果未知，请到后台核对',ai_runtime_missing:'AI 运行时未安装',ai_runtime_invalid:'AI 运行时校验失败',ai_provider_auth_missing:'AI provider 凭据未配置',ai_transcription_confirmation_required:'请确认开始自动听写',ai_transcription_review_required:'请核对并批准听写时间轴',ai_translation_confirmation_required:'请确认开始自动翻译',ai_restart_confirmation_required:'应用已重启，请重新确认当前 AI 步骤',ai_retry_confirmation_required:'已创建 AI 重试任务，请明确确认后再执行',restart_confirmation_required:'应用已重启，请重新确认编辑',edit_restart_confirmation_required:'应用已重启，请重新确认编辑',render_retry_confirmation_required:'已创建新的编辑计划，请确认重试',upload_restart_confirmation_required:'应用已重启，请重新确认投稿',upload_retry_confirmation_required:'已找到上传重试任务，请明确确认后再投稿',account_session_changed:'所选上传账号的登录会话已变化，请重建流程',ai_speech_timing_overflow:'部分配音超过字幕时间槽，请到编辑页调整文本或音色',ai_timeline_segment_empty:'所选分段内没有已批准的字幕内容',processor_not_configured:'FFmpeg 工具尚未就绪',workflow_domain_failed:'流程步骤执行失败'};
 Object.assign(codeNames,{submission_and_draft_acknowledged:'投稿平台已确认接收，草稿平台已确认保存；审核、定时执行与公开状态仍须后台核对'});
 Object.assign(codeNames,{ai_authorization_required:'此旧流程未绑定精确 AI runtime、模型修订与硬预算，请按当前能力重建流程',ai_authorization_binding_required:'此旧流程未绑定精确 AI runtime、模型修订与硬预算，请按当前能力重建流程',ai_authorization_changed:'AI runtime、模型修订或硬预算已变化，请刷新能力并重建流程',ai_authorization_invalid:'AI 授权数据无效，请重建流程',ai_budget_exceeded:'AI 操作超过本次授权的硬预算，请缩短分段或减少文字后重建流程',ai_budget_invalid:'AI 硬预算数据无效，请重建流程',workflow_profile_confirmation_required:'此操作需要确认当前流程参数快照',workflow_profile_changed:'流程参数快照已变化，请刷新后重新核对',invalid_workflow_profile_confirmation:'流程参数确认摘要无效，请刷新后重试',workflow_domain_data_invalid:'流程中的 AI 授权数据无效，请重建流程'});
+Object.assign(codeNames,{ai_remote_result_unknown:'远程 AI 结果无法确认；请先到编辑页核对调用账本',ai_remote_retry_blocked:'远程调用账本已阻止重试；请到编辑页查看固定核对结论',ai_remote_reconciliation_required:'必须先到编辑页核对远程调用结果',ai_remote_not_accepted:'已确认远程服务没有接受本次调用，可以建立待确认重试',ai_remote_accepted_without_result:'已确认远程服务接受调用但没有可用结果；当前流程不允许重试',ai_remote_abandoned:'本次远程调用已放弃；当前流程不允许重试'});
+const ledgerReviewCodes=new Set(['ai_remote_result_unknown','ai_remote_retry_blocked','ai_remote_reconciliation_required','ai_remote_accepted_without_result','ai_remote_abandoned']);
 function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('danger',error);}
 const pendingKeys=new Map();
 function key(prefix){return prefix+'-'+crypto.randomUUID();}
@@ -105,14 +107,15 @@ function render(items){
       button.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/confirm-upload',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
       actions.append(button);
     }
-    const aiRetry=confirmationReady&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=confirmationReady&&item.state==='attention_required'&&item.edit_plan_id&&!item.edit_output_id&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
+    const needsLedgerReview=item.state==='attention_required'&&ledgerReviewCodes.has(item.code),aiRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_plan_id&&!item.edit_output_id&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
+    if(needsLedgerReview){const ledger=el('a','在编辑页核对远程调用账本','button-link');ledger.href='/edits';actions.append(ledger);}
     if(aiRetry||renderRetry){
       const retry=el('button',renderRetry?'创建编辑重试计划':'创建 AI 重试任务');
       retry.type='button';
       retry.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/retry',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
       actions.append(retry);
     }
-    const advance=el('button','立即对账','secondary');
+    const advance=el('button',needsLedgerReview?'核对后重新检查':'立即对账','secondary');
     advance.type='button';
     advance.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/advance',{method:'POST'})));
     actions.append(advance);

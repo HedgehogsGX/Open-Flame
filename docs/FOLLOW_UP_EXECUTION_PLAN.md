@@ -1,6 +1,6 @@
 # Open-Flame 后续执行计划
 
-路线制定：2026-09-05；进度更新：2026-09-08。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 3、上传 Schema 3、Workflow Schema 1、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义，并完成逐操作 AI 精确授权和输入/调用硬上限。下一步是 Schema 4 远端调用 ledger、unknown outcome、非密钥复用预设和完整 URL 链路本地 smoke，再进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
+路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 1、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。下一步是非密钥复用预设和完整 URL 链路本地 smoke，再进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
 
 ## 1. 目标、边界与完成定义
 
@@ -22,8 +22,8 @@
 | T16 / G6（0.25.0 历史阶段） | T16.1～T16.7 本地开发与禁止远端调用的 G6 验收完成 | 保留为前端基线，不能证明当前制品或平台能力 |
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
 | T18 / G8（0.27.0 历史阶段） | 独立 Editing Schema 1、版本化草稿、多个分段、封面、确认/取消/重试、真实本地 FFmpeg 与显式导入上传完成 | 由 0.28.0 T19 接续；该阶段证据不证明 AI 或真实平台 |
-| T19 / G9（0.28.0 当前阶段） | Editing Schema 3、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 1、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
-| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 已绑定 runtime/model/operation/egress/effective limits，并在 task/recipe/profile 中持久化及执行前复核 | 下一步为 Schema 4 远端调用 ledger 与 accepted/unknown/reconciled outcome、非密钥复用预设、完整 URL 链路本地 smoke；硬上限不是价格或 usage ledger |
+| T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 1、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
+| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation | 下一步为非密钥复用预设和完整 URL 链路本地 smoke；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
 | T11 / T12 | **NOT RUN** | 三平台真实上传与当前六平台下载必须绑定最终 0.28.0 receipt 后的同一构建分别执行 |
 | T15 | **NOT RUN** | Linux、Docker 与 NAS 仍需目标环境独立验收；Windows 本地 UI 结果不能替代 |
 
@@ -52,11 +52,13 @@ H. 0.28.0 冻结与包外 release receipt（`0592b6f` 已完成）
            ↓ 有效 receipt：clean commit、五件制品、独立安装和冻结结果同一身份
 I. 无人值守结果语义、AI 精确 authorization 与输入硬上限（T20 已完成切片）
            ↓ 当前源码只在精确绑定和固定输入/调用上限内推进
-J. Schema 4 远端调用 ledger、unknown outcome、非密钥预设与完整本地 smoke（T20 下一切片）
-           ↓ unknown 不静默重放，复用参数仍重新绑定 runtime 与账号
-K. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
+J. Schema 4 远端调用 ledger 与 unknown 人工 reconciliation（T20 已完成切片）
+           ↓ unknown 不静默重放，完成与重试均由持久化账本失败关闭
+K. 非密钥复用预设与完整 URL 链路本地 smoke（T20 下一切片）
+           ↓ 复用参数仍重新绑定 runtime 与账号，禁止真实网络的整链可重复
+L. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
            ↓ G4：按平台、入口、模式分别接受
-L. 根据真实回报修复并收敛当前功能（T13）
+M. 根据真实回报修复并收敛当前功能（T13）
            ↓ G5：实际发现的关键缺陷闭环，业务与状态契约稳定
 ```
 
@@ -304,7 +306,7 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 
 **2026-09-07 历史状态：** v0.27.0 已完成 T18 本地实现、定向回归和 Chromium synthetic 流程；证据见 [0.27.0 编辑工作台记录](../validation/iteration-0.27.0-editing-workspace-evidence.md)。当前 T19 状态见本文顶部与 [0.28.0 AI/Workflow 证据](../validation/iteration-0.28.0-ai-workflow-evidence.md)。
 
-- 编辑数据位于下载根同级的独立 `data-edits`；0.28.0 将精确 Editing Schema 1/2 向前迁移为 Schema 3。导入重新计算并核对下载成品 SHA-256，只在编辑域创建副本，不覆盖下载原件。
+- 编辑数据位于下载根同级的独立 `data-edits`；当前发布后源码将精确 Editing Schema 1/2/3 按顺序向前迁移为 Schema 4。导入重新计算并核对下载成品 SHA-256，只在编辑域创建副本，不覆盖下载原件。
 - 草稿按版本保存并用 `expected_version` 防止并发覆盖；render plan 冻结 recipe，必须从 `review` 单独确认后才进入单一后台媒体 Worker。
 - 本地媒体处理使用已锁定的 FFmpeg/ffprobe，把多个时间区间生成 H.264/AAC MP4；封面经本地抽帧、居中裁切、缩放和可选标题叠加生成 PNG。输出记录大小、SHA-256、时长、尺寸、容器和 codec。
 - 取消覆盖 claim 与内存取消信号之间的竞态；中断或失败不会发布半成品。失败/取消可生成新的待核对重试计划，历史 lineage 保留。
@@ -319,21 +321,21 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 2. 当前听写使用 OpenAI `whisper-1` 的 segment timestamps；本机生成 mono AAC 派生音频，provider 调用前的有效硬上限为 30 分钟且 25 MiB。`/workflows` 只派生 recipe 的第一个分段并把返回时间加回源时间轴；编辑页直接建听写任务时仍默认完整编辑源。既有 SRT/VTT 导入和本地 faster-whisper 尚未实现，列入后续。
 3. 翻译使用 `gpt-5.6-luna` Responses API，保持 cue ID、顺序、整数毫秒时间、来源文字、译文、provider/model 和审核状态；页面第一批提供中文与 English 目标语言。单 cue 上限统一为 4096 字符，时间轴 JSON 限 3 MiB，为隔离 runtime 的 4 MiB envelope 留出固定空间。
 4. 配音使用 `gpt-4o-mini-tts` 的 13 个标准音色，禁用声音克隆；逐 cue 生成 WAV、测量时长并按每个分段重新归零构造 PCM 时间线。分段边界切入 cue 时拒绝；空 cue 的 B-roll 段生成空 VTT 与本地静音，不调用 TTS；溢出时失败关闭，不静默截断或覆盖下一 cue。保留原声时固定压到 22% 后混入配音。
-5. 编辑页提供完整听写/译文时间轴审核、批准/拒绝、任务取消/后继重试，以及绑定已批准修订的处理计划。AI task 与含远程 TTS 的计划重试均须再次确认；当前没有远程 request ID reconciliation 或部分结果复用，已完成批次/cue 可能重复计费。逐 cue 音频试听和单 cue 重新生成尚未实现。
+5. 编辑页提供完整听写/译文时间轴审核、批准/拒绝、任务取消/后继重试，以及绑定已批准修订的处理计划。当前 Schema 4 账本先冻结 owner、operation、ordinal/attempt、authorization/owner/request 摘要和调用单位；发送后无法确认结果时标为 `unknown`，页面只提供 `not_accepted`、`accepted_without_result`、`abandoned` 三项 revision-fenced 人工 reconciliation。它不保存 provider request ID 或响应正文，也不复用部分结果。逐 cue 音频试听和单 cue 重新生成尚未实现。
 6. `/workflows` 使用独立持久化状态机串接 URL 下载、AI、编辑和所选三平台上传；可预授权或逐节点确认，重启继续对账。上传前按平台校验标题、标签、封面比例、AI 声明、模式和发布时间，并在一次事务内确认全部账号。流程保存账号 `session_revision`；重新登录会让尚待确认的旧绑定以 `account_session_changed` 停下。上传重试只跟随账号、来源和平台不变的唯一 retry leaf，分叉、循环或身份漂移失败关闭。
 7. 发布后里程碑把一次 AI 同意绑定到 runtime ID/version、protocol、manifest SHA-256、provider kind、model ID/本地声明 revision、operation、data egress 和有效 limits。task request、配音 recipe 与 Workflow profile 持久化完整 authorization 及摘要；创建、确认、worker 与 provider 前都复核当前定义。只有授权中存在远程 operation 时才要求 data-egress 确认。旧记录仍可读取，但缺少绑定或摘要漂移时必须重建。翻译上限为 1000 cues、60000 输入字符、20 个按 50 cues 估算的调用单位；TTS 上限为 600 cues、60000 输入字符和 600 次调用。听写上限见第 2 项。这些是本地输入/调用上限，不是价格预算或已计费 usage ledger。
 
-**当前门槛 G9：** 官方 CPython 3.13.15 embeddable ZIP 已按官方 SHA-256 在本机构建并重新加载 runtime；无凭据时三项云能力保持 blocked。本地 synthetic 媒体、字幕/配音渲染、取消/恢复、损坏输入及 authorization/budget 失败关闭边界必须通过。authorization 中的 model revision 只是本地 manifest 声明；远端 alias 在供应商侧仍可能漂移。真实 OpenAI 调用、人工试听、费用、账号权限、远端请求对账、三平台真实投稿和最终制品仍是独立外部验收，当前不得宣称通过。
+**当前门槛 G9：** 官方 CPython 3.13.15 embeddable ZIP 已按官方 SHA-256 在本机构建并重新加载 runtime；无凭据时三项云能力保持 blocked。本地 synthetic 媒体、字幕/配音渲染、取消/恢复、损坏输入及 authorization/budget/ledger 失败关闭边界必须通过。authorization 中的 model revision 只是本地 manifest 声明；远端 alias 在供应商侧仍可能漂移。账本与人工核对不能替代供应商 request ID、账单或后台证据。真实 OpenAI 调用、人工试听、费用、账号权限、三平台真实投稿和最终制品仍是独立外部验收，当前不得宣称通过。
 
 ### T20 / 当前发布后阶段：无人值守正确性、精确 AI 授权与调用对账
 
 1. **已完成：上传结果与恢复语义。** Workflow 区分 `submitted`、`draft_saved` 和合法混合 outcome；unknown 优先停下核对。账号失效撤回同账号 queued 确认，浏览器幂等键只在响应丢失恢复窗口内复用，reconciliation 无进展时有界退避。
 2. **已完成：逐操作 AI authorization。** 能力接口返回 authorization 与 SHA-256；它冻结 runtime、协议、manifest、provider/model 本地声明、operation、精确外发范围及 effective limits。task request、配音 recipe 和 Workflow profile 都保存绑定，创建/确认 CAS、worker 及 provider 前复核。缺少绑定的旧记录可读但不能继续执行，须按当前能力重建。
-3. **已完成：调用前输入硬上限。** 听写在首次 provider 请求前限制 30 分钟、25 MiB 和 1 次调用；翻译限制 1000 cues、60000 输入字符和最多 20 个 50-cue 调用单位；TTS 限制 600 cues、60000 输入字符和 600 次逐 cue 调用。上限用于阻止一次确认意外扩大输入或调用数，不代表价格、额度、实际 token/音频计费或供应商账单。
-4. **下一步：Schema 4 远端调用 ledger。** 保存不含正文/密钥的 operation、authorization/request digest、尝试序号、调用单位与 pending/accepted/unknown/reconciled 状态；一旦无法证明请求未被供应商接受，就保留 unknown 并先 reconciliation，不能直接重放。迁移须只接受精确 Schema 3，并保持旧记录的只读可解释性。
-5. **随后：非密钥复用预设与本地整链 smoke。** 预设只保存 URL 之外可复用的分段/封面/语言/音色/平台内容参数、authorization 摘要及账号选择意图；不得保存 API key、Cookie、扫码状态或账号 session revision，运行时必须重新绑定当前能力和账号。完成后执行一个禁止真实网络的 URL→下载→AI→编辑→Bilibili/抖音/视频号上传草稿 synthetic smoke，核对重启、unknown 与重复提交边界。
+3. **已完成：调用前输入硬上限。** 听写在首次 provider 请求前限制 30 分钟、25 MiB 和 1 次调用；翻译限制 1000 cues、60000 输入字符和最多 20 个按 50 cues 估算的调用单位；TTS 限制 600 cues、60000 输入字符和 600 次逐 cue 调用。上限用于阻止一次确认意外扩大输入或调用数，不代表价格、额度、实际 token/音频计费或供应商账单。
+4. **已完成：Schema 4 远端调用 ledger。** `ai_invocations` 仅保存 owner、operation、ordinal/attempt、调用单位、authorization/owner definition/request fingerprint 摘要、状态、固定 reason code 和时间，不保存正文、密钥、本机路径、endpoint 或 provider 响应。状态只沿 `reserved→dispatched→responded`、`reserved→released`、`dispatched→unknown→reconciled` 前进；迁移只为可能已经远程执行的旧任务/计划建立保守 `unknown` 哨兵，不能证明为远程或缺少 authorization 摘要时仍要求人工核对。`reserved/dispatched/unknown` 阻止完成与重试；`reconciled/accepted_without_result` 和 `reconciled/abandoned` 继续阻止重试，`responded`、`released`、`reconciled/not_accepted` 才可在原有 owner 状态和再次确认规则下继续。翻译 `request_units=ceil(cues/50)` 是 runtime envelope 估算；provider 仍可因 4 MiB 请求边界拆成更多实际 HTTP 请求，因此它不是精确请求数、token/价格或账单收据。`health` 检查不入账，也不证明远端账号/模型可用。
+5. **下一步：非密钥复用预设与本地整链 smoke。** 预设只保存 URL 之外可复用的分段/封面/语言/音色/平台内容参数、authorization 摘要及账号选择意图；不得保存 API key、Cookie、扫码状态或账号 session revision，运行时必须重新绑定当前能力和账号。完成后执行一个禁止真实网络的 URL→下载→AI→编辑→Bilibili/抖音/视频号上传草稿 synthetic smoke，核对重启、unknown 与重复提交边界。
 
-**T20 当前证据边界：** 见[发布后自动流程正确性记录](../validation/iteration-0.28.0-post-release-automation-correctness.md)及[AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)。当前只是未发布源码里程碑；没有新的 clean release receipt，也没有真实 OpenAI、真实下载、真实平台上传/发布、实际价格或真人质量证据。
+**T20 当前证据边界：** 见[发布后自动流程正确性记录](../validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。当前只是未发布源码里程碑；三个 ignored ledger validator、compileall、编辑/自动流程页内联 JS、依赖一致性、diff 与本机浏览器检查已通过，focused 既有测试仍有 3 项旧 Schema 1 断言失败。没有新的 clean release receipt，也没有真实 OpenAI、真实下载、真实平台上传/发布、实际价格或真人质量证据。
 
 ## 4. 建议分工与工作量
 
@@ -351,11 +353,11 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 | H：T18 | 编辑域/媒体处理、页面与跨域导入 | 本地实现与 G8 已完成 | G8 分段、封面与显式上传导入闭环 |
 | I：T19 | AI runtime、字幕/翻译/TTS 与 URL 自动流程 | 本地工程完成 | G9 固定模型、许可/隐私、失败边界已验证；真实 API 与人工试听待外部验收 |
 | J：0.28.0 最终冻结 | 发布维护与独立验收 | 由包外 receipt 记录 | clean commit、五件制品、独立安装和包外 receipt 同一身份 |
-| K：T20 发布后开发 | 自动流程 outcome、逐操作授权/硬上限、远端调用账本与复用预设 | 前三项已完成；Schema 4 ledger、预设与完整本地 smoke 待完成 | unknown 不被静默重放，日常运行只需 URL 和运行时复核 |
+| K：T20 发布后开发 | 自动流程 outcome、逐操作授权/硬上限、远端调用账本与复用预设 | outcome、authorization/预算与 Schema 4 ledger 已完成；预设与完整本地 smoke 待完成 | unknown 不被静默重放，日常运行只需 URL 和运行时复核 |
 
 T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的工作量中。
 
-当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。T20 按 Schema 4 ledger/unknown outcome → 非密钥复用预设 → 完整 URL 链路本地 smoke 的顺序继续；若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
+当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation 已接线；T20 接下来按非密钥复用预设 → 完整 URL 链路本地 smoke 的顺序继续。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
 
 ## 5. 每个工作包统一交付检查
 

@@ -510,6 +510,8 @@ class LocalWorkflowAdapter:
         task_id = _record_id(task)
         state = task.get("state")
         if state == "review":
+            if task.get("code") == "ai_remote_retry_blocked":
+                return AiSnapshot("attention", code="ai_remote_retry_blocked")
             if (
                 task.get("code") == "restart_confirmation_required"
                 and not explicit

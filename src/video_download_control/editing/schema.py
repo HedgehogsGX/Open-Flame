@@ -1,17 +1,21 @@
-"""Exact Schema 3 creation and forward migration for the editing store."""
+"""Exact Schema 4 creation and forward migration for the editing store."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import stat
 import tempfile
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_V1_VERSION = 1
 _SCHEMA_V2_VERSION = 2
+_SCHEMA_V3_VERSION = 3
 
 _SCHEMA_V1_TABLE_STATEMENTS = (
     "CREATE TABLE metadata(version INTEGER NOT NULL)",
@@ -161,20 +165,150 @@ _SCHEMA_V3_TRIGGER_STATEMENTS = (
  BEGIN SELECT RAISE(ABORT,'immutable plan timeline binding'); END""",
 )
 
+_SCHEMA_V4_TABLE_STATEMENTS = (
+    """CREATE TABLE ai_invocations(
+ id TEXT PRIMARY KEY CHECK(length(id)=32 AND id NOT GLOB '*[^0-9a-f]*'),
+ ai_task_id TEXT REFERENCES ai_tasks(id),
+ render_plan_id TEXT REFERENCES render_plans(id),
+ operation TEXT NOT NULL CHECK(operation IN ('transcribe','translate','synthesize')),
+ ordinal INTEGER NOT NULL CHECK(ordinal >= 0 AND ordinal <= 999999),
+ attempt INTEGER NOT NULL CHECK(attempt >= 0 AND attempt <= 999999),
+ request_units INTEGER NOT NULL CHECK(request_units > 0 AND request_units <= 600),
+ authorization_sha256 TEXT,
+ owner_definition_sha256 TEXT NOT NULL
+ CHECK(length(owner_definition_sha256)=64 AND owner_definition_sha256 NOT GLOB '*[^0-9a-f]*'),
+ request_fingerprint TEXT NOT NULL
+ CHECK(length(request_fingerprint)=64 AND request_fingerprint NOT GLOB '*[^0-9a-f]*'),
+ state TEXT NOT NULL DEFAULT 'reserved'
+ CHECK(state IN ('reserved','dispatched','responded','released','unknown','reconciled')),
+ resolution TEXT NOT NULL DEFAULT ''
+ CHECK((state='reconciled' AND resolution IN
+        ('not_accepted','accepted_without_result','abandoned')) OR
+       (state!='reconciled' AND resolution='')),
+ reason_code TEXT NOT NULL DEFAULT ''
+ CHECK(length(reason_code) <= 80 AND
+       reason_code NOT GLOB '*[^a-z0-9_]*' AND
+       ((state='reserved' AND reason_code='') OR
+        (state!='reserved' AND reason_code GLOB '[a-z]*'))),
+ revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+ legacy INTEGER NOT NULL DEFAULT 0 CHECK(legacy IN (0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ dispatched_at TEXT, responded_at TEXT, released_at TEXT,
+ unknown_at TEXT, reconciled_at TEXT,
+ CHECK((ai_task_id IS NOT NULL AND render_plan_id IS NULL AND
+        operation IN ('transcribe','translate')) OR
+       (ai_task_id IS NULL AND render_plan_id IS NOT NULL AND
+        operation='synthesize')),
+ CHECK(operation='synthesize' OR ordinal=0),
+ CHECK(legacy=1 OR
+       (operation='transcribe' AND request_units=1) OR
+       (operation='translate' AND request_units <= 20) OR
+       (operation='synthesize' AND request_units=1)),
+ CHECK((legacy=0 AND attempt >= 1 AND authorization_sha256 IS NOT NULL AND
+        length(authorization_sha256)=64 AND
+        authorization_sha256 NOT GLOB '*[^0-9a-f]*') OR
+       (legacy=1 AND attempt=0 AND state IN ('unknown','reconciled') AND
+        (authorization_sha256 IS NULL OR
+         (length(authorization_sha256)=64 AND
+          authorization_sha256 NOT GLOB '*[^0-9a-f]*')))),
+ CHECK((state='reserved' AND dispatched_at IS NULL AND responded_at IS NULL AND
+        released_at IS NULL AND unknown_at IS NULL AND reconciled_at IS NULL) OR
+       (state='dispatched' AND dispatched_at IS NOT NULL AND responded_at IS NULL AND
+        released_at IS NULL AND unknown_at IS NULL AND reconciled_at IS NULL) OR
+       (state='responded' AND dispatched_at IS NOT NULL AND responded_at IS NOT NULL AND
+        released_at IS NULL AND unknown_at IS NULL AND reconciled_at IS NULL) OR
+       (state='released' AND dispatched_at IS NULL AND responded_at IS NULL AND
+        released_at IS NOT NULL AND
+        unknown_at IS NULL AND reconciled_at IS NULL) OR
+       (state='unknown' AND dispatched_at IS NOT NULL AND responded_at IS NULL AND
+        released_at IS NULL AND unknown_at IS NOT NULL AND reconciled_at IS NULL) OR
+       (state='reconciled' AND dispatched_at IS NOT NULL AND responded_at IS NULL AND
+        released_at IS NULL AND unknown_at IS NOT NULL AND reconciled_at IS NOT NULL)))""",
+)
+
+_SCHEMA_V4_INDEX_STATEMENTS = (
+    "CREATE UNIQUE INDEX ai_invocations_task_unit ON ai_invocations(ai_task_id,operation,ordinal,attempt) WHERE ai_task_id IS NOT NULL",
+    "CREATE UNIQUE INDEX ai_invocations_plan_unit ON ai_invocations(render_plan_id,operation,ordinal,attempt) WHERE render_plan_id IS NOT NULL",
+    "CREATE INDEX ai_invocations_unresolved ON ai_invocations(state,created_at,id)",
+)
+
+_SCHEMA_V4_TRIGGER_STATEMENTS = (
+    """CREATE TRIGGER ai_invocation_insert_guard
+ BEFORE INSERT ON ai_invocations
+ WHEN NOT (
+  (NEW.legacy=0 AND NEW.state='reserved' AND NEW.resolution='' AND
+   NEW.reason_code='' AND NEW.revision=0 AND NEW.created_at IS NEW.updated_at AND
+   NEW.dispatched_at IS NULL AND NEW.responded_at IS NULL AND
+   NEW.released_at IS NULL AND NEW.unknown_at IS NULL AND
+   NEW.reconciled_at IS NULL) OR
+  (NEW.legacy=1 AND NEW.state='unknown' AND NEW.resolution='' AND
+   NEW.reason_code IN ('legacy_remote_outcome_unknown',
+                       'legacy_remote_execution_unknown') AND
+   NEW.revision=0 AND NEW.created_at IS NEW.updated_at AND
+   NEW.dispatched_at IS NEW.created_at AND NEW.unknown_at IS NEW.created_at AND
+   NEW.responded_at IS NULL AND NEW.released_at IS NULL AND
+   NEW.reconciled_at IS NULL)
+ )
+ BEGIN SELECT RAISE(ABORT,'invalid ai invocation insert'); END""",
+    """CREATE TRIGGER ai_invocation_definition_immutable
+ BEFORE UPDATE OF id,ai_task_id,render_plan_id,operation,ordinal,attempt,request_units,
+ authorization_sha256,owner_definition_sha256,request_fingerprint,legacy,created_at
+ ON ai_invocations BEGIN SELECT RAISE(ABORT,'immutable ai invocation'); END""",
+    """CREATE TRIGGER ai_invocation_transition_guard
+ BEFORE UPDATE OF state,resolution,reason_code,revision,updated_at,dispatched_at,
+ responded_at,released_at,unknown_at,reconciled_at ON ai_invocations
+ WHEN NOT (
+  NEW.revision=OLD.revision+1 AND (
+   (OLD.state='reserved' AND NEW.state='dispatched' AND
+    NEW.dispatched_at IS NEW.updated_at AND
+    NEW.responded_at IS OLD.responded_at AND
+    NEW.released_at IS OLD.released_at AND NEW.unknown_at IS OLD.unknown_at AND
+    NEW.reconciled_at IS OLD.reconciled_at) OR
+   (OLD.state='reserved' AND NEW.state='released' AND
+    NEW.dispatched_at IS OLD.dispatched_at AND
+    NEW.responded_at IS OLD.responded_at AND
+    NEW.released_at IS NEW.updated_at AND NEW.unknown_at IS OLD.unknown_at AND
+    NEW.reconciled_at IS OLD.reconciled_at) OR
+   (OLD.state='dispatched' AND NEW.state='responded' AND
+    NEW.dispatched_at IS OLD.dispatched_at AND
+    NEW.responded_at IS NEW.updated_at AND
+    NEW.released_at IS OLD.released_at AND NEW.unknown_at IS OLD.unknown_at AND
+    NEW.reconciled_at IS OLD.reconciled_at) OR
+   (OLD.state='dispatched' AND NEW.state='unknown' AND
+    NEW.dispatched_at IS OLD.dispatched_at AND
+    NEW.responded_at IS OLD.responded_at AND
+    NEW.released_at IS OLD.released_at AND NEW.unknown_at IS NEW.updated_at AND
+    NEW.reconciled_at IS OLD.reconciled_at) OR
+   (OLD.state='unknown' AND NEW.state='reconciled' AND
+    NEW.dispatched_at IS OLD.dispatched_at AND
+    NEW.responded_at IS OLD.responded_at AND
+    NEW.released_at IS OLD.released_at AND NEW.unknown_at IS OLD.unknown_at AND
+    NEW.reconciled_at IS NEW.updated_at)
+  )
+ )
+ BEGIN SELECT RAISE(ABORT,'invalid ai invocation transition'); END""",
+    """CREATE TRIGGER ai_invocation_delete_forbidden
+ BEFORE DELETE ON ai_invocations
+ BEGIN SELECT RAISE(ABORT,'immutable ai invocation'); END""",
+)
+
 TABLE_STATEMENTS = (
     _SCHEMA_V1_TABLE_STATEMENTS
     + _SCHEMA_V2_TABLE_STATEMENTS
     + _SCHEMA_V3_TABLE_STATEMENTS
+    + _SCHEMA_V4_TABLE_STATEMENTS
 )
 INDEX_STATEMENTS = (
     _SCHEMA_V1_INDEX_STATEMENTS
     + _SCHEMA_V2_INDEX_STATEMENTS
     + _SCHEMA_V3_INDEX_STATEMENTS
+    + _SCHEMA_V4_INDEX_STATEMENTS
 )
 TRIGGER_STATEMENTS = (
     _SCHEMA_V1_TRIGGER_STATEMENTS
     + _SCHEMA_V2_TRIGGER_STATEMENTS
     + _SCHEMA_V3_TRIGGER_STATEMENTS
+    + _SCHEMA_V4_TRIGGER_STATEMENTS
 )
 
 SCHEMA_DDL = ";\n".join(TABLE_STATEMENTS + INDEX_STATEMENTS + TRIGGER_STATEMENTS) + ";"
@@ -199,11 +333,23 @@ _SCHEMA_V2_TRIGGER_NAMES = _SCHEMA_V1_TRIGGER_NAMES + (
     "timeline_definition_immutable", "timeline_review_once", "timeline_delete_forbidden",
     "ai_task_definition_immutable", "ai_task_delete_forbidden",
 )
-_TABLE_NAMES = _SCHEMA_V2_TABLE_NAMES + ("plan_timeline_bindings",)
-_INDEX_NAMES = _SCHEMA_V2_INDEX_NAMES + ("plan_timelines_revision",)
-_TRIGGER_NAMES = _SCHEMA_V2_TRIGGER_NAMES + (
+_SCHEMA_V3_TABLE_NAMES = _SCHEMA_V2_TABLE_NAMES + ("plan_timeline_bindings",)
+_SCHEMA_V3_INDEX_NAMES = _SCHEMA_V2_INDEX_NAMES + ("plan_timelines_revision",)
+_SCHEMA_V3_TRIGGER_NAMES = _SCHEMA_V2_TRIGGER_NAMES + (
     "plan_timeline_binding_immutable",
     "plan_timeline_binding_delete_forbidden",
+)
+_TABLE_NAMES = _SCHEMA_V3_TABLE_NAMES + ("ai_invocations",)
+_INDEX_NAMES = _SCHEMA_V3_INDEX_NAMES + (
+    "ai_invocations_task_unit",
+    "ai_invocations_plan_unit",
+    "ai_invocations_unresolved",
+)
+_TRIGGER_NAMES = _SCHEMA_V3_TRIGGER_NAMES + (
+    "ai_invocation_insert_guard",
+    "ai_invocation_definition_immutable",
+    "ai_invocation_transition_guard",
+    "ai_invocation_delete_forbidden",
 )
 _INITIALIZE_LOCK = threading.Lock()
 
@@ -246,6 +392,12 @@ _EXPECTED_TABLE_SQL = {
         _SCHEMA_V2_TABLE_NAMES,
         _SCHEMA_V1_TABLE_STATEMENTS + _SCHEMA_V2_TABLE_STATEMENTS,
     ),
+    _SCHEMA_V3_VERSION: _expected_sql(
+        _SCHEMA_V3_TABLE_NAMES,
+        _SCHEMA_V1_TABLE_STATEMENTS
+        + _SCHEMA_V2_TABLE_STATEMENTS
+        + _SCHEMA_V3_TABLE_STATEMENTS,
+    ),
     SCHEMA_VERSION: _expected_sql(_TABLE_NAMES, TABLE_STATEMENTS),
 }
 _EXPECTED_INDEX_SQL = {
@@ -256,6 +408,12 @@ _EXPECTED_INDEX_SQL = {
         _SCHEMA_V2_INDEX_NAMES,
         _SCHEMA_V1_INDEX_STATEMENTS + _SCHEMA_V2_INDEX_STATEMENTS,
     ),
+    _SCHEMA_V3_VERSION: _expected_sql(
+        _SCHEMA_V3_INDEX_NAMES,
+        _SCHEMA_V1_INDEX_STATEMENTS
+        + _SCHEMA_V2_INDEX_STATEMENTS
+        + _SCHEMA_V3_INDEX_STATEMENTS,
+    ),
     SCHEMA_VERSION: _expected_sql(_INDEX_NAMES, INDEX_STATEMENTS),
 }
 _EXPECTED_TRIGGER_SQL = {
@@ -265,6 +423,12 @@ _EXPECTED_TRIGGER_SQL = {
     _SCHEMA_V2_VERSION: _expected_sql(
         _SCHEMA_V2_TRIGGER_NAMES,
         _SCHEMA_V1_TRIGGER_STATEMENTS + _SCHEMA_V2_TRIGGER_STATEMENTS,
+    ),
+    _SCHEMA_V3_VERSION: _expected_sql(
+        _SCHEMA_V3_TRIGGER_NAMES,
+        _SCHEMA_V1_TRIGGER_STATEMENTS
+        + _SCHEMA_V2_TRIGGER_STATEMENTS
+        + _SCHEMA_V3_TRIGGER_STATEMENTS,
     ),
     SCHEMA_VERSION: _expected_sql(_TRIGGER_NAMES, TRIGGER_STATEMENTS),
 }
@@ -407,6 +571,273 @@ def _create_database(path: Path) -> None:
             pass
 
 
+_LEGACY_REMOTE_UNKNOWN_CODES = frozenset(
+    {
+        "ai_task_interrupted",
+        "ai_operation_timeout",
+        "ai_remote_result_unknown",
+        "ai_authorization_changed",
+        "ai_bridge_failed",
+        "ai_execution_failed",
+        "ai_progress_callback_failed",
+        "ai_progress_invalid",
+        "ai_progress_limit_exceeded",
+        "ai_runtime_changed",
+        "ai_source_changed",
+        "ai_source_unavailable",
+        "ai_worker_output_limit",
+        "ai_worker_failed",
+        "ai_worker_unavailable",
+        "ai_worker_result_invalid",
+        "ai_worker_result_mismatch",
+        "ai_http_request_failed",
+        "ai_http_response_invalid",
+        "ai_provider_output_invalid",
+        "ai_protocol_invalid",
+        "ai_translation_alignment_invalid",
+        "ai_audio_output_changed",
+        "ai_audio_output_invalid",
+        "ai_audio_output_unavailable",
+        "ai_audio_destination_exists",
+        "ai_audio_destination_invalid",
+        "ai_audio_destination_unavailable",
+        "ai_speech_failed",
+        "ai_render_failed",
+        "processor_failed",
+        "render_interrupted",
+    }
+)
+_LEGACY_PROVEN_PRE_DISPATCH_CODES = frozenset(
+    {
+        # These failures are raised while resolving the credential or before a
+        # media worker can be created.  Keep this list deliberately narrow:
+        # runtime/source/output failures can also be raised by the post-run
+        # validation path after a remote request was accepted.
+        "ai_provider_auth_environment_invalid",
+        "ai_provider_auth_missing",
+        "ai_provider_auth_unavailable",
+        "ai_work_root_invalid",
+        "processor_not_configured",
+    }
+)
+_LEGACY_MAX_REQUEST_UNITS = {
+    "transcribe": 1,
+    "translate": 20,
+    "synthesize": 600,
+}
+
+
+def _legacy_outcome_may_be_unknown(
+    state: object,
+    code: object,
+    started_at: object = None,
+) -> bool:
+    if state in {"running", "canceling"}:
+        return True
+    if state == "canceled" and started_at is not None:
+        return True
+    if state != "failed":
+        return False
+    if (
+        started_at is not None
+        and code not in _LEGACY_PROVEN_PRE_DISPATCH_CODES
+    ):
+        # Schema 2/3 stored only the final local failure code, and early rows
+        # may have no parseable authorization binding.  Once an explicitly
+        # local authorization has been excluded by the caller, a started owner
+        # remains remote-eligible and response/provider codes do not prove that
+        # no request was accepted.  Preserve it unless the code is one of the
+        # few boundaries that necessarily precedes any dispatch.
+        return True
+    return isinstance(code, str) and (
+        code in _LEGACY_REMOTE_UNKNOWN_CODES
+        or "timeout" in code
+        or "interrupted" in code
+    )
+
+
+def _legacy_digest(value: object) -> str:
+    if isinstance(value, bytes):
+        raw = value
+    else:
+        raw = str(value).encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _legacy_remote_authorization(
+    value: object, operation: str
+) -> tuple[bool, str | None, int]:
+    """Classify old authorization without trusting a partial mapping.
+
+    An absent or invalid binding cannot prove local execution, so an otherwise
+    eligible historical AI owner remains a possible remote owner.
+    """
+
+    if value is not None:
+        try:
+            from .ai_authorization import parse_operation_authorization
+
+            authorization = parse_operation_authorization(value)
+        except (ImportError, TypeError, ValueError):
+            authorization = None
+        if authorization is not None and authorization.operation == operation:
+            if authorization.execution == "local":
+                return False, None, 0
+            return (
+                True,
+                authorization.sha256,
+                int(authorization.limits["max_requests"]),
+            )
+    return True, None, _LEGACY_MAX_REQUEST_UNITS[operation]
+
+
+def _insert_legacy_invocation(
+    connection: sqlite3.Connection,
+    *,
+    owner_column: str,
+    owner_id: str,
+    operation: str,
+    authorization_sha256: str | None,
+    owner_definition_sha256: str,
+    request_units: int,
+    reason_code: str,
+    timestamp: str,
+) -> None:
+    key = bytearray(b"open-flame-editing-ai-invocation-legacy-v1")
+    for component in (owner_column, owner_id, operation):
+        encoded = str(component).encode("utf-8", errors="surrogatepass")
+        key.extend(len(encoded).to_bytes(8, "big"))
+        key.extend(encoded)
+    invocation_id = hashlib.sha256(key).hexdigest()[:32]
+    ai_task_id = owner_id if owner_column == "ai_task_id" else None
+    render_plan_id = owner_id if owner_column == "render_plan_id" else None
+    connection.execute(
+        "INSERT OR IGNORE INTO ai_invocations("
+        "id,ai_task_id,render_plan_id,operation,ordinal,attempt,request_units,"
+        "authorization_sha256,owner_definition_sha256,request_fingerprint,state,"
+        "resolution,reason_code,revision,legacy,created_at,updated_at,dispatched_at,"
+        "unknown_at) VALUES(?,?,?,?,0,0,?,?,?,?, 'unknown','',?,0,1,?,?,?,?)",
+        (
+            invocation_id,
+            ai_task_id,
+            render_plan_id,
+            operation,
+            request_units,
+            authorization_sha256,
+            owner_definition_sha256,
+            owner_definition_sha256,
+            reason_code,
+            timestamp,
+            timestamp,
+            timestamp,
+            timestamp,
+        ),
+    )
+    row = connection.execute(
+        "SELECT ai_task_id,render_plan_id,operation,ordinal,attempt,request_units,"
+        "authorization_sha256,owner_definition_sha256,request_fingerprint,state,legacy "
+        "FROM ai_invocations WHERE id=?",
+        (invocation_id,),
+    ).fetchone()
+    expected = (
+        ai_task_id,
+        render_plan_id,
+        operation,
+        0,
+        0,
+        request_units,
+        authorization_sha256,
+        owner_definition_sha256,
+        owner_definition_sha256,
+        "unknown",
+        1,
+    )
+    if row is None or tuple(row) != expected:
+        raise EditingSchemaError
+
+
+def _migrate_legacy_remote_invocations(connection: sqlite3.Connection) -> None:
+    """Create idempotent unknown sentinels only for plausibly dispatched work."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    for row in connection.execute(
+        "SELECT id,operation,request,state,code,started_at FROM ai_tasks "
+        "ORDER BY created_at,id"
+    ):
+        operation = row["operation"]
+        if operation not in {"transcribe", "translate"}:
+            continue
+        raw_authorization = None
+        try:
+            request = json.loads(row["request"])
+            if isinstance(request, dict):
+                raw_authorization = request.get("authorization")
+        except (TypeError, json.JSONDecodeError):
+            pass
+        may_be_remote, authorization_sha256, request_units = (
+            _legacy_remote_authorization(raw_authorization, operation)
+        )
+        if not may_be_remote or not _legacy_outcome_may_be_unknown(
+            row["state"],
+            row["code"],
+            row["started_at"],
+        ):
+            continue
+        owner_digest = _legacy_digest(row["request"])
+        _insert_legacy_invocation(
+            connection,
+            owner_column="ai_task_id",
+            owner_id=row["id"],
+            operation=operation,
+            authorization_sha256=authorization_sha256,
+            owner_definition_sha256=owner_digest,
+            request_units=request_units,
+            reason_code=(
+                "legacy_remote_outcome_unknown"
+                if authorization_sha256 is not None
+                else "legacy_remote_execution_unknown"
+            ),
+            timestamp=timestamp,
+        )
+
+    for row in connection.execute(
+        "SELECT id,recipe,state,code,started_at FROM render_plans "
+        "ORDER BY created_at,id"
+    ):
+        try:
+            recipe = json.loads(row["recipe"])
+            dubbing = recipe.get("dubbing") if isinstance(recipe, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            dubbing = None
+        if not isinstance(dubbing, dict) or dubbing.get("enabled") is not True:
+            continue
+        may_be_remote, authorization_sha256, request_units = (
+            _legacy_remote_authorization(dubbing.get("authorization"), "synthesize")
+        )
+        if not may_be_remote or not _legacy_outcome_may_be_unknown(
+            row["state"],
+            row["code"],
+            row["started_at"],
+        ):
+            continue
+        owner_digest = _legacy_digest(row["recipe"])
+        _insert_legacy_invocation(
+            connection,
+            owner_column="render_plan_id",
+            owner_id=row["id"],
+            operation="synthesize",
+            authorization_sha256=authorization_sha256,
+            owner_definition_sha256=owner_digest,
+            request_units=request_units,
+            reason_code=(
+                "legacy_remote_outcome_unknown"
+                if authorization_sha256 is not None
+                else "legacy_remote_execution_unknown"
+            ),
+            timestamp=timestamp,
+        )
+
+
 def _migrate_to_current(path: Path) -> None:
     before = _plain_file(path)
     connection: sqlite3.Connection | None = None
@@ -443,6 +874,21 @@ def _migrate_to_current(path: Path) -> None:
                 + _SCHEMA_V3_TRIGGER_STATEMENTS
             ):
                 connection.execute(statement)
+            connection.execute(
+                "UPDATE metadata SET version=?", (_SCHEMA_V3_VERSION,)
+            )
+            connection.execute(f"PRAGMA user_version={_SCHEMA_V3_VERSION}")
+            _validate_connection(connection, _SCHEMA_V3_VERSION)
+            version = _SCHEMA_V3_VERSION
+        if version == _SCHEMA_V3_VERSION:
+            _validate_connection(connection, _SCHEMA_V3_VERSION)
+            for statement in (
+                _SCHEMA_V4_TABLE_STATEMENTS
+                + _SCHEMA_V4_INDEX_STATEMENTS
+                + _SCHEMA_V4_TRIGGER_STATEMENTS
+            ):
+                connection.execute(statement)
+            _migrate_legacy_remote_invocations(connection)
             connection.execute("UPDATE metadata SET version=?", (SCHEMA_VERSION,))
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             _validate_connection(connection, SCHEMA_VERSION)
@@ -464,7 +910,7 @@ def _migrate_to_current(path: Path) -> None:
 
 
 def ensure_editing_schema(path: Path) -> None:
-    """Create Schema 3 or migrate one exact Schema 1/2 database in place."""
+    """Create Schema 4 or migrate one exact Schema 1/2/3 database in place."""
 
     path = Path(path)
     if path.name in {"", ".", ".."}:
@@ -477,7 +923,14 @@ def ensure_editing_schema(path: Path) -> None:
                 _create_database(path)
             version = _validated_schema_version(
                 path,
-                frozenset({_SCHEMA_V1_VERSION, _SCHEMA_V2_VERSION, SCHEMA_VERSION}),
+                frozenset(
+                    {
+                        _SCHEMA_V1_VERSION,
+                        _SCHEMA_V2_VERSION,
+                        _SCHEMA_V3_VERSION,
+                        SCHEMA_VERSION,
+                    }
+                ),
             )
             if version != SCHEMA_VERSION:
                 _migrate_to_current(path)

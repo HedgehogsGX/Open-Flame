@@ -40,6 +40,15 @@ _ACTIVE_STATES = {
     "awaiting_upload_confirmation",
     "uploading",
 }
+_AI_LEDGER_REVIEW_CODES = frozenset(
+    {
+        "ai_remote_result_unknown",
+        "ai_remote_retry_blocked",
+        "ai_remote_reconciliation_required",
+        "ai_remote_accepted_without_result",
+        "ai_remote_abandoned",
+    }
+)
 
 
 class WorkflowError(ValueError):
@@ -605,6 +614,77 @@ class WorkflowService:
                         )
                         continue
                     return self.get(workflow_id)
+                if (
+                    state == "attention_required"
+                    and record["code"] in _AI_LEDGER_REVIEW_CODES
+                    and record["edit_project_id"]
+                ):
+                    if record["edit_plan_id"]:
+                        snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
+                        if snapshot.status in {"failed", "attention"}:
+                            code = snapshot.code or "edit_attention_required"
+                            if code != record["code"]:
+                                return self._attention(workflow_id, code)
+                            return record
+                        if snapshot.status == "waiting":
+                            self._transition(
+                                workflow_id,
+                                "awaiting_edit_confirmation",
+                                snapshot.code or "",
+                            )
+                            continue
+                        if snapshot.status == "ready" and snapshot.output_id:
+                            self._set_refs(
+                                workflow_id,
+                                edit_output_id=snapshot.output_id,
+                                edit_cover_id=snapshot.cover_id,
+                            )
+                            self._transition(workflow_id, "preparing_upload", "")
+                            continue
+                        return self._attention(
+                            workflow_id, "workflow_domain_data_invalid"
+                        )
+                    if record["profile"]["ai"] is None:
+                        return self._attention(
+                            workflow_id, "workflow_domain_data_invalid"
+                        )
+                    snapshot = self.adapter.advance_ai(
+                        workflow_id,
+                        record["edit_project_id"],
+                        record["profile"]["edit_recipe"],
+                        record["profile"]["ai"],
+                        authorize=False,
+                        explicit=False,
+                    )
+                    if snapshot.status in {"failed", "attention"}:
+                        code = snapshot.code or "ai_review_required"
+                        if code != record["code"]:
+                            return self._attention(workflow_id, code)
+                        return record
+                    if snapshot.status in {"waiting", "review"}:
+                        self._transition(
+                            workflow_id,
+                            "awaiting_ai_review",
+                            snapshot.code or "",
+                        )
+                        continue
+                    if (
+                        snapshot.status != "ready"
+                        or not snapshot.plan_id
+                        or snapshot.draft_version is None
+                    ):
+                        return self._attention(
+                            workflow_id, "workflow_domain_data_invalid"
+                        )
+                    self._set_refs(
+                        workflow_id,
+                        edit_draft_version=snapshot.draft_version,
+                        edit_plan_id=snapshot.plan_id,
+                    )
+                    self._transition(
+                        workflow_id, "awaiting_edit_confirmation", ""
+                    )
+                    continue
                 if state not in _ACTIVE_STATES:
                     return record
                 progressed = self._advance_once(record)
@@ -627,7 +707,12 @@ class WorkflowService:
                 raise WorkflowError("workflow_profile_confirmation_required")
             if record["state"] != "awaiting_edit_confirmation" or not record["edit_plan_id"]:
                 raise WorkflowError("workflow_state_conflict")
-            self.adapter.confirm_edit(record["edit_plan_id"])
+            try:
+                self.adapter.confirm_edit(record["edit_plan_id"])
+            except WorkflowError as error:
+                if error.code in _AI_LEDGER_REVIEW_CODES:
+                    return self._attention(workflow_id, error.code)
+                raise
             self._transition(workflow_id, "rendering", "")
             return self.advance(workflow_id)
 
@@ -648,14 +733,19 @@ class WorkflowService:
                 raise WorkflowError("workflow_profile_confirmation_required")
             if record["state"] != "awaiting_ai_review" or not record["edit_project_id"]:
                 raise WorkflowError("workflow_state_conflict")
-            snapshot = self.adapter.advance_ai(
-                workflow_id,
-                record["edit_project_id"],
-                record["profile"]["edit_recipe"],
-                record["profile"]["ai"],
-                authorize=True,
-                explicit=True,
-            )
+            try:
+                snapshot = self.adapter.advance_ai(
+                    workflow_id,
+                    record["edit_project_id"],
+                    record["profile"]["edit_recipe"],
+                    record["profile"]["ai"],
+                    authorize=True,
+                    explicit=True,
+                )
+            except WorkflowError as error:
+                if error.code in _AI_LEDGER_REVIEW_CODES:
+                    return self._attention(workflow_id, error.code)
+                raise
             if snapshot.status in {"failed", "attention"}:
                 return self._attention(
                     workflow_id, snapshot.code or "ai_review_required"
@@ -697,6 +787,8 @@ class WorkflowService:
             record = self._expected(workflow_id, expected_revision)
             if record["state"] != "attention_required" or not record["edit_project_id"]:
                 raise WorkflowError("workflow_retry_not_available")
+            if record["code"] in _AI_LEDGER_REVIEW_CODES:
+                raise WorkflowError("workflow_retry_not_available")
             if record["edit_plan_id"] is not None:
                 if record["edit_output_id"] is not None or record["upload_job_ids"]:
                     raise WorkflowError("workflow_retry_not_available")
@@ -711,9 +803,14 @@ class WorkflowService:
                         "render_retry_confirmation_required",
                     )
                     return self.get(workflow_id)
-                plan_id = self.adapter.retry_edit(
-                    workflow_id, record["edit_plan_id"]
-                )
+                try:
+                    plan_id = self.adapter.retry_edit(
+                        workflow_id, record["edit_plan_id"]
+                    )
+                except WorkflowError as error:
+                    if error.code in _AI_LEDGER_REVIEW_CODES:
+                        return self._attention(workflow_id, error.code)
+                    raise
                 self._set_refs(workflow_id, edit_plan_id=plan_id)
                 self._transition(
                     workflow_id,
@@ -723,12 +820,17 @@ class WorkflowService:
                 return self.get(workflow_id)
             if record["profile"]["ai"] is None:
                 raise WorkflowError("workflow_retry_not_available")
-            self.adapter.retry_ai(
-                workflow_id,
-                record["edit_project_id"],
-                record["profile"]["edit_recipe"],
-                record["profile"]["ai"],
-            )
+            try:
+                self.adapter.retry_ai(
+                    workflow_id,
+                    record["edit_project_id"],
+                    record["profile"]["edit_recipe"],
+                    record["profile"]["ai"],
+                )
+            except WorkflowError as error:
+                if error.code in _AI_LEDGER_REVIEW_CODES:
+                    return self._attention(workflow_id, error.code)
+                raise
             self._transition(
                 workflow_id,
                 "awaiting_ai_review",

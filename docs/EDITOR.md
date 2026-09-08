@@ -1,11 +1,11 @@
 # Open-Flame 0.28.0 编辑工作台指南
 
-日期：2026-09-08
+日期：2026-09-09
 适用范围：Open-Flame 0.28.0 当前源码中的本地编辑与可选 AI 处理
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)及[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -35,7 +35,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 上传适配器才可能被调用
 ```
 
-下载页输入网址只创建下载任务。需要持久化串接后续步骤时使用 `/workflows`：它按保存的 recipe 和预授权推进，未授权的 AI、编辑或上传节点会停下等待确认；应用重启、AI/编辑重试、上传 retry leaf 和未知远端结果仍会重新停下，不会凭旧确认静默继续。
+下载页输入网址只创建下载任务。需要持久化串接后续步骤时使用 `/workflows`：它按保存的 recipe 和预授权推进，未授权的 AI、编辑或上传节点会停下等待确认；应用重启、AI/编辑重试、上传 retry leaf 和未知远端结果仍会重新停下，不会凭旧确认静默继续。远程 AI 请求进入 provider 前会写入 Schema 4 调用账本；页面按项目显示脱敏状态，`unknown` 明确标为“远程结果待核对”，并隐藏被账本阻止的重试入口。
 
 ### 1.1 从下载成品建立编辑项目
 
@@ -147,7 +147,7 @@ stateDiagram-v2
 - 已经 `ready` 的成品不会因再次调用取消而被撤销或删除。
 - 一项 recipe 中任一分段、封面、ffprobe 或发布校验失败时，不发布该次执行的部分成品。
 - `failed` 或 `canceled` 只能创建一个新的 `review` 重试计划；重试复制原计划的不可变 recipe，仍须再次明确确认。
-- AI task 重试和包含远程 TTS 的 render plan 重试都先建立唯一后继并停在待确认状态。后继沿用旧任务/recipe 的 authorization，但只有该 authorization 仍与当前 runtime 精确一致时才可再次确认；缺少绑定的旧记录必须重建。已经完成的翻译批次或配音 cue 可能已产生费用；当前没有远程 request ID reconciliation，也不复用部分远程结果，因此确认重试会重新发送完整步骤并可能再次计费。
+- AI task 重试和包含远程 TTS 的 render plan 重试都先建立唯一后继并停在待确认状态。后继沿用旧任务/recipe 的 authorization，但只有该 authorization 仍与当前 runtime 精确一致时才可再次确认；缺少绑定的旧记录必须重建。Schema 4 账本的 `reserved`、`dispatched`、`unknown` 阻止 owner 完成和重试；`reconciled/accepted_without_result` 与 `reconciled/abandoned` 仍阻止重试。`responded`、`released` 或 `reconciled/not_accepted` 只恢复原有重试资格评估，仍须满足 failed/canceled、唯一后继及再次确认。账本不保存远程 request ID 或复用部分结果，已经完成的翻译批次或配音 cue 仍可能产生费用。
 - 应用在取得编辑根独占 lease 后执行重启恢复：`running` 和 `canceling` 会变为 `failed`，错误码为 `render_interrupted`；`queued` 会退回 `review`，清除旧确认并标记 `restart_confirmation_required`。恢复会删除 `sources/` 与 `assets/` 中“严格小写受管 ID + 精确小写允许后缀”但数据库未登记的崩溃残留，也会清理严格 `<plan_id>/<claim_token>` 且不属于活动 claim 的 staging，包括计划已进入终态但上次尚未完成删除的目录。case-only 文件名、未知名称、非普通文件、link/reparse 与其他不安全条目保持原样。不会在重启后静默重放。
 - 停止应用后不再接受新服务操作。如果 worker 或已经进入服务层的 API 操作未能在等待时间内结束，独占 lease 会继续保留；最后一个活动方退出后才通过同一幂等路径交还，避免另一实例在文件已复制但尚未登记时执行恢复。
 - claim token 不匹配的旧 worker 不能登记结果；这类结果以 `stale_render_claim` 拒绝。
@@ -178,7 +178,7 @@ stateDiagram-v2
 
 错误响应只返回稳定代码，不返回本机路径或子进程 stderr。真实素材失败时先保留计划 ID、草稿版本和错误码；不要把一次 synthetic 通过解释为任意 container、codec 或损坏媒体都兼容。
 
-## 5. Data root 与 Editing Schema 3
+## 5. Data root 与 Editing Schema 4
 
 若下载数据根为 `data`，编辑数据根默认为它的同级目录 `data-edits`。一般规则是给下载数据根的目录名追加 `-edits`；例如 `D:\OpenFlame\private-data` 对应 `D:\OpenFlame\private-data-edits`。
 
@@ -193,7 +193,9 @@ data-edits/
 
 编辑根与下载数据库/媒体、下载 Cookie、上传 Schema 3、上传媒体及上传账号凭据相互隔离。上传导入会再次复制文件，不通过共享路径绕过两个域的校验。
 
-Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`。Schema 1/2 只有在结构与语义精确匹配时才按顺序向前迁移；Schema 3 为每个 AI render plan 增加不可变的已批准时间轴绑定及父时间轴摘要。启动时要求表、索引和 trigger 与精确 DDL 一致，并执行 `quick_check` 与 foreign-key 检查；未知表、缺失索引、损坏、更高版本、替换竞态或不安全数据库文件都会拒绝打开。
+Editing Schema 4 使用 SQLite `application_id=0x4F464544` 和 `user_version=4`。Schema 1/2/3 只有在结构与语义精确匹配时才按顺序向前迁移；Schema 3 为每个 AI render plan 增加不可变的已批准时间轴绑定及父时间轴摘要，Schema 4 再增加不可变的远程 AI invocation 定义和受 trigger 约束的单向状态转换。启动时要求表、索引和 trigger 与精确 DDL 一致，并执行 `quick_check` 与 foreign-key 检查；未知表、缺失索引、损坏、更高版本、替换竞态或不安全数据库文件都会拒绝打开。
+
+Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI task/render plan 建立 `legacy=1`、`attempt=0`、`state=unknown` 哨兵。能证明 authorization 为 `local` 的旧 owner 不建立远程记录；缺少或无法解析 authorization 时不能反推为本地执行，因此仍保守建立 unknown 哨兵，授权摘要可显示为“旧记录未绑定”。这些旧记录保持可解释，但必须人工 reconciliation，不能由迁移自动判定供应商是否接受或计费。
 
 | 表 | 用途 |
 | --- | --- |
@@ -204,6 +206,7 @@ Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`�
 | `render_plans` | 冻结的草稿版本、recipe、状态、claim、确认/开始/完成时间及重试来源 |
 | `timeline_revisions` | 不可变听写/翻译 cue、摘要、父修订及一次性审核状态 |
 | `ai_tasks` | 不可变 provider/model 请求、状态、claim、后继重试和结果修订 |
+| `ai_invocations` | 不含正文/密钥/路径/响应的远程调用 owner、operation、ordinal/attempt、调用单位、摘要、状态、固定核对结论和时间 |
 | `plan_timeline_bindings` | 计划绑定的已批准译文、父字幕与两份摘要 |
 | `assets` | ready 输出的种类、名称、大小、SHA-256、时长、尺寸、container 与 codec |
 | `requests` | 幂等请求键、操作、请求摘要与结果 ID |
@@ -219,7 +222,7 @@ Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`�
 | `GET /session` | 取得本次进程内 CSRF token |
 | `GET /capabilities` | 返回分段、封面、听写、翻译和配音的诚实能力状态；不安装或探测 AI 模型 |
 | `GET /ai/runtime` / `GET /ai/capabilities` | 分别返回 runtime 完整性与 manifest 中可核对的 provider/model/外发范围；不会替代真实执行健康 |
-| `GET /status` | 返回 Schema 版本、processor 是否配置、项目数与计划状态计数 |
+| `GET /status` | 返回 Schema 版本、processor 是否配置、项目数、计划/AI task/时间轴及 invocation 状态计数 |
 | `GET /projects` | 列出编辑项目及当前草稿摘要 |
 | `GET /projects/{project_id}` | 读取单个项目 |
 | `POST /projects/assets/{download_asset_id}` | 显式复制 ready 下载视频并建立项目；body 含 `name`、`idempotency_key` |
@@ -233,6 +236,8 @@ Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`�
 | `GET /ai-tasks` / `GET /ai-tasks/{task_id}` | 列出或读取 AI task、状态、重试来源和结果修订 |
 | `POST /ai-tasks/{task_id}/confirm` | 提交匹配的 request/authorization SHA-256 与外发确认；服务复核当前 runtime 后才排队 |
 | `POST /ai-tasks/{task_id}/cancel` / `retry` | 取消活动任务，或为 failed/canceled 建立唯一待确认后继 |
+| `GET /ai-invocations?project_id=...` | 返回项目范围的脱敏调用行，以及 `counts`、`total`、`request_units`、`unresolved` 汇总 |
+| `POST /ai-invocations/{invocation_id}/reconcile` | 对一项 `unknown` 提交 `expected_revision`、三项固定 `resolution` 之一和 `acknowledge=true`；没有自由文本 |
 | `GET /timelines` / `GET /timelines/{revision_id}` | 读取完整听写/译文时间轴 |
 | `POST /timelines/{revision_id}/review` | 以 `expected_review_version` 一次性批准或拒绝整份修订 |
 | `POST /plans/{plan_id}/confirm` | 明确确认并排队；配音计划还须提交匹配的 recipe/authorization SHA-256 和外发确认；processor 未配置或绑定漂移时不排队 |
@@ -256,12 +261,15 @@ Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`�
 - `SpeechOptions` 允许 0.88～1.12 倍语速；每个 cue 独立取得 WAV、检查格式和时长，再在对应分段内构造 PCM 轨。超出时间槽以 `ai_speech_timing_overflow` 失败，不截断或顺延后续 cue。
 - 页面把 provider、model、本地声明 revision、runtime manifest 摘要、标准音色、精确数据外发范围和 effective limits 显示在确认边界。canonical authorization 还绑定 runtime ID/version、protocol schema、provider kind 与 operation；AI task request、配音 recipe 和 Workflow profile 持久化完整值及摘要。创建、确认、worker 和 provider 调用前均与当前能力做摘要/定义 CAS，缺少绑定的旧记录保持可读但必须重建。只有至少一项 authorization 为 `remote` 时才要求数据外发确认；全部为本地 plugin 时由编辑/AI 执行确认覆盖，不伪装成外发。
 - 核心硬上限为：听写 30 分钟且 25 MiB/1 请求；翻译 1000 cues、60000 输入字符、20 个按 50 cues 估算的调用单位；TTS 600 cues、60000 输入字符和 600 次调用。完整输入在第一次 provider 请求前核对，超限以 `ai_budget_exceeded` 失败关闭。这些上限限制一次操作的输入与调用数，不是价格、账号额度或实际 usage ledger。
-- AI task 和配音计划重试都建立唯一后继并再次确认；当前没有远程 request ID reconciliation、部分批次复用、准确费用预估、持久化 usage ledger 或远端删除记录。manifest 中的 model revision 只是本地声明，远端 alias 仍可能在同一名称下漂移。
+- Schema 4 为远程 `transcribe`、`translate`、`synthesize` 保存脱敏调用 envelope。状态只沿 `reserved→dispatched→responded`、`reserved→released` 或 `dispatched→unknown→reconciled` 前进；发送前失败可释放，发送后无法确认结果必须保留 unknown。账本不保存正文、密钥、本机路径、endpoint、HTTP header、provider request ID 或响应。
+- `unknown` 只能通过带 revision CAS、`acknowledge=true` 的固定结论 `not_accepted`、`accepted_without_result`、`abandoned` 人工核对。前者允许在原有显式确认流程下重新评估重试；后两者继续阻止重试。`reserved/dispatched/unknown` 同时阻止 owner 完成与重试，不能通过直接改 UI 或 SQLite 绕过。
+- 翻译的账本 `request_units=ceil(cues/50)` 是 runtime envelope 和授权硬预算估算。provider 会为了满足 4 MiB request envelope 动态缩小 batch，因此它不是精确 HTTP 请求数、token usage、费用或账单收据。听写记 1 单位，配音每个有文字 cue 的 ordinal 记 1 单位；`health` 检查不入账，也不证明真实 OpenAI 可用。
+- AI task 和配音计划重试都建立唯一后继并再次确认；当前没有远程 request ID、部分批次复用、准确费用预估、持久化 token/金额 usage ledger 或远端删除记录。manifest 中的 model revision 只是本地声明，远端 alias 仍可能在同一名称下漂移。
 - 没有声音克隆；首批只允许 manifest 中 13 个标准音色。不能直接修改 API/SQLite 状态把 AI 能力或 timeline 伪装成 ready。
 
 ## 8. 后续 AI 验收与本地 provider 方向
 
-0.28.0 发布后源码已完成逐操作 authorization 与输入/调用硬上限，但真实账号、质量和费用仍未验收。下一工程切片先把 Editing Schema 升到 4，持久化不含正文/密钥的远端调用 ledger 与 accepted/unknown/reconciled outcome；随后加入不含密钥、Cookie 或账号 session 的复用预设，并跑完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke。之后再在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、实际费用和真人试听；真实结果不能由 manifest 或 synthetic 媒体推定。
+0.28.0 发布后源码已完成逐操作 authorization、输入/调用硬上限和 Editing Schema 4 远程调用账本，但真实账号、质量和费用仍未验收。下一工程切片加入不含密钥、Cookie 或账号 session 的复用预设，并跑完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke。之后再在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、供应商 request/账单证据、实际费用和真人试听；真实结果不能由 manifest、账本人工结论或 synthetic 媒体推定。
 
 本地 provider 仍是后续方向。若继续实现本地 ASR/翻译/TTS，应分别固定模型 revision、文件 SHA-256、许可证、架构和转换参数，并复用现有 task/timeline/plan 确认边界。候选研究包括 faster-whisper/CTranslate2、M2M100 与 Kokoro；这些候选尚未进入 0.28.0 runtime，也没有 ready 声明。
 
@@ -297,10 +305,10 @@ Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`�
 - provider capability 应列出精确 data egress：听写上传音频；文本翻译上传 source cue 与上下文；TTS 上传译文、voice 和 instructions。可以用“本地 ASR + 云翻译/TTS”减少完整视频外发，但它仍会外发文字。
 - 根据 OpenAI 当前[API 数据控制说明](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint)，API 数据默认不用于训练，除非客户明确选择共享；不同 endpoint 的 abuse monitoring 与 application-state 保留不同，符合条件的客户可申请 Modified Abuse Monitoring 或 Zero Data Retention。实现时必须显示当时组织/项目的实际配置，不能仅凭 endpoint 名称宣称零保留。
 - 文档当前列出 `/v1/audio/transcriptions` 与 `/v1/audio/translations` 无默认 abuse-monitoring/application-state 保留，`/v1/audio/speech` 有最长 30 天 abuse-monitoring 日志且无 application state；Responses API 的默认 application-state 行为另有 30 天边界。供应商政策可变化，启用和每次发行冻结时均需重新核对。
-- 云请求尚未被服务端接受时可安全取消；一旦接受，稳健实现应保存 provider request/job ID 并先 reconciliation，再决定重试。0.28.0 尚未保存可对账的远程 request/job ID，因此 UI 明确警告重试可能重复计费，且重试任务或计划必须再次确认。
+- 云请求尚未被服务端接受时可安全取消；一旦接受，稳健实现应保存 provider request/job ID 并结合供应商事实 reconciliation，再决定重试。当前 Schema 4 只保存本地调用 fingerprint、状态和三项人工结论，尚未保存可向供应商查询的 request/job ID；因此 UI 把 `unknown` 明确标为“远程结果待核对”，隐藏账本阻止的重试入口，并警告人工结论不能证明未计费。允许重试的任务或计划仍必须再次确认。
 
 本地 provider 应保持默认选项。任何云 provider 都必须在凭据存在、数据范围可见、费用边界可核对、用户明确确认且当前隐私说明复核后才进入 `queued`。
 
 ## 10. 当前可以准确声称的结果
 
-0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围及固定输入/调用上限。仓库内验证只覆盖本机定义、synthetic/fake 编排与本地媒体处理；它不构成价格预算、usage ledger、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。
+0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。仓库内验证只覆盖本机定义、三个 ignored validator、synthetic/fake 编排、本地媒体处理、compileall、编辑/自动流程页 JavaScript 语法、依赖一致性和本机浏览器检查；focused 既有测试当前仍有 3 项旧 Schema 1 断言失败。它不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。

@@ -189,6 +189,15 @@ class ConfirmAiTaskRequest(BaseModel):
     ai_data_egress_accepted: bool = Field(default=False, strict=True)
 
 
+class ReconcileAiInvocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=0, le=999_999, strict=True)
+    resolution: Literal[
+        "not_accepted", "accepted_without_result", "abandoned"
+    ]
+    acknowledge: bool = Field(strict=True)
+
+
 class ReviewTimelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approved", "rejected"]
@@ -252,6 +261,12 @@ def _safe_error(error: EditingError) -> HTTPException:
         "ai_authorization_binding_required",
         "ai_authorization_changed",
         "ai_task_definition_changed",
+        "ai_invocation_conflict",
+        "ai_invocation_owner_changed",
+        "ai_invocation_owner_inactive",
+        "ai_invocation_state_conflict",
+        "ai_remote_reconciliation_required",
+        "ai_remote_retry_blocked",
     }:
         status = 409
     elif code in {
@@ -259,6 +274,7 @@ def _safe_error(error: EditingError) -> HTTPException:
         "editing_storage_unavailable",
         "processor_not_configured",
         "editing_manager_stopped",
+        "ai_invocation_database_unavailable",
     }:
         status = 503
     else:
@@ -665,6 +681,9 @@ class EditingManager:
                             recipe.dubbing.provider,
                             recipe.dubbing.model,
                             recipe.dubbing.authorization,
+                            service=service,
+                            render_plan_id=plan_id,
+                            owner_claim_token=token,
                         )
                     result = AiRenderProcessor(service.processor).render(
                         source,
@@ -1080,6 +1099,31 @@ def install_editing_routes(
     @router.post("/ai-tasks/{task_id}/retry", status_code=201)
     async def retry_ai_task(task_id: Identifier, payload: RetryAiTaskRequest):
         return await invoke("retry_ai_task", task_id, payload.idempotency_key)
+
+    @router.get("/ai-invocations")
+    async def ai_invocations(
+        project_id: Identifier | None = Query(default=None),
+        offset: int = Query(default=0, ge=0, le=1_000_000),
+        limit: int = Query(default=200, ge=1, le=1_000),
+    ):
+        return await invoke(
+            "ai_invocations",
+            project_id=project_id,
+            offset=offset,
+            limit=limit,
+        )
+
+    @router.post("/ai-invocations/{invocation_id}/reconcile")
+    async def reconcile_ai_invocation(
+        invocation_id: Identifier, payload: ReconcileAiInvocationRequest
+    ):
+        return await invoke(
+            "reconcile_ai_invocation",
+            invocation_id,
+            payload.expected_revision,
+            payload.resolution,
+            acknowledge=payload.acknowledge,
+        )
 
     @router.get("/timelines")
     async def timelines(project_id: Identifier | None = Query(default=None)):

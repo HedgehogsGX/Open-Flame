@@ -444,6 +444,9 @@ class AiRenderProcessor:
             canonical = canonical_timeline(timeline, language=language)
         except AiPipelineError as exc:
             raise EditingError("ai_timeline_invalid") from exc
+        cue_ordinals = {cue.id: cue.order for cue in canonical.cues}
+        if len(cue_ordinals) != len(canonical.cues):
+            raise EditingError("ai_timeline_invalid")
 
         output_count = len(ordinary.segments) if ordinary.segments else 1
         caption_paths = tuple(
@@ -520,6 +523,12 @@ class AiRenderProcessor:
                     synthesis_cues = tuple(
                         cue for cue_group in windowed_cues for cue in cue_group
                     )
+                    if (
+                        len({cue.id for cue in synthesis_cues})
+                        != len(synthesis_cues)
+                        or any(cue.id not in cue_ordinals for cue in synthesis_cues)
+                    ):
+                        raise EditingError("ai_timeline_invalid")
                     enforce_synthesis_budget(
                         authorization,
                         synthesis_cues,
@@ -630,6 +639,7 @@ class AiRenderProcessor:
                         track, track_size, track_digest = self._build_track(
                             track_dir,
                             cues,
+                            cue_ordinals,
                             duration_ms,
                             provider,
                             voice,
@@ -732,6 +742,7 @@ class AiRenderProcessor:
         self,
         scratch: Path,
         cues: tuple[TimelineCue, ...],
+        cue_ordinals: dict[str, int],
         duration_ms: int,
         provider: SpeechProvider,
         voice: Voice,
@@ -748,6 +759,16 @@ class AiRenderProcessor:
         )
         for index, cue in enumerate(cues):
             self._check_cancelled(cancel_event)
+            try:
+                cue_ordinal = cue_ordinals[cue.id]
+            except KeyError:
+                raise EditingError("ai_timeline_invalid") from None
+            if (
+                isinstance(cue_ordinal, bool)
+                or not isinstance(cue_ordinal, int)
+                or cue_ordinal < 0
+            ):
+                raise EditingError("ai_timeline_invalid")
             path = scratch / f"cue-{index + 1:05d}.wav"
             progress_calls = 0
             last_progress = 0.0
@@ -772,22 +793,35 @@ class AiRenderProcessor:
                 )
 
             try:
-                clip = provider.synthesize(
-                    cue.source_text,
-                    path,
-                    SpeechOptions(
-                        voice_id=voice.id,
-                        language=spec.language,
-                        rate=1.0,
-                        style=None,
-                    ),
-                    progress=cue_progress,
-                    cancelled=(
-                        (lambda: False)
-                        if cancel_event is None
-                        else cancel_event.is_set
-                    ),
+                options = SpeechOptions(
+                    voice_id=voice.id,
+                    language=spec.language,
+                    rate=1.0,
+                    style=None,
                 )
+                cancelled = (
+                    (lambda: False)
+                    if cancel_event is None
+                    else cancel_event.is_set
+                )
+                synthesize_ledgered = getattr(provider, "synthesize_ledgered", None)
+                if callable(synthesize_ledgered):
+                    clip = synthesize_ledgered(
+                        cue.source_text,
+                        path,
+                        options,
+                        ordinal=cue_ordinal,
+                        progress=cue_progress,
+                        cancelled=cancelled,
+                    )
+                else:
+                    clip = provider.synthesize(
+                        cue.source_text,
+                        path,
+                        options,
+                        progress=cue_progress,
+                        cancelled=cancelled,
+                    )
             except EditingError:
                 raise
             except (AiAuthorizationError, AiBridgeError) as exc:

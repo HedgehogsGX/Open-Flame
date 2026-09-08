@@ -25,6 +25,7 @@ from .contracts import (
     recipe_from_mapping,
 )
 from .ai import TranslationRevision
+from .ai_ledger import AiInvocationLedger, AiInvocationLedgerError
 from .ai_pipeline import (
     AiPipelineError,
     CanonicalAiRequest,
@@ -209,7 +210,7 @@ def _open_verified_file(
 
 
 class EditingService:
-    """Owns Schema 2 records and immutable source/output copies.
+    """Owns Schema 4 records and immutable source/output copies.
 
     The application owns the single render worker. Claims are fenced with a
     random token so a stale worker cannot complete another worker's plan.
@@ -233,6 +234,7 @@ class EditingService:
             ensure_editing_schema(self.database_path)
         except EditingSchemaError as exc:
             raise EditingError("editing_schema_invalid") from exc
+        self._ai_invocations = AiInvocationLedger(self.database_path)
         if recover_interrupted:
             self.recover_interrupted()
 
@@ -270,6 +272,10 @@ class EditingService:
     def recover_interrupted(self, *, cleanup_orphans: bool = False) -> None:
         """Fail local work safely and revoke queued confirmation after restart."""
 
+        try:
+            self._ai_invocations.recover()
+        except AiInvocationLedgerError as exc:
+            raise EditingError(exc.code) from exc
         interrupted: list[tuple[str, str]] = []
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -286,7 +292,10 @@ class EditingService:
                 and _ID.fullmatch(row["claim_token"])
             ]
             db.execute(
-                "UPDATE render_plans SET state='failed',code='render_interrupted',"
+                "UPDATE render_plans SET state='failed',code=CASE WHEN EXISTS("
+                "SELECT 1 FROM ai_invocations i WHERE i.render_plan_id=render_plans.id "
+                "AND i.state='unknown') THEN 'ai_remote_result_unknown' "
+                "ELSE 'render_interrupted' END,"
                 "claim_token=NULL,updated_at=?,finished_at=? "
                 "WHERE state IN ('running','canceling')",
                 (now, now),
@@ -297,7 +306,10 @@ class EditingService:
                 (now,),
             )
             db.execute(
-                "UPDATE ai_tasks SET state='failed',code='ai_task_interrupted',"
+                "UPDATE ai_tasks SET state='failed',code=CASE WHEN EXISTS("
+                "SELECT 1 FROM ai_invocations i WHERE i.ai_task_id=ai_tasks.id "
+                "AND i.state='unknown') THEN 'ai_remote_result_unknown' "
+                "ELSE 'ai_task_interrupted' END,"
                 "claim_token=NULL,updated_at=?,finished_at=? "
                 "WHERE state IN ('running','canceling')",
                 (now, now),
@@ -307,6 +319,33 @@ class EditingService:
                 "updated_at=?,confirmed_at=NULL WHERE state='queued'",
                 (now,),
             )
+            for table, owner_column in (
+                ("render_plans", "render_plan_id"),
+                ("ai_tasks", "ai_task_id"),
+            ):
+                db.execute(
+                    f"UPDATE {table} SET state='failed',"
+                    "code='ai_remote_result_unknown',updated_at=? "
+                    "WHERE state IN ('failed','canceled') AND EXISTS("
+                    "SELECT 1 FROM ai_invocations i "
+                    f"WHERE i.{owner_column}={table}.id AND i.state='unknown')",
+                    (now,),
+                )
+                resolved = db.execute(
+                    f"SELECT id FROM {table} WHERE state IN ('failed','canceled') "
+                    "AND code='ai_remote_result_unknown' AND NOT EXISTS("
+                    "SELECT 1 FROM ai_invocations i "
+                    f"WHERE i.{owner_column}={table}.id AND i.state='unknown')"
+                ).fetchall()
+                for owner in resolved:
+                    code = self._reconciled_ai_invocation_code(
+                        db, owner_column, owner["id"]
+                    )
+                    if code is not None:
+                        db.execute(
+                            f"UPDATE {table} SET code=?,updated_at=? WHERE id=?",
+                            (code, now, owner["id"]),
+                        )
         for plan_id, claim_token in interrupted:
             self._remove_output_dir(self.staging_root / plan_id / claim_token)
         if cleanup_orphans:
@@ -333,6 +372,12 @@ class EditingService:
                     "SELECT state,COUNT(*) amount FROM timeline_revisions GROUP BY state"
                 )
             }
+            invocation_counts = {
+                row["state"]: row["amount"]
+                for row in db.execute(
+                    "SELECT state,COUNT(*) amount FROM ai_invocations GROUP BY state"
+                )
+            }
         return {
             "schema_version": SCHEMA_VERSION,
             "processor_configured": self.processor is not None,
@@ -340,7 +385,246 @@ class EditingService:
             "plan_counts": counts,
             "ai_task_counts": ai_counts,
             "timeline_counts": timeline_counts,
+            "ai_invocation_counts": invocation_counts,
         }
+
+    @staticmethod
+    def _assert_no_unresolved_ai_invocations(
+        db: sqlite3.Connection, owner_column: str, owner_id: str
+    ) -> None:
+        if owner_column not in {"ai_task_id", "render_plan_id"}:
+            raise EditingError("editing_data_invalid")
+        pending = db.execute(
+            f"SELECT 1 FROM ai_invocations WHERE {owner_column}=? "
+            "AND state IN ('reserved','dispatched','unknown') LIMIT 1",
+            (owner_id,),
+        ).fetchone()
+        if pending is not None:
+            raise EditingError("ai_remote_reconciliation_required")
+
+    @staticmethod
+    def _reconciled_ai_invocation_code(
+        db: sqlite3.Connection, owner_column: str, owner_id: str
+    ) -> str | None:
+        """Summarize all fixed reconciliation outcomes conservatively."""
+
+        if owner_column not in {"ai_task_id", "render_plan_id"}:
+            raise EditingError("editing_data_invalid")
+        resolutions = {
+            row["resolution"]
+            for row in db.execute(
+                f"SELECT resolution FROM ai_invocations WHERE {owner_column}=? "
+                "AND state='reconciled'",
+                (owner_id,),
+            )
+        }
+        if "accepted_without_result" in resolutions:
+            return "ai_remote_accepted_without_result"
+        if "abandoned" in resolutions:
+            return "ai_remote_abandoned"
+        if "not_accepted" in resolutions:
+            return "ai_remote_not_accepted"
+        return None
+
+    @staticmethod
+    def _assert_ai_invocation_retry_allowed(
+        db: sqlite3.Connection, owner_column: str, owner_id: str
+    ) -> None:
+        owner_table = {
+            "ai_task_id": "ai_tasks",
+            "render_plan_id": "render_plans",
+        }.get(owner_column)
+        if owner_table is None:
+            raise EditingError("editing_data_invalid")
+        blocked = db.execute(
+            "WITH RECURSIVE retry_ancestry(id,retry_of) AS ("
+            f"SELECT id,retry_of FROM {owner_table} WHERE id=? UNION "
+            f"SELECT parent.id,parent.retry_of FROM {owner_table} parent "
+            "JOIN retry_ancestry child ON parent.id=child.retry_of) "
+            "SELECT 1 FROM ai_invocations invocation "
+            f"JOIN retry_ancestry owner ON invocation.{owner_column}=owner.id "
+            "WHERE invocation.state IN ('reserved','dispatched','unknown') OR "
+            "(invocation.state='reconciled' AND invocation.resolution IN "
+            "('accepted_without_result','abandoned')) LIMIT 1",
+            (owner_id,),
+        ).fetchone()
+        if blocked is not None:
+            raise EditingError("ai_remote_retry_blocked")
+
+    @staticmethod
+    def _finalize_ai_invocations_on_owner_failure(
+        db: sqlite3.Connection,
+        owner_column: str,
+        owner_id: str,
+        now: str,
+    ) -> None:
+        """Close any bridge transition left incomplete before failing its owner."""
+
+        if owner_column not in {"ai_task_id", "render_plan_id"}:
+            raise EditingError("editing_data_invalid")
+        db.execute(
+            "UPDATE ai_invocations SET state='released',"
+            "reason_code='owner_failed_before_dispatch',revision=revision+1,"
+            "updated_at=?,released_at=? "
+            f"WHERE {owner_column}=? AND state='reserved'",
+            (now, now, owner_id),
+        )
+        db.execute(
+            "UPDATE ai_invocations SET state='unknown',"
+            "reason_code='owner_failed_after_dispatch',revision=revision+1,"
+            "updated_at=?,unknown_at=? "
+            f"WHERE {owner_column}=? AND state='dispatched'",
+            (now, now, owner_id),
+        )
+
+    def ai_invocations(
+        self,
+        project_id: str | None = None,
+        *,
+        offset: int = 0,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Return one redacted page plus full project safety totals."""
+
+        normalized_project_id = (
+            None if project_id is None else _identifier(project_id)
+        )
+        try:
+            items = self._ai_invocations.list(
+                project_id=normalized_project_id,
+                limit=limit,
+                offset=offset,
+            )
+        except AiInvocationLedgerError as exc:
+            raise EditingError(exc.code) from exc
+        counts = {
+            state: 0
+            for state in (
+                "reserved",
+                "dispatched",
+                "responded",
+                "released",
+                "unknown",
+                "reconciled",
+            )
+        }
+        predicate = ""
+        values: tuple[object, ...] = ()
+        if normalized_project_id is not None:
+            predicate = (
+                " WHERE (ai_task_id IN (SELECT id FROM ai_tasks WHERE project_id=?) "
+                "OR render_plan_id IN (SELECT id FROM render_plans WHERE project_id=?))"
+            )
+            values = (normalized_project_id, normalized_project_id)
+        retry_blocking = (
+            "(state IN ('reserved','dispatched','unknown') OR "
+            "(state='reconciled' AND resolution IN "
+            "('accepted_without_result','abandoned')))"
+        )
+
+        def blocked_owner_query(owner_column: str, owner_table: str) -> str:
+            separator = " AND " if predicate else " WHERE "
+            return (
+                "WITH RECURSIVE blocked_owner(id) AS ("
+                f"SELECT DISTINCT {owner_column} FROM ai_invocations"
+                + predicate
+                + separator
+                + f"{owner_column} IS NOT NULL AND {retry_blocking} UNION "
+                f"SELECT child.id FROM {owner_table} child "
+                "JOIN blocked_owner parent ON child.retry_of=parent.id) "
+                "SELECT id FROM blocked_owner ORDER BY id"
+            )
+
+        with self._db() as db:
+            grouped = db.execute(
+                "SELECT state,COUNT(*) amount,COALESCE(SUM(request_units),0) units "
+                "FROM ai_invocations"
+                + predicate
+                + " GROUP BY state",
+                values,
+            ).fetchall()
+            blocked_task_ids = [
+                row["id"]
+                for row in db.execute(
+                    blocked_owner_query("ai_task_id", "ai_tasks"), values
+                )
+            ]
+            blocked_plan_ids = [
+                row["id"]
+                for row in db.execute(
+                    blocked_owner_query("render_plan_id", "render_plans"), values
+                )
+            ]
+        request_units = 0
+        for row in grouped:
+            if row["state"] in counts:
+                counts[row["state"]] = row["amount"]
+                request_units += row["units"]
+        total = sum(counts.values())
+        return {
+            "items": items,
+            "summary": {
+                "counts": counts,
+                "total": total,
+                "request_units": request_units,
+                "unresolved": counts["reserved"]
+                + counts["dispatched"]
+                + counts["unknown"],
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(items) < total,
+                "retry_blocked_ai_task_ids": blocked_task_ids,
+                "retry_blocked_render_plan_ids": blocked_plan_ids,
+            },
+        }
+
+    def reconcile_ai_invocation(
+        self,
+        invocation_id: str,
+        expected_revision: int,
+        resolution: str,
+        *,
+        acknowledge: bool,
+    ) -> dict[str, Any]:
+        """Apply one fixed, revision-fenced decision to an unknown result."""
+
+        if acknowledge is not True:
+            raise EditingError("ai_remote_reconciliation_acknowledgement_required")
+        try:
+            record = self._ai_invocations.reconcile(
+                invocation_id,
+                expected_revision,
+                resolution=resolution,
+            )
+        except AiInvocationLedgerError as exc:
+            raise EditingError(exc.code) from exc
+        owner_column = (
+            "ai_task_id" if record.get("ai_task_id") is not None else "render_plan_id"
+        )
+        owner_id = record.get(owner_column)
+        if not isinstance(owner_id, str) or not _ID.fullmatch(owner_id):
+            raise EditingError("editing_data_invalid")
+        table = "ai_tasks" if owner_column == "ai_task_id" else "render_plans"
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            remaining = db.execute(
+                f"SELECT 1 FROM ai_invocations WHERE {owner_column}=? "
+                "AND state='unknown' LIMIT 1",
+                (owner_id,),
+            ).fetchone()
+            if remaining is None:
+                resolved_code = self._reconciled_ai_invocation_code(
+                    db, owner_column, owner_id
+                )
+                if resolved_code is None:
+                    raise EditingError("editing_data_invalid")
+                db.execute(
+                    f"UPDATE {table} SET code=?,updated_at=? WHERE id=? "
+                    "AND state IN ('failed','canceled') "
+                    "AND code='ai_remote_result_unknown'",
+                    (resolved_code, _now(), owner_id),
+                )
+        return record
 
     def import_source(
         self,
@@ -727,7 +1011,13 @@ class EditingService:
                 request.request_sha256, expected_request_sha256
             ):
                 raise EditingError("ai_task_definition_changed")
-            if task["state"] in {"queued", "running", "canceling", "succeeded"}:
+            if task["state"] in {"running", "canceling", "succeeded"}:
+                return task
+            if task["state"] in {"review", "queued"}:
+                self._assert_ai_invocation_retry_allowed(
+                    db, "ai_task_id", task_id
+                )
+            if task["state"] == "queued":
                 return task
             if task["state"] != "review":
                 raise EditingError("ai_task_not_reviewable")
@@ -752,11 +1042,14 @@ class EditingService:
         request_digest = _digest("retry_ai_task", {"task_id": task_id})
         existing = self._request_result(key, "retry_ai_task", request_digest)
         if existing is not None:
-            return self.ai_task(existing)
+            with self._db() as db:
+                self._assert_ai_invocation_retry_allowed(db, "ai_task_id", existing)
+                return self._ai_task_by_id(db, existing)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             replay = self._request_result_in(db, key, "retry_ai_task", request_digest)
             if replay is not None:
+                self._assert_ai_invocation_retry_allowed(db, "ai_task_id", replay)
                 return self._ai_task_by_id(db, replay)
             original = db.execute(
                 "SELECT * FROM ai_tasks WHERE id=?", (task_id,)
@@ -766,6 +1059,7 @@ class EditingService:
             original_public, request = self._ai_task_from_row(original)
             if request.authorization is None:
                 raise EditingError("ai_authorization_binding_required")
+            self._assert_ai_invocation_retry_allowed(db, "ai_task_id", task_id)
             retryable = original_public["state"] in {"failed", "canceled"}
             if original_public["state"] == "succeeded":
                 result_revision_id = original_public.get("result_revision_id")
@@ -830,6 +1124,21 @@ class EditingService:
             ).fetchall()
             for row in rows:
                 task, request = self._ai_task_from_row(row)
+                try:
+                    self._assert_ai_invocation_retry_allowed(
+                        db, "ai_task_id", task["id"]
+                    )
+                except EditingError as exc:
+                    if exc.code != "ai_remote_retry_blocked":
+                        raise
+                    now = _now()
+                    db.execute(
+                        "UPDATE ai_tasks SET state='review',"
+                        "code='ai_remote_retry_blocked',confirmed_at=NULL,updated_at=? "
+                        "WHERE id=? AND state='queued'",
+                        (now, task["id"]),
+                    )
+                    continue
                 if request.source_revision_id is not None:
                     source = db.execute(
                         "SELECT * FROM timeline_revisions WHERE id=?",
@@ -984,6 +1293,7 @@ class EditingService:
                 raise EditingError("stale_ai_claim")
             if current_request.request_sha256 != request.request_sha256:
                 raise EditingError("editing_data_invalid")
+            self._assert_no_unresolved_ai_invocations(db, "ai_task_id", task_id)
             if parent_id is not None:
                 current_parent = db.execute(
                     "SELECT * FROM timeline_revisions WHERE id=?", (parent_id,)
@@ -1044,6 +1354,17 @@ class EditingService:
             ):
                 raise EditingError("stale_ai_claim")
             now = _now()
+            self._finalize_ai_invocations_on_owner_failure(
+                db, "ai_task_id", task_id, now
+            )
+            unknown = db.execute(
+                "SELECT 1 FROM ai_invocations WHERE ai_task_id=? "
+                "AND state IN ('dispatched','unknown') LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            if unknown is not None:
+                state = "failed"
+                code = "ai_remote_result_unknown"
             db.execute(
                 "UPDATE ai_tasks SET state=?,code=?,claim_token=NULL,updated_at=?,"
                 "finished_at=? WHERE id=? AND claim_token=?",
@@ -1237,7 +1558,13 @@ class EditingService:
                 row["recipe_sha256"], expected_recipe_sha256
             ):
                 raise EditingError("plan_definition_changed")
-            if row["state"] in {"queued", "running", "canceling", "ready"}:
+            if row["state"] in {"running", "canceling", "ready"}:
+                return self._plan_public(db, row)
+            if row["state"] in {"review", "queued"}:
+                self._assert_ai_invocation_retry_allowed(
+                    db, "render_plan_id", plan_id
+                )
+            if row["state"] == "queued":
                 return self._plan_public(db, row)
             if row["state"] != "review":
                 raise EditingError("plan_not_reviewable")
@@ -1288,11 +1615,18 @@ class EditingService:
         request_digest = _digest("retry_plan", {"plan_id": plan_id})
         existing = self._request_result(key, "retry_plan", request_digest)
         if existing is not None:
-            return self.plan(existing)
+            with self._db() as db:
+                self._assert_ai_invocation_retry_allowed(
+                    db, "render_plan_id", existing
+                )
+                return self._plan_by_id(db, existing)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             replay = self._request_result_in(db, key, "retry_plan", request_digest)
             if replay is not None:
+                self._assert_ai_invocation_retry_allowed(
+                    db, "render_plan_id", replay
+                )
                 return self._plan_by_id(db, replay)
             original = db.execute("SELECT * FROM render_plans WHERE id=?", (plan_id,)).fetchone()
             if original is None:
@@ -1302,6 +1636,7 @@ class EditingService:
             recipe = self._recipe_from_row(original)
             if recipe.dubbing.enabled and recipe.dubbing.authorization is None:
                 raise EditingError("ai_authorization_binding_required")
+            self._assert_ai_invocation_retry_allowed(db, "render_plan_id", plan_id)
             successor = db.execute(
                 "SELECT id FROM render_plans WHERE retry_of=?", (plan_id,)
             ).fetchone()
@@ -1361,21 +1696,38 @@ class EditingService:
     def claim_next_plan(self) -> dict[str, Any] | None:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT id FROM render_plans WHERE state='queued' ORDER BY confirmed_at,id LIMIT 1"
-            ).fetchone()
-            if row is None:
-                return None
-            token, now = uuid4().hex, _now()
-            changed = db.execute(
-                "UPDATE render_plans SET state='running',claim_token=?,started_at=?,updated_at=? "
-                "WHERE id=? AND state='queued'", (token, now, now, row["id"]),
-            ).rowcount
-            if not changed:
-                return None
-            result = self._plan_by_id(db, row["id"])
-            result["claim_token"] = token
-            return result
+            rows = db.execute(
+                "SELECT id FROM render_plans WHERE state='queued' "
+                "ORDER BY confirmed_at,id"
+            ).fetchall()
+            for row in rows:
+                try:
+                    self._assert_ai_invocation_retry_allowed(
+                        db, "render_plan_id", row["id"]
+                    )
+                except EditingError as exc:
+                    if exc.code != "ai_remote_retry_blocked":
+                        raise
+                    now = _now()
+                    db.execute(
+                        "UPDATE render_plans SET state='review',"
+                        "code='ai_remote_retry_blocked',confirmed_at=NULL,updated_at=? "
+                        "WHERE id=? AND state='queued'",
+                        (now, row["id"]),
+                    )
+                    continue
+                token, now = uuid4().hex, _now()
+                changed = db.execute(
+                    "UPDATE render_plans SET state='running',claim_token=?,started_at=?,"
+                    "updated_at=? WHERE id=? AND state='queued'",
+                    (token, now, now, row["id"]),
+                ).rowcount
+                if changed != 1:
+                    continue
+                result = self._plan_by_id(db, row["id"])
+                result["claim_token"] = token
+                return result
+            return None
 
     def cancel_plan(self, plan_id: str) -> dict[str, Any]:
         plan_id = _identifier(plan_id)
@@ -1595,6 +1947,7 @@ class EditingService:
             state = db.execute(
                 "SELECT state,claim_token FROM render_plans WHERE id=?", (plan_id,)
             ).fetchone()
+            self._assert_no_unresolved_ai_invocations(db, "render_plan_id", plan_id)
         if state is None:
             raise EditingError("plan_not_found")
         if state["claim_token"] != claim_token or state["state"] not in {"running", "canceling"}:
@@ -1656,6 +2009,9 @@ class EditingService:
                 if (current is None or current["claim_token"] != claim_token
                         or current["state"] != "running"):
                     raise EditingError("stale_render_claim")
+                self._assert_no_unresolved_ai_invocations(
+                    db, "render_plan_id", plan_id
+                )
                 db.executemany(
                     "INSERT INTO assets(id,plan_id,kind,name,suffix,mime_type,size,sha256,"
                     "ordinal,duration_ms,width,height,container,video_codec,audio_codec,created_at) "
@@ -1700,6 +2056,17 @@ class EditingService:
             if row["claim_token"] != claim_token or row["state"] not in {"running", "canceling"}:
                 raise EditingError("stale_render_claim")
             now = _now()
+            self._finalize_ai_invocations_on_owner_failure(
+                db, "render_plan_id", plan_id, now
+            )
+            unknown = db.execute(
+                "SELECT 1 FROM ai_invocations WHERE render_plan_id=? "
+                "AND state IN ('dispatched','unknown') LIMIT 1",
+                (plan_id,),
+            ).fetchone()
+            if unknown is not None:
+                final_state = "failed"
+                code = "ai_remote_result_unknown"
             db.execute(
                 "UPDATE render_plans SET state=?,code=?,claim_token=NULL,updated_at=?,finished_at=? "
                 "WHERE id=? AND claim_token=?", (final_state, code, now, now, plan_id, claim_token),
