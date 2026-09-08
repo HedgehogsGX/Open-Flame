@@ -5,7 +5,7 @@
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -257,7 +257,7 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 - 听写与翻译分别保存不可变 AI task；创建停在 `review`，明确确认后才进入队列。provider 返回的时间轴或译文先保存为 `review` revision，只有整份批准后才可作为下一步输入。
 - `TranslationRevision` 必须按原 cue ID、数量和顺序返回译文，不能丢段、换序或偷偷合并。时间轴 JSON 上限为 3 MiB，为隔离 runtime 的 4 MiB 请求 envelope 留出操作字段和 glossary 空间。
 - 当前 AI runtime 与核心 `.venv`、上传 runtime 分开；builder 冻结 CPython、worker、协议、provider、model declaration 和全文件摘要。标准库 OpenAI provider 不依赖 SDK，API key 只从 `OPEN_FLAME_AI_OPENAI_API_KEY` 读取。
-- 自动流程的听写请求把第一个已选分段作为 `clip_start_ms` / `clip_end_ms`，本机 FFmpeg 只派生这段 mono AAC；provider 返回的相对时间随后加回片段起点。编辑页直接建立听写任务时当前没有片段选择控件，默认处理完整编辑源。
+- 自动流程的听写请求允许完整视频、一个分段或首尾连续的多个分段；有分段时以首段起点和末段终点作为 `clip_start_ms` / `clip_end_ms`，本机 FFmpeg 只派生该连续范围的 mono AAC，provider 返回的相对时间随后加回首段起点。含间隙的多分段在创建远端任务前以 `workflow_ai_segments_must_be_contiguous` 拒绝，避免发送未选择的音频。编辑页直接建立听写任务时当前没有片段选择控件，默认处理完整编辑源。
 - `SpeechOptions` 允许 0.88～1.12 倍语速；每个 cue 独立取得 WAV、检查格式和时长，再在对应分段内构造 PCM 轨。超出时间槽以 `ai_speech_timing_overflow` 失败，不截断或顺延后续 cue。
 - 页面把 provider、model、本地声明 revision、runtime manifest 摘要、标准音色、精确数据外发范围和 effective limits 显示在确认边界。canonical authorization 还绑定 runtime ID/version、protocol schema、provider kind 与 operation；AI task request、配音 recipe 和 Workflow profile 持久化完整值及摘要。创建、确认、worker 和 provider 调用前均与当前能力做摘要/定义 CAS，缺少绑定的旧记录保持可读但必须重建。只有至少一项 authorization 为 `remote` 时才要求数据外发确认；全部为本地 plugin 时由编辑/AI 执行确认覆盖，不伪装成外发。
 - 核心硬上限为：听写 30 分钟且 25 MiB/1 请求；翻译 1000 cues、60000 输入字符、20 个按 50 cues 估算的调用单位；TTS 600 cues、60000 输入字符和 600 次调用。完整输入在第一次 provider 请求前核对，超限以 `ai_budget_exceeded` 失败关闭。这些上限限制一次操作的输入与调用数，不是价格、账号额度或实际 usage ledger。
@@ -311,4 +311,4 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 10. 当前可以准确声称的结果
 
-0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。仓库内验证只覆盖本机定义、三个 ignored validator、synthetic/fake 编排、本地媒体处理、compileall、编辑/自动流程页 JavaScript 语法、依赖一致性和本机浏览器检查；focused 既有测试当前仍有 3 项旧 Schema 1 断言失败。它不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。
+0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复。仓库内验证只覆盖本机定义、ignored validator、synthetic/fake 编排、本地媒体处理、compileall 和既有回归；本轮既有定向集合为 277 passed，另有 3 项历史导航断言仍只接受下载/编辑/上传三项，未包含早已存在的 `/workflows`。测试文件按仓库策略未修改。以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。

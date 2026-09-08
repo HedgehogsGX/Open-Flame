@@ -2,10 +2,14 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Schema 4 远端 AI 调用账本与 unknown 人工核对、非密钥复用预设已接线；预设回填与三项 AI 摘要绑定已修复，真实域离线整链通过；真实模型/三平台发布与当前制品仍未验收
-> 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `1`；上传备份格式：`2`
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出与三账号上传 fan-out 已接线并通过本地故障恢复验证；液态玻璃前端三套候选已在 ignored 本地预览生成，等待用户选定后再改生产页面；真实模型/三平台发布与当前制品仍未验收
+> 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 多分段自动流程切片：Workflow Schema 2 以 `outputs_json` 保存最多 10 个按 recipe ordinal 排列的视频输出；每个输出分别绑定上传 source，并按冻结账号顺序保存 account/platform/current job slot。最多 3 个账号形成不超过 30 个草稿，逐段准备通过稳定幂等键和 durable prefix checkpoint 恢复，但所有草稿仍要一起交给一次 `confirm_many`，任一校验失败时整批不会进入队列。retry 只原位替换当前 leaf job ID，并重新要求确认；Schema 1 只在精确结构、canonical profile/digest、单输出基数和状态/引用一致时事务迁移，矛盾数据库保持 Schema 1。自动 AI 多段只允许首尾连续，避免用 bounding clip 外发未选择的音频。证据见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)。
+
+2026-09-09 前端视觉准备：已按本地 `huashu-design`、`apple-design` 与 `emil-design-eng` 生成三套可运行液态玻璃候选，分别侧重雾面工具台、极光工作区和编辑式玻璃排版；生产 CSS/页面尚未采用新方向。候选位于 ignored 的 `validation/local/liquid-glass-directions-20260909/`，本机比较页为 `http://127.0.0.1:18832/validation/local/liquid-glass-directions-20260909/compare.html`。建议采用 A 的工作区结构和 C 的字体层级；用户选定后再实施四页统一视觉、窄屏、键盘、减少动态/透明度与浏览器 QA。
 
 2026-09-09 复核更正：`b240392` 的旧整链脚本跳过了 AI，仅走一个合成 Bilibili 任务，不能证明 AI/三平台/重启。当前已用真实下载 Worker、LocalWorkflowAdapter、编辑/上传服务、隔离 AI worker 和 FFmpeg 替换验证，实际听写/翻译/配音各一次，输出音频与三平台任务均有断言；真实模型响应和平台网络仍是替身。此前“只剩运行环境”的完成结论撤回。预设还修复了未恢复 AI/音色/定时字段、配音授权摘要缺失和嵌套参数未校验问题。当前证据见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。验证覆盖不足、当前发行冻结和真实平台验收仍是后续工作，目标尚未完成。
 
@@ -15,7 +19,7 @@
 
 2026-09-09 源码 Setup 已进一步复用既有 `uploads.runtime_setup`：显式 `--upload-runtime` 从同一 `--app-root` 派生 `data-uploads`，默认使用已核验的项目 `.venv`，必要时只用 `--upload-python ABSOLUTE_EXE` 覆盖构建解释器。已有 ready runtime 先由 child 完整复核，且不因 build-only Python 不是 3.12 而阻塞；只有缺失目标才先校验 CPython 3.12 x64 后执行原安装器。源码写锁、应用根锁和上传 runtime 锁按固定顺序使用；锁冲突统一 `setup_busy`，其他 child/安装失败固定为 `setup_upload_runtime_failed`，不转发路径或 child 输出。旧 Schema 1、损坏或含非允许内容的部分 runtime 保持原样并失败关闭；空目录和只含允许且散列匹配的固定归档缓存可以续建。当前上传 builder 仍为直接构建而非原子 staging，不能把本入口描述成自动升级或原子替换。ignored validator 已在禁网临时 app-root 覆盖精确路径、默认/覆盖解释器、ready 复用、三层锁、固定失败码、旧/坏/不安全部分目录不变及输出脱敏；默认实际 runtime 前后均保持 Schema 1，本次没有移动它或触发第三方下载、登录、上传。
 
-用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
+用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema；发布后当前代码已迁移到 Workflow Schema 2。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、最多 10 个有序输出、重启恢复、AI 后继重试和最多 30 个任务的一次批量确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 `0592b6f96c8eef60381b31b1e78e5ebf6d7c6a1d` 的 0.28.0 五件制品已由 ignored 的 `validation/local/release-v028-0592b6f-final/release-receipt.json` 绑定并通过独立源码/wheel 验收；这份 receipt 只证明该冻结提交。当前发布后开发进一步让 workflow 区分“平台接收投稿”“平台保存草稿”和合法的混合结果，远端结果不确定时仍优先停止核对；上传账号失效会标记账号并撤回同账号尚未执行的确认；浏览器幂等键只在响应丢失重试期间复用，成功后同参数可重新运行；后台 reconciliation 在无进展时有界退避。证据见 [自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)。
 
@@ -32,7 +36,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | AI 与上传 Setup 的临时 app-root 首建/复用/失败关闭均已禁网通过。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 保存最多 10 个有序输出并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；发布后还收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 仅完成 synthetic/offline 适配、迁移和恢复验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -40,7 +44,7 @@
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.28.0 本地范围见 [AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
+当前 0.28.0 本地范围见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -159,7 +163,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 |---|---|---|
 | 产品 | 单机/NAS、单管理员、私有自托管 | FastAPI 已实现；Windows 本机可独立使用；无认证且强制 loopback |
 | 批量/并发 | 每批 1–50；单 Worker 进程总执行槽 2；单平台活动 Job 1 | 0.18 Windows app 与 standalone drain/poll 已接入真实调度循环，并由无网络屏障回归证明跨平台重叠与连续补位；SQLite claim 事务仍强制上限；历史真实样本不能证明本轮并发 |
-| 数据 | 下载 Schema 11；独立编辑 Schema 4；独立上传 Schema 3；独立 Workflow Schema 1 | 下载继续保留旧 flat-v1/graph、Schema 10 治理和 run-scoped claim gate；编辑域保存导入源、版本化草稿、AI task/timeline、render plan、脱敏远程调用账本与成品；上传旧 Schema 1/2 精确迁移到 Schema 3。四个数据库、Cookie 与各媒体根不混用，未知结构失败关闭 |
+| 数据 | 下载 Schema 11；独立编辑 Schema 4；独立上传 Schema 3；独立 Workflow Schema 2 | 下载继续保留旧 flat-v1/graph、Schema 10 治理和 run-scoped claim gate；编辑域保存导入源、版本化草稿、AI task/timeline、render plan、脱敏远程调用账本与成品；上传旧 Schema 1/2 精确迁移到 Schema 3，Workflow Schema 1 的合法单输出记录事务迁移到 Schema 2。四个数据库、Cookie 与各媒体根不混用，未知结构失败关闭 |
 | 内核 | yt-dlp + FFmpeg/ffprobe 候选 | Windows x64 固定工具已安装、逐文件校验并通过离线 smoke；0.17 固定脱敏 progress/phase 控制协议只在 download 启用，真实平台历史样本不等于本轮进度验收或平台整体验证 |
 | 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
 | 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
@@ -167,7 +171,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 | 前端/API | 下载、编辑、自动流程及 Bilibili/抖音/视频号上传四页 | 0.28.0 四页共用 Apple 风格语义 token、组件基础、系统/浅/深主题、本地静态资源、响应式与无障碍降级；编辑/自动流程页显示 provider、模型、标准音色、数据外发和费用边界，云调用与配音计划分别要求明确确认；runtime 或凭据缺失时保持 blocked |
 | 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
 | 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
-| 备份 | 下载与上传使用两套独立格式；编辑与 Workflow 域尚无备份/恢复；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 以格式 2 保存 Upload Schema 3、登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。Editing Schema 4、Workflow Schema 1、导入源和编辑成品当前不在这两套备份中 |
+| 备份 | 下载与上传使用两套独立格式；编辑与 Workflow 域尚无备份/恢复；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 以格式 2 保存 Upload Schema 3、登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。Editing Schema 4、Workflow Schema 2、导入源和编辑成品当前不在这两套备份中 |
 | Stage 0 | CSV v3；七字段精确 identity | `product_version` 为版本 + 完整包载荷 hash；规范 source identity 防别名充样本；最新 partial run fail closed；报告 aggregate-only，导入只追加 evidence，approve/revoke 另走 revision CAS |
 | 许可证 | 项目自有材料 `Apache-2.0`；`NOTICE` 为 `Copyright 2026 HedgehogsGX & Cyaegha_Xu` | 0.28.0 当前源码继续执行 source-equivalence、metadata、法律文件、依赖、build identity 与隐私门禁；最终重建须匹配冻结契约，精确 archive hash 只在包外报告；旧包记录保留为历史，第三方 binary/container/tool bundle 与 AI 模型再分发仍 blocked |
 
@@ -582,15 +586,15 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 
 ### 7.10 Iteration 0.28.0 当前精确入口
 
-1. T19 已实现独立 AI runtime、持久化 AI task/timeline、原 Editing Schema 3、标准音色配音、Workflow Schema 1，以及 URL→下载→编辑→所选三平台上传草稿的可恢复编排；T20 已追加真实 upload outcome 收敛、逐操作 AI 精确 authorization，并把当前编辑库推进到 Schema 4 远程调用账本。先读本轮证据、`docs/AI_RUNTIME.md` 与 `docs/EDITOR.md`，不要把 runtime 完整性或 synthetic/offline 验收写成真实云模型或平台通过。
+1. T19 已实现独立 AI runtime、持久化 AI task/timeline、原 Editing Schema 3、标准音色配音和 URL→下载→编辑→所选三平台上传草稿的可恢复编排；T20 已追加真实 upload outcome 收敛、逐操作 AI 精确 authorization，把当前编辑库推进到 Schema 4，并把自动流程推进到 Workflow Schema 2 的多输出 fan-out。先读[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、本轮其他证据、`docs/AI_RUNTIME.md` 与 `docs/EDITOR.md`，不要把 runtime 完整性或 synthetic/offline 验收写成真实云模型或平台通过。
 2. AI authorization 的摘要绑定 runtime ID/version、protocol、manifest、provider kind、model ID/本地声明 revision、operation、data egress 与有效 limits；task request、dubbing recipe 和 Workflow profile 保存该值。创建、确认、worker 与 provider 前都要与当前能力重新比对；旧记录可读但不能继续执行，须按当前能力重建。
-3. 自动流程把首个已选分段的派生音频发送给听写；在 provider 前执行 30 分钟/25 MiB 硬上限。翻译最多 1000 cues、60000 输入字符和 20 个按 50 cues 估算的调用单位；TTS 最多 600 cues、60000 输入字符和 600 次调用。这些是本地输入/调用上限，不是供应商价格或已计费 usage ledger。
+3. 自动流程允许完整视频、单个分段或首尾连续的多个分段；有分段时只把首段起点至末段终点的连续派生音频发送给听写，含间隙的多段在远端 task 创建前拒绝。在 provider 前执行 30 分钟/25 MiB 硬上限。翻译最多 1000 cues、60000 输入字符和 20 个按 50 cues 估算的调用单位；TTS 最多 600 cues、60000 输入字符和 600 次调用。这些是本地输入/调用上限，不是供应商价格或已计费 usage ledger。
 4. 渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
-5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`，待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
+5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`；每个 segment/source/account/platform slot 独立持久化，逐段创建失败从 durable prefix 幂等恢复，最多 30 个草稿只经一次完整批量确认。待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
-7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。三个 ignored ledger validator、compileall、两页内联 JS、依赖一致性和本机浏览器检查已通过；focused 既有测试仍有 3 项旧 Schema 1 精确断言失败，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产页面完整恢复 AI 与平台字段，缺失账号/模型不会静默替换。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
+7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、内联 JS、依赖一致性和本机浏览器检查已通过；本轮既有定向集合 277 passed，3 项历史导航断言仍未包含早已存在的 `/workflows`，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；旧单段表单遇到多分段预设会明确拒绝，不会静默只恢复首段。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
-9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。
+9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。液态玻璃三套 ignored 本地候选已经生成，生产四页必须在用户选定方向后实施。
 
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 

@@ -1,6 +1,6 @@
 # Open-Flame 后续执行计划
 
-路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 1、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定以及普通源码 Setup 的可选 AI/上传 runtime 入口均已在禁网临时根验证；下一步是将 Workflow 编排扩展为多分段、多输出上传 fan-out，再由操作者在实际应用根准备 runtime 和当前冻结候选，进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
+路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 2、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定以及普通源码 Setup 的可选 AI/上传 runtime 入口均已在禁网临时根验证；Workflow Schema 2 的多分段、多输出上传 fan-out 已完成本地 synthetic 故障恢复验证。下一步先由用户从三套液态玻璃候选中选定生产视觉，再完成四页统一实现；随后由操作者在实际应用根准备 runtime 和当前冻结候选，进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
 
 ## 1. 目标、边界与完成定义
 
@@ -24,7 +24,7 @@
 | T16 / G6（0.25.0 历史阶段） | T16.1～T16.7 本地开发与禁止远端调用的 G6 验收完成 | 保留为前端基线，不能证明当前制品或平台能力 |
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
 | T18 / G8（0.27.0 历史阶段） | 独立 Editing Schema 1、版本化草稿、多个分段、封面、确认/取消/重试、真实本地 FFmpeg 与显式导入上传完成 | 由 0.28.0 T19 接续；该阶段证据不证明 AI 或真实平台 |
-| T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 1、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
+| T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 2、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现；最多 10 个输出 × 3 个账号形成 30 个精确 slot，逐段准备可从 prefix checkpoint 恢复，全部草稿只经一次批量确认 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
 | T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递；普通源码 Setup 已可选构建/复用 AI runtime，并复用既有上传安装器准备 upload runtime | 预设边界/API/生产页面浏览器、真实域离线整链和两个 Setup runtime 入口已通过本地禁网验证；默认应用根的 AI runtime 仍缺失、upload runtime 仍是 Schema 1；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
 | T11 / T12 | **NOT RUN** | 三平台真实上传与当前六平台下载必须绑定最终 0.28.0 receipt 后的同一构建分别执行 |
 | T15 | **NOT RUN** | Linux、Docker 与 NAS 仍需目标环境独立验收；Windows 本地 UI 结果不能替代 |
@@ -60,9 +60,13 @@ K. 非密钥复用预设与真实域离线整链（T20 已复验；网络与模�
            ↓ 复用参数仍重新绑定 runtime 与账号，禁止真实网络的整链可重复
 K2. 普通源码 Setup 的 AI runtime 安装（T20 已复验；仅临时 app-root）
            ↓ 固定本地 CPython 归档、当前源码字节、原子发布、只读复用和 app-root 锁均失败关闭
-K3. 普通源码 Setup 的上传 runtime 安装（T20 已复验；仅临时 app-root）
-           ↓ 复用既有安装器、精确 data-uploads 派生、三层锁、ready 复用及旧/坏目标失败关闭
-L. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
+  K3. 普通源码 Setup 的上传 runtime 安装（T20 已复验；仅临时 app-root）
+            ↓ 复用既有安装器、精确 data-uploads 派生、三层锁、ready 复用及旧/坏目标失败关闭
+  K4. Workflow Schema 2 多输出与三账号 fan-out（本地 synthetic 已通过）
+            ↓ 有序 slot、prefix checkpoint、retry leaf 原位替换和单次全批确认均失败关闭
+  K5. 液态玻璃四页生产视觉（等待用户从三套真实候选中选定）
+            ↓ 统一 token、响应式、键盘、减少动态/透明度与浏览器 QA
+  L. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
            ↓ G4：按平台、入口、模式分别接受
 M. 根据真实回报修复并收敛当前功能（T13）
            ↓ G5：实际发现的关键缺陷闭环，业务与状态契约稳定
@@ -342,7 +346,7 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 5. **非密钥复用预设与本地整链 smoke 已接线。** `WorkflowPresetStore` 与 `/api/v1/workflows/presets` 已保存 URL 之外可复用的分段/封面/语言/音色/平台内容参数、authorization 摘要及账号选择意图；不得保存 API key、Cookie、扫码状态或账号 session revision，运行时重新绑定当前能力和账号。旧脚本跳过 AI 的成功声明已撤回；当前真实域整链覆盖预设重载、URL→下载 Worker→隔离听写/翻译/配音→FFmpeg→三平台上传服务，且核对配音确实进入视频，最终为合成 `submission_acknowledged`；真实 OpenAI、下载提取、账号登录和三平台发布仍需单独授权验证。
 6. **普通源码 Setup 的两个可选 runtime 入口已接线。** AI runtime 使用固定本地 CPython ZIP 和原子 builder；上传 runtime 使用显式 `--upload-runtime`、可选 build-only `--upload-python` 并复用 `uploads.runtime_setup`。上传目标固定从 `<app-root>/data-uploads` 派生，锁顺序为 source→app-root→upload runtime；ready 复核、旧/坏/含非允许内容的部分目标拒绝、固定失败码和输出脱敏已在 ignored 禁网 validator 通过。上传 builder 仍直接构建，空目录或仅含散列匹配固定归档的安全预置可以续建，不能描述成原子发布。
 
-**T20 当前证据边界：** 见[发布后自动流程正确性记录](../validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。当前只是未发布源码里程碑；三个 ignored ledger validator、compileall、编辑/自动流程页内联 JS、依赖一致性、diff 与本机浏览器检查已通过，focused 既有测试仍有 3 项旧 Schema 1 断言失败。没有新的 clean release receipt，也没有真实 OpenAI、真实下载、真实平台上传/发布、实际价格或真人质量证据。
+**T20 当前证据边界：** 见[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[发布后自动流程正确性记录](../validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。当前只是未发布源码里程碑；ignored ledger/multi-segment validator、compileall、编辑/自动流程页内联 JS、依赖一致性、diff 与本机浏览器检查已通过。本轮既有定向集合 277 passed，另有 3 项历史导航断言未包含早已存在的 `/workflows`；测试文件保持未改。没有新的 clean release receipt，也没有真实 OpenAI、真实下载、真实平台上传/发布、实际价格或真人质量证据。
 
 ## 4. 建议分工与工作量
 
@@ -360,13 +364,13 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 | H：T18 | 编辑域/媒体处理、页面与跨域导入 | 本地实现与 G8 已完成 | G8 分段、封面与显式上传导入闭环 |
 | I：T19 | AI runtime、字幕/翻译/TTS 与 URL 自动流程 | 本地工程完成 | G9 固定模型、许可/隐私、失败边界已验证；真实 API 与人工试听待外部验收 |
 | J：0.28.0 最终冻结 | 发布维护与独立验收 | 由包外 receipt 记录 | clean commit、五件制品、独立安装和包外 receipt 同一身份 |
-| K：T20 发布后开发 | 自动流程 outcome、逐操作授权/硬上限、远端调用账本与复用预设 | outcome、authorization/预算、Schema 4 ledger、预设/API/浏览器与真实域离线 smoke 已通过；当前制品及真实网络/模型仍待验收 | unknown 不被静默重放，日常运行只需 URL 和运行时复核 |
+| K：T20 发布后开发 | 自动流程 outcome、逐操作授权/硬上限、远端调用账本、复用预设与多输出 fan-out | outcome、authorization/预算、Schema 4 ledger、Workflow Schema 2、预设/API/浏览器、真实域离线 smoke 及 2×3 故障恢复已通过；当前制品及真实网络/模型仍待验收 | unknown 不被静默重放，日常运行只需 URL 和运行时复核 |
 
 T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的工作量中。
 
-当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation 已接线；预设与真实域离线 smoke 已按[预设回归](../validation/iteration-0.28.0-workflow-presets.md)和[整链更正](../validation/iteration-0.28.0-full-chain-smoke.md)复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。下一步应由操作者在实际 app-root 用固定本地归档构建并复核 runtime，扩展多 cue 与失败恢复集成范围，再准备当前冻结候选；不得把默认目录不存在推断为本机所有配置均无 runtime。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
+当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation、预设、真实域离线 smoke 与 Workflow Schema 2 多输出 fan-out 已分别按[预设回归](../validation/iteration-0.28.0-workflow-presets.md)、[整链更正](../validation/iteration-0.28.0-full-chain-smoke.md)和[多分段记录](../validation/iteration-0.28.0-multisegment-workflow.md)复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。下一步先按用户选定的液态玻璃候选完成生产四页及浏览器 QA，再由操作者在实际 app-root 用固定本地归档构建并复核 runtime、扩展多 cue 与失败恢复集成范围，并准备当前冻结候选；不得把默认目录不存在推断为本机所有配置均无 runtime。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
 
-上传 Setup 的独立 ignored validator 也已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变、输出脱敏及默认实际 Schema 1 runtime 前后不变。在进入上述外部验收前，下一项工程切片是把当前只接受一个 segment/一个输出的 Workflow Schema 1 扩展为多分段 fan-out，并保留每段×每平台的确认、重启、unknown 与 retry 对账；生产 UI 等本轮液态玻璃方向选定后落地。
+上传 Setup 的独立 ignored validator 也已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变、输出脱敏及默认实际 Schema 1 runtime 前后不变。Workflow Schema 2 已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账和一次完整批量确认。进入外部验收前的下一工程切片是按用户选定的液态玻璃方向落地生产四页；随后冻结当前候选并准备实际 runtime。
 
 ## 5. 每个工作包统一交付检查
 

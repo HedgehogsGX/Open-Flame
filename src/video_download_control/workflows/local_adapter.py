@@ -21,6 +21,8 @@ from .contracts import (
     DownloadSnapshot,
     EditPrepared,
     EditSnapshot,
+    MAX_WORKFLOW_ACCOUNTS,
+    MAX_WORKFLOW_SEGMENTS,
     UploadPrepared,
     UploadSnapshot,
 )
@@ -379,13 +381,7 @@ class LocalWorkflowAdapter:
 
         language = normalized.translation.source_language
         authorization = [authorize]
-        clip_options: dict[str, int] = {}
-        if normalized.segments:
-            segment = normalized.segments[0]
-            clip_options = {
-                "clip_start_ms": segment.start_ms,
-                "clip_end_ms": segment.end_ms,
-            }
+        clip_options = self._transcription_clip_options(normalized)
         try:
             transcription = self.editing_manager.create_ai_task(
                 project_id,
@@ -669,13 +665,7 @@ class LocalWorkflowAdapter:
         ):
             raise WorkflowError("workflow_domain_data_invalid")
         try:
-            clip_options: dict[str, int] = {}
-            if normalized.segments:
-                segment = normalized.segments[0]
-                clip_options = {
-                    "clip_start_ms": segment.start_ms,
-                    "clip_end_ms": segment.end_ms,
-                }
+            clip_options = self._transcription_clip_options(normalized)
             transcription = self.editing_manager.create_ai_task(
                 project_id,
                 "transcribe",
@@ -785,34 +775,86 @@ class LocalWorkflowAdapter:
         if state != "ready":
             return EditSnapshot("attention", code="edit_state_unknown")
 
+        try:
+            recipe = recipe_from_mapping(plan.get("recipe"))
+        except EditingError:
+            return EditSnapshot("attention", code="edit_output_shape_invalid")
+        expected_video_count = len(recipe.segments) or (
+            1 if recipe.dubbing.enabled else 0
+        )
+        if not 1 <= expected_video_count <= MAX_WORKFLOW_SEGMENTS:
+            return EditSnapshot("attention", code="edit_output_shape_invalid")
+
         assets = plan.get("assets")
         if not isinstance(assets, Sequence) or isinstance(assets, (str, bytes)):
             return EditSnapshot("attention", code="edit_output_shape_invalid")
-        segments: list[str] = []
-        dubbed_videos: list[str] = []
-        covers: list[str] = []
+        segments: dict[int, str] = {}
+        dubbed_videos: dict[int, str] = {}
+        covers: dict[int, str] = {}
+        captions: dict[int, str] = {}
+        audio: dict[int, str] = {}
+        assets_by_kind = {
+            "segment": segments,
+            "dubbed_video": dubbed_videos,
+            "cover": covers,
+            "caption": captions,
+            "audio": audio,
+        }
+        all_ids: set[str] = set()
         for asset in assets:
             if not isinstance(asset, Mapping):
                 return EditSnapshot("attention", code="edit_output_shape_invalid")
             kind = asset.get("kind")
-            if kind in {"segment", "dubbed_video"}:
-                try:
-                    target = dubbed_videos if kind == "dubbed_video" else segments
-                    target.append(_hex_identifier(asset.get("id")))
-                except WorkflowError:
-                    return EditSnapshot("attention", code="edit_output_shape_invalid")
-            elif kind == "cover":
-                try:
-                    covers.append(_hex_identifier(asset.get("id")))
-                except WorkflowError:
-                    return EditSnapshot("attention", code="edit_output_shape_invalid")
-        videos = dubbed_videos if dubbed_videos else segments
-        if len(videos) != 1 or len(covers) > 1:
+            if kind not in assets_by_kind or asset.get("plan_id") != plan_id:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            try:
+                asset_id = _hex_identifier(asset.get("id"))
+            except WorkflowError:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            ordinal = asset.get("ordinal")
+            if (
+                isinstance(ordinal, bool)
+                or not isinstance(ordinal, int)
+                or ordinal < 1
+                or asset_id in all_ids
+            ):
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            all_ids.add(asset_id)
+            target = assets_by_kind[kind]
+            if ordinal in target:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            target[ordinal] = asset_id
+
+        expected_ordinals = set(range(1, expected_video_count + 1))
+        if recipe.dubbing.enabled:
+            if set(dubbed_videos) != expected_ordinals:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            if recipe.segments and set(segments) != expected_ordinals:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            if not recipe.segments and segments:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            selected = dubbed_videos
+        else:
+            if dubbed_videos or set(segments) != expected_ordinals:
+                return EditSnapshot("attention", code="edit_output_shape_invalid")
+            selected = segments
+
+        expected_cover_ordinals = {1} if recipe.cover is not None else set()
+        if set(covers) != expected_cover_ordinals:
             return EditSnapshot("attention", code="edit_output_shape_invalid")
+        expected_caption_ordinals = (
+            expected_ordinals if recipe.translation.enabled else set()
+        )
+        if set(captions) != expected_caption_ordinals or audio:
+            return EditSnapshot("attention", code="edit_output_shape_invalid")
+        videos = tuple(
+            selected[ordinal] for ordinal in range(1, expected_video_count + 1)
+        )
         return EditSnapshot(
             "ready",
-            output_id=videos[0],
-            cover_id=covers[0] if covers else None,
+            output_id=videos[0] if len(videos) == 1 else None,
+            cover_id=covers.get(1),
+            output_ids=videos,
         )
 
     def confirm_edit(self, plan_id: str) -> None:
@@ -866,9 +908,17 @@ class LocalWorkflowAdapter:
         output_id: str,
         cover_id: str | None,
         upload: Mapping[str, Any],
+        *,
+        segment_ordinal: int = 1,
     ) -> UploadPrepared:
         workflow_id = _hex_identifier(workflow_id)
         output_id = _hex_identifier(output_id)
+        if (
+            isinstance(segment_ordinal, bool)
+            or not isinstance(segment_ordinal, int)
+            or not 1 <= segment_ordinal <= MAX_WORKFLOW_SEGMENTS
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
         if cover_id is not None:
             cover_id = _hex_identifier(cover_id)
         if not isinstance(upload, Mapping) or set(upload) != _UPLOAD_KEYS:
@@ -878,25 +928,57 @@ class LocalWorkflowAdapter:
             output_path, output_sha256, output_name = (
                 self.editing_manager.resolve_output(output_id)
             )
+            output_path = Path(output_path)
             output_sha256 = _sha256(output_sha256)
-            service = self.upload_manager.get()
-            source = service.import_source(
-                output_path,
-                output_name,
-                expected_sha256=output_sha256,
-                managed_id=_managed_import_id(
-                    workflow_id, "edit_video", output_id, output_sha256
-                ),
-            )
-            source_id = _record_id(source)
 
-            imported_cover_id = None
-            cover_record: Mapping[str, Any] | None = None
+            cover_identity: tuple[Path, str, str] | None = None
             if cover_id is not None:
                 cover_path, cover_sha256, cover_name = (
                     self.editing_manager.resolve_cover(cover_id)
                 )
-                cover_sha256 = _sha256(cover_sha256)
+                cover_identity = (
+                    Path(cover_path),
+                    _sha256(cover_sha256),
+                    cover_name,
+                )
+
+            account_ids = upload.get("account_ids")
+            if (
+                not isinstance(account_ids, list)
+                or not 1 <= len(account_ids) <= MAX_WORKFLOW_ACCOUNTS
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            normalized_account_ids = [_hex_identifier(item) for item in account_ids]
+            if (
+                normalized_account_ids != account_ids
+                or len(set(normalized_account_ids)) != len(normalized_account_ids)
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            bindings = upload.get("account_bindings")
+            if (
+                not isinstance(bindings, Sequence)
+                or isinstance(bindings, (str, bytes))
+                or any(not isinstance(binding, Mapping) for binding in bindings)
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+
+            service = self.upload_manager.get()
+            accounts = service.accounts()
+            platforms = self._account_platforms(accounts, account_ids)
+            # Reject malformed or ambiguously ordered account overrides before
+            # importing the shared cover or any video source.
+            self._upload_overrides(
+                upload.get("target_overrides"),
+                account_ids,
+                platforms,
+                None,
+                None,
+            )
+
+            imported_cover_id = None
+            cover_record: Mapping[str, Any] | None = None
+            if cover_id is not None and cover_identity is not None:
+                cover_path, cover_sha256, cover_name = cover_identity
                 imported = service.import_cover(
                     cover_path,
                     cover_name,
@@ -910,11 +992,6 @@ class LocalWorkflowAdapter:
                 imported_cover_id = _record_id(imported)
                 cover_record = imported
 
-            account_ids = upload.get("account_ids")
-            if not isinstance(account_ids, list):
-                raise WorkflowError("workflow_domain_data_invalid")
-            accounts = service.accounts()
-            platforms = self._account_platforms(accounts, account_ids)
             overrides = self._upload_overrides(
                 upload.get("target_overrides"),
                 account_ids,
@@ -922,6 +999,16 @@ class LocalWorkflowAdapter:
                 cover_record,
                 imported_cover_id,
             )
+
+            source = service.import_source(
+                output_path,
+                output_name,
+                expected_sha256=output_sha256,
+                managed_id=_managed_import_id(
+                    workflow_id, "edit_video", output_id, output_sha256
+                ),
+            )
+            source_id = _record_id(source)
             jobs = service.create_jobs(
                 source_id=source_id,
                 account_ids=list(account_ids),
@@ -933,40 +1020,64 @@ class LocalWorkflowAdapter:
                 copyright=upload["copyright"],
                 source_credit=upload["source_credit"],
                 target_overrides=overrides,
-                expected_account_bindings=[dict(item) for item in upload["account_bindings"]],
-                idempotency_key=f"wf-{workflow_id}-upload-jobs",
+                expected_account_bindings=[dict(binding) for binding in bindings],
+                idempotency_key=(
+                    f"wf-{workflow_id}-upload-jobs"
+                    if segment_ordinal == 1
+                    else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
+                ),
             )
         except EditingError as error:
             _domain_failure(error, "editing_failed")
         except UploadError as error:
             _domain_failure(error, "upload_failed")
 
-        if (
-            not isinstance(jobs, list)
-            or not 1 <= len(jobs) <= 3
-            or len(jobs) != len(account_ids)
-        ):
+        if not isinstance(jobs, list) or len(jobs) != len(account_ids):
             raise WorkflowError("workflow_domain_data_invalid")
-        job_ids = tuple(_record_id(job) for job in jobs)
-        job_accounts = tuple(
-            job.get("account_id") if isinstance(job, Mapping) else None for job in jobs
-        )
-        if (
-            len(set(job_ids)) != len(job_ids)
-            or set(job_accounts) != set(account_ids)
-            or any(
-                not isinstance(job, Mapping) or job.get("source_id") != source_id
-                for job in jobs
-            )
-        ):
-            raise WorkflowError("workflow_domain_data_invalid")
+        job_ids: list[str] = []
+        for job, account_id in zip(jobs, account_ids, strict=True):
+            if not isinstance(job, Mapping):
+                raise WorkflowError("workflow_domain_data_invalid")
+            job_id = _record_id(job)
+            if (
+                job_id in job_ids
+                or job.get("source_id") != source_id
+                or job.get("account_id") != account_id
+                or job.get("platform") != platforms[account_id]
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            job_ids.append(job_id)
         return UploadPrepared(
             source_id=source_id,
             cover_id=imported_cover_id,
-            job_ids=job_ids,
+            job_ids=tuple(job_ids),
         )
 
-    def inspect_upload(self, job_ids: Sequence[str]) -> UploadSnapshot:
+    @staticmethod
+    def _transcription_clip_options(recipe: object) -> dict[str, int]:
+        segments = getattr(recipe, "segments", None)
+        if not isinstance(segments, tuple):
+            raise WorkflowError("workflow_domain_data_invalid")
+        if not segments:
+            return {}
+        if len(segments) > MAX_WORKFLOW_SEGMENTS:
+            raise WorkflowError("workflow_domain_data_invalid")
+        for previous, current in zip(segments, segments[1:]):
+            if previous.end_ms != current.start_ms:
+                # The transcribe protocol currently accepts one continuous
+                # clip.  Refuse a bounding clip with gaps because it would send
+                # audio outside the user's selected segments.
+                raise WorkflowError("workflow_ai_segments_must_be_contiguous")
+        return {
+            "clip_start_ms": segments[0].start_ms,
+            "clip_end_ms": segments[-1].end_ms,
+        }
+
+    def inspect_upload(
+        self,
+        job_ids: Sequence[str],
+        expected_targets: Sequence[Mapping[str, str]] | None = None,
+    ) -> UploadSnapshot:
         if (
             not isinstance(job_ids, Sequence)
             or isinstance(job_ids, (str, bytes))
@@ -974,6 +1085,46 @@ class LocalWorkflowAdapter:
         ):
             return UploadSnapshot("attention", code="upload_job_set_invalid")
         normalized_ids = [_hex_identifier(job_id) for job_id in job_ids]
+        normalized_targets: list[dict[str, str]] | None = None
+        if expected_targets is not None:
+            if (
+                not isinstance(expected_targets, Sequence)
+                or isinstance(expected_targets, (str, bytes))
+                or len(expected_targets) != len(normalized_ids)
+                or len(expected_targets)
+                > MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
+            ):
+                return UploadSnapshot("attention", code="upload_job_set_invalid")
+            normalized_targets = []
+            for index, target in enumerate(expected_targets):
+                if not isinstance(target, Mapping) or set(target) != {
+                    "job_id",
+                    "source_id",
+                    "account_id",
+                    "platform",
+                }:
+                    return UploadSnapshot("attention", code="upload_job_set_invalid")
+                try:
+                    job_id = _hex_identifier(target.get("job_id"))
+                    source_id = _hex_identifier(target.get("source_id"))
+                    account_id = _hex_identifier(target.get("account_id"))
+                except WorkflowError:
+                    return UploadSnapshot("attention", code="upload_job_set_invalid")
+                platform = target.get("platform")
+                if (
+                    job_id != normalized_ids[index]
+                    or not isinstance(platform, str)
+                    or platform not in {"bilibili", "douyin", "tencent"}
+                ):
+                    return UploadSnapshot("attention", code="upload_job_set_invalid")
+                normalized_targets.append(
+                    {
+                        "job_id": job_id,
+                        "source_id": source_id,
+                        "account_id": account_id,
+                        "platform": platform,
+                    }
+                )
         try:
             jobs = self.upload_manager.get().latest_jobs_by_ids(normalized_ids)
         except UploadError as error:
@@ -983,12 +1134,21 @@ class LocalWorkflowAdapter:
         states: list[str] = []
         seen: set[str] = set()
         leaf_ids: list[str] = []
-        for job in jobs:
+        for index, job in enumerate(jobs):
             if not isinstance(job, Mapping):
                 return UploadSnapshot("attention", code="upload_job_set_invalid")
             job_id = _hex_identifier(job.get("id"))
             if job_id in seen:
                 return UploadSnapshot("attention", code="upload_job_set_invalid")
+            if normalized_targets is not None:
+                expected = normalized_targets[index]
+                if any(
+                    job.get(field) != expected[field]
+                    for field in ("source_id", "account_id", "platform")
+                ):
+                    return UploadSnapshot(
+                        "attention", code="upload_job_set_invalid"
+                    )
             seen.add(job_id)
             leaf_ids.append(job_id)
         current_ids = tuple(leaf_ids)

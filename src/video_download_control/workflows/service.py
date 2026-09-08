@@ -21,7 +21,14 @@ from ..editing.ai_authorization import (
     parse_operation_authorization,
 )
 from ..editing.contracts import EditingError, recipe_from_mapping
-from .contracts import UploadSnapshot, WorkflowDomainAdapter
+from .contracts import (
+    MAX_WORKFLOW_ACCOUNTS,
+    MAX_WORKFLOW_SEGMENTS,
+    MAX_WORKFLOW_UPLOAD_JOBS,
+    UploadSnapshot,
+    WorkflowDomainAdapter,
+    workflow_outputs_match_state,
+)
 from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
 
 
@@ -29,6 +36,7 @@ _REQUEST_KEY = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_WORKFLOW_PROGRESS_LIMIT = MAX_WORKFLOW_SEGMENTS * 2 + 12
 _ACTIVE_STATES = {
     "created",
     "downloading",
@@ -159,10 +167,21 @@ def _profile(
         recipe = parsed_recipe.to_dict()
     except EditingError as exc:
         raise WorkflowError(exc.code) from None
-    if len(parsed_recipe.segments) > 1 or (
-        not parsed_recipe.dubbing.enabled and len(parsed_recipe.segments) != 1
+    if len(parsed_recipe.segments) > MAX_WORKFLOW_SEGMENTS or (
+        not parsed_recipe.dubbing.enabled and not parsed_recipe.segments
     ):
-        raise WorkflowError("workflow_requires_single_video_output")
+        raise WorkflowError("workflow_output_count_invalid")
+    if (
+        (parsed_recipe.translation.enabled or parsed_recipe.dubbing.enabled)
+        and len(parsed_recipe.segments) > 1
+        and any(
+            left.end_ms != right.start_ms
+            for left, right in zip(
+                parsed_recipe.segments, parsed_recipe.segments[1:], strict=False
+            )
+        )
+    ):
+        raise WorkflowError("workflow_ai_segments_must_be_contiguous")
     ai_enabled = parsed_recipe.translation.enabled or parsed_recipe.dubbing.enabled
     if parsed_recipe.translation.enabled and not parsed_recipe.dubbing.enabled:
         raise WorkflowError("workflow_translation_requires_dubbing")
@@ -299,7 +318,7 @@ def _profile(
     if (
         not isinstance(account_ids, Sequence)
         or isinstance(account_ids, (str, bytes))
-        or not 1 <= len(account_ids) <= 3
+        or not 1 <= len(account_ids) <= MAX_WORKFLOW_ACCOUNTS
         or any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in account_ids)
         or len(set(account_ids)) != len(account_ids)
     ):
@@ -413,6 +432,161 @@ def _profile(
     return normalized, encoded, digest
 
 
+def _workflow_outputs(
+    value: object,
+    profile: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Validate the ordered edit-to-upload fan-out stored by Workflow Schema 2."""
+
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or len(value) > MAX_WORKFLOW_SEGMENTS
+    ):
+        raise WorkflowError("workflow_data_invalid")
+    recipe = profile.get("edit_recipe")
+    upload = profile.get("upload")
+    if not isinstance(recipe, Mapping) or not isinstance(upload, Mapping):
+        raise WorkflowError("workflow_data_invalid")
+    segments = recipe.get("segments")
+    account_ids = upload.get("account_ids")
+    bindings = upload.get("account_bindings")
+    if (
+        not isinstance(segments, list)
+        or not isinstance(account_ids, list)
+        or not isinstance(bindings, list)
+    ):
+        raise WorkflowError("workflow_data_invalid")
+    expected_outputs = len(segments) or 1
+    if value and len(value) != expected_outputs:
+        raise WorkflowError("workflow_data_invalid")
+    platforms = {
+        item.get("account_id"): item.get("platform")
+        for item in bindings
+        if isinstance(item, Mapping)
+    }
+    if len(platforms) != len(account_ids) or set(platforms) != set(account_ids):
+        raise WorkflowError("workflow_data_invalid")
+
+    normalized: list[dict[str, Any]] = []
+    edit_ids: set[str] = set()
+    source_ids: set[str] = set()
+    job_ids: set[str] = set()
+    prepared: list[bool] = []
+    for ordinal, raw in enumerate(value, start=1):
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "segment_ordinal",
+            "edit_output_id",
+            "upload_source_id",
+            "targets",
+        }:
+            raise WorkflowError("workflow_data_invalid")
+        edit_output_id = raw.get("edit_output_id")
+        source_id = raw.get("upload_source_id")
+        targets = raw.get("targets")
+        if (
+            raw.get("segment_ordinal") != ordinal
+            or not isinstance(edit_output_id, str)
+            or not _HEX_IDENTIFIER.fullmatch(edit_output_id)
+            or edit_output_id in edit_ids
+            or source_id is not None
+            and (
+                not isinstance(source_id, str)
+                or not _HEX_IDENTIFIER.fullmatch(source_id)
+                or source_id in source_ids
+            )
+            or not isinstance(targets, Sequence)
+            or isinstance(targets, (str, bytes))
+        ):
+            raise WorkflowError("workflow_data_invalid")
+        edit_ids.add(edit_output_id)
+        if source_id is not None:
+            source_ids.add(source_id)
+        is_prepared = source_id is not None
+        prepared.append(is_prepared)
+        if (not is_prepared and targets) or (
+            is_prepared and len(targets) != len(account_ids)
+        ):
+            raise WorkflowError("workflow_data_invalid")
+        normalized_targets: list[dict[str, str]] = []
+        if is_prepared:
+            for account_id, target in zip(account_ids, targets, strict=True):
+                if (
+                    not isinstance(target, Mapping)
+                    or set(target) != {"account_id", "platform", "job_id"}
+                    or target.get("account_id") != account_id
+                    or target.get("platform") != platforms[account_id]
+                ):
+                    raise WorkflowError("workflow_data_invalid")
+                job_id = target.get("job_id")
+                if (
+                    not isinstance(job_id, str)
+                    or not _HEX_IDENTIFIER.fullmatch(job_id)
+                    or job_id in job_ids
+                ):
+                    raise WorkflowError("workflow_data_invalid")
+                job_ids.add(job_id)
+                normalized_targets.append(
+                    {
+                        "account_id": account_id,
+                        "platform": platforms[account_id],
+                        "job_id": job_id,
+                    }
+                )
+        normalized.append(
+            {
+                "segment_ordinal": ordinal,
+                "edit_output_id": edit_output_id,
+                "upload_source_id": source_id,
+                "targets": normalized_targets,
+            }
+        )
+    if any(prepared[index] and not prepared[index - 1] for index in range(1, len(prepared))):
+        raise WorkflowError("workflow_data_invalid")
+    if len(job_ids) > MAX_WORKFLOW_UPLOAD_JOBS:
+        raise WorkflowError("workflow_data_invalid")
+    return normalized
+
+
+def _migration_profile_is_valid(value: Mapping[str, object]) -> bool:
+    """Apply the current complete reader contract before a Schema 1 migration."""
+
+    try:
+        _profile(value, bound_accounts=True)
+    except WorkflowError:
+        return False
+    return True
+
+
+def _output_ids_from_snapshot(snapshot: object) -> tuple[str, ...]:
+    raw = getattr(snapshot, "output_ids", ())
+    primary = getattr(snapshot, "output_id", None)
+    if not raw:
+        raw = () if primary is None else (primary,)
+    if (
+        not isinstance(raw, Sequence)
+        or isinstance(raw, (str, bytes))
+        or not 1 <= len(raw) <= MAX_WORKFLOW_SEGMENTS
+        or any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in raw)
+        or len(set(raw)) != len(raw)
+        or (primary is not None and (len(raw) != 1 or primary != raw[0]))
+    ):
+        raise WorkflowError("workflow_domain_data_invalid")
+    return tuple(raw)
+
+
+def _unprepared_outputs(output_ids: Sequence[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "segment_ordinal": ordinal,
+            "edit_output_id": output_id,
+            "upload_source_id": None,
+            "targets": [],
+        }
+        for ordinal, output_id in enumerate(output_ids, start=1)
+    ]
+
+
 class WorkflowService:
     """Own one small state machine; domain media and secrets stay in adapters."""
 
@@ -422,7 +596,10 @@ class WorkflowService:
         self.adapter = adapter
         self._lock = RLock()
         try:
-            ensure_workflow_schema(self.database_path)
+            ensure_workflow_schema(
+                self.database_path,
+                legacy_profile_validator=_migration_profile_is_valid,
+            )
         except WorkflowSchemaError:
             raise WorkflowError("workflow_database_unavailable") from None
 
@@ -589,11 +766,25 @@ class WorkflowService:
 
         workflow_id = self._identifier(workflow_id)
         with self._lock:
-            for _ in range(12):
+            for _ in range(_WORKFLOW_PROGRESS_LIMIT):
                 record = self.get(workflow_id)
                 state = record["state"]
+                if (
+                    state == "attention_required"
+                    and record["outputs"]
+                    and any(
+                        item["upload_source_id"] is None
+                        for item in record["outputs"]
+                    )
+                ):
+                    # Upload preparation only creates local drafts. An explicit
+                    # advance may safely replay the first unfinished segment by
+                    # its stable idempotency key; already checkpointed segments
+                    # stay drafts until the complete fan-out is confirmed.
+                    self._transition(workflow_id, "preparing_upload", "")
+                    continue
                 if state == "attention_required" and record["upload_job_ids"]:
-                    snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+                    snapshot = self._inspect_upload(record)
                     self._sync_upload_job_ids(record, snapshot)
                     if snapshot.status == "ready":
                         self._record_upload_outcome(workflow_id, snapshot)
@@ -633,12 +824,9 @@ class WorkflowService:
                                 snapshot.code or "",
                             )
                             continue
-                        if snapshot.status == "ready" and snapshot.output_id:
-                            self._set_refs(
-                                workflow_id,
-                                edit_output_id=snapshot.output_id,
-                                edit_cover_id=snapshot.cover_id,
-                            )
+                        if snapshot.status == "ready":
+                            if not self._record_edit_outputs(workflow_id, snapshot):
+                                return self.get(workflow_id)
                             self._transition(workflow_id, "preparing_upload", "")
                             continue
                         return self._attention(
@@ -768,6 +956,18 @@ class WorkflowService:
             record = self._expected(workflow_id, expected_revision)
             if record["state"] != "awaiting_upload_confirmation":
                 raise WorkflowError("workflow_state_conflict")
+            original_job_ids = tuple(record["upload_job_ids"])
+            snapshot = self._inspect_upload(record)
+            self._sync_upload_job_ids(record, snapshot)
+            if snapshot.job_ids is not None and snapshot.job_ids != original_job_ids:
+                return self.get(workflow_id)
+            if snapshot.status in {"failed", "attention"}:
+                return self._attention(
+                    workflow_id, snapshot.code or "upload_attention_required"
+                )
+            if snapshot.status == "ready":
+                self._record_upload_outcome(workflow_id, snapshot)
+                return self.get(workflow_id)
             try:
                 self.adapter.confirm_uploads(
                     record["upload_job_ids"],
@@ -790,7 +990,7 @@ class WorkflowService:
             if record["code"] in _AI_LEDGER_REVIEW_CODES:
                 raise WorkflowError("workflow_retry_not_available")
             if record["edit_plan_id"] is not None:
-                if record["edit_output_id"] is not None or record["upload_job_ids"]:
+                if record["edit_output_ids"] or record["upload_job_ids"]:
                     raise WorkflowError("workflow_retry_not_available")
                 snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
                 if snapshot.status == "waiting" and snapshot.code in {
@@ -961,12 +1161,9 @@ class WorkflowService:
             if snapshot.status == "failed" or snapshot.status == "attention":
                 self._attention(workflow_id, snapshot.code or "edit_attention_required")
                 return False
-            if snapshot.status == "ready" and snapshot.output_id:
-                self._set_refs(
-                    workflow_id,
-                    edit_output_id=snapshot.output_id,
-                    edit_cover_id=snapshot.cover_id,
-                )
+            if snapshot.status == "ready":
+                if not self._record_edit_outputs(workflow_id, snapshot):
+                    return False
                 self._transition(workflow_id, "preparing_upload", "")
                 return True
             self.adapter.confirm_edit(record["edit_plan_id"])
@@ -985,36 +1182,67 @@ class WorkflowService:
                         "edit_restart_confirmation_required",
                     )
                 return False
-            if snapshot.status != "ready" or not snapshot.output_id:
+            if snapshot.status != "ready":
                 self._attention(workflow_id, snapshot.code or "edit_attention_required")
                 return False
-            self._set_refs(
-                workflow_id,
-                edit_output_id=snapshot.output_id,
-                edit_cover_id=snapshot.cover_id,
-            )
+            if not self._record_edit_outputs(workflow_id, snapshot):
+                return False
             self._transition(workflow_id, "preparing_upload", "")
             return True
         if state == "preparing_upload":
-            if not record["edit_output_id"]:
+            outputs = record["outputs"]
+            if not outputs:
                 self._attention(workflow_id, "workflow_data_invalid")
                 return False
-            prepared = self.adapter.prepare_upload(
-                workflow_id,
-                record["edit_output_id"],
-                record["edit_cover_id"],
-                record["profile"]["upload"],
+            pending = next(
+                (item for item in outputs if item["upload_source_id"] is None), None
             )
+            if pending is None:
+                self._transition(workflow_id, "awaiting_upload_confirmation", "")
+                return True
+            try:
+                prepared = self.adapter.prepare_upload(
+                    workflow_id,
+                    pending["edit_output_id"],
+                    record["edit_cover_id"],
+                    record["profile"]["upload"],
+                    segment_ordinal=pending["segment_ordinal"],
+                )
+            except WorkflowError as error:
+                self._attention(workflow_id, error.code)
+                return False
+            job_ids = tuple(prepared.job_ids)
+            account_ids = record["profile"]["upload"]["account_ids"]
+            bindings = record["profile"]["upload"]["account_bindings"]
+            platforms = {item["account_id"]: item["platform"] for item in bindings}
+            if len(job_ids) != len(account_ids):
+                self._attention(workflow_id, "workflow_domain_data_invalid")
+                return False
+            replacement = [dict(item) for item in outputs]
+            index = pending["segment_ordinal"] - 1
+            replacement[index] = {
+                **pending,
+                "upload_source_id": prepared.source_id,
+                "targets": [
+                    {
+                        "account_id": account_id,
+                        "platform": platforms[account_id],
+                        "job_id": job_id,
+                    }
+                    for account_id, job_id in zip(account_ids, job_ids, strict=True)
+                ],
+            }
+            if record["upload_cover_id"] not in {None, prepared.cover_id}:
+                self._attention(workflow_id, "workflow_domain_data_invalid")
+                return False
             self._set_refs(
                 workflow_id,
-                upload_source_id=prepared.source_id,
+                outputs=replacement,
                 upload_cover_id=prepared.cover_id,
-                upload_job_ids=list(prepared.job_ids),
             )
-            self._transition(workflow_id, "awaiting_upload_confirmation", "")
             return True
         if state == "awaiting_upload_confirmation":
-            snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+            snapshot = self._inspect_upload(record)
             self._sync_upload_job_ids(record, snapshot)
             if snapshot.status == "failed" or snapshot.status == "attention":
                 self._attention(workflow_id, snapshot.code or "upload_attention_required")
@@ -1044,7 +1272,7 @@ class WorkflowService:
             self._transition(workflow_id, "uploading", "")
             return True
         if state == "uploading":
-            snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+            snapshot = self._inspect_upload(record)
             self._sync_upload_job_ids(record, snapshot)
             if snapshot.status == "waiting":
                 if snapshot.code in {
@@ -1080,6 +1308,36 @@ class WorkflowService:
         self._transition(workflow_id, "completed", code)
         return True
 
+    def _record_edit_outputs(self, workflow_id: str, snapshot: object) -> bool:
+        try:
+            output_ids = _output_ids_from_snapshot(snapshot)
+            self._set_refs(
+                workflow_id,
+                outputs=_unprepared_outputs(output_ids),
+                edit_cover_id=getattr(snapshot, "cover_id", None),
+            )
+        except WorkflowError:
+            self._attention(workflow_id, "workflow_domain_data_invalid")
+            return False
+        return True
+
+    def _inspect_upload(self, record: Mapping[str, Any]) -> UploadSnapshot:
+        expected_targets = [
+            {
+                "job_id": target["job_id"],
+                "source_id": output["upload_source_id"],
+                "account_id": target["account_id"],
+                "platform": target["platform"],
+            }
+            for output in record["outputs"]
+            for target in output["targets"]
+        ]
+        if len(expected_targets) != len(record["upload_job_ids"]):
+            raise WorkflowError("workflow_data_invalid")
+        return self.adapter.inspect_upload(
+            record["upload_job_ids"], expected_targets=expected_targets
+        )
+
     def _sync_upload_job_ids(
         self, record: dict[str, Any], snapshot: UploadSnapshot
     ) -> None:
@@ -1087,9 +1345,39 @@ class WorkflowService:
             return
         current = tuple(record["upload_job_ids"])
         if snapshot.job_ids != current:
-            replacement = list(snapshot.job_ids)
-            self._set_refs(record["id"], upload_job_ids=replacement)
-            record["upload_job_ids"] = replacement
+            if (
+                not isinstance(snapshot.job_ids, Sequence)
+                or isinstance(snapshot.job_ids, (str, bytes))
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            replacement = tuple(snapshot.job_ids)
+            if (
+                len(replacement) != len(current)
+                or any(
+                    not isinstance(item, str)
+                    or not _HEX_IDENTIFIER.fullmatch(item)
+                    for item in replacement
+                )
+                or len(set(replacement)) != len(replacement)
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            iterator = iter(replacement)
+            outputs: list[dict[str, Any]] = []
+            for output in record["outputs"]:
+                targets = [
+                    {**target, "job_id": next(iterator)}
+                    for target in output["targets"]
+                ]
+                outputs.append({**output, "targets": targets})
+            try:
+                next(iterator)
+            except StopIteration:
+                pass
+            else:
+                raise WorkflowError("workflow_domain_data_invalid")
+            self._set_refs(record["id"], outputs=outputs)
+            record["outputs"] = outputs
+            record["upload_job_ids"] = list(replacement)
 
     def _identifier(self, value: str) -> str:
         if not isinstance(value, str) or not _HEX_IDENTIFIER.fullmatch(value):
@@ -1127,11 +1415,9 @@ class WorkflowService:
             "edit_project_id",
             "edit_draft_version",
             "edit_plan_id",
-            "edit_output_id",
             "edit_cover_id",
-            "upload_source_id",
             "upload_cover_id",
-            "upload_job_ids",
+            "outputs",
         }
         if not values or set(values) - allowed:
             raise WorkflowError("workflow_data_invalid")
@@ -1142,9 +1428,7 @@ class WorkflowService:
         identifier_fields = {
             "edit_project_id",
             "edit_plan_id",
-            "edit_output_id",
             "edit_cover_id",
-            "upload_source_id",
             "upload_cover_id",
         }
         for name in download_identifier_fields & values.keys():
@@ -1161,27 +1445,37 @@ class WorkflowService:
             version = values["edit_draft_version"]
             if isinstance(version, bool) or not isinstance(version, int) or version < 1:
                 raise WorkflowError("workflow_data_invalid")
-        if "upload_job_ids" in values:
-            job_ids = values["upload_job_ids"]
-            if (
-                not isinstance(job_ids, list)
-                or not 1 <= len(job_ids) <= 3
-                or any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in job_ids)
-                or len(set(job_ids)) != len(job_ids)
-            ):
-                raise WorkflowError("workflow_data_invalid")
         assignments: list[str] = []
         parameters: list[object] = []
-        for name, value in values.items():
-            column = "upload_job_ids_json" if name == "upload_job_ids" else name
-            if name == "upload_job_ids":
-                value = json.dumps(value, separators=(",", ":"))
-            assignments.append(f"{column}=?")
-            parameters.append(value)
-        assignments.extend(("revision=revision+1", "updated_at=?"))
-        parameters.extend((_now(), workflow_id))
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            if "outputs" in values:
+                row = db.execute(
+                    "SELECT profile_json FROM workflows WHERE id=?", (workflow_id,)
+                ).fetchone()
+                if row is None:
+                    raise WorkflowError("workflow_not_found")
+                try:
+                    profile = json.loads(row["profile_json"])
+                except (TypeError, ValueError):
+                    raise WorkflowError("workflow_data_invalid") from None
+                normalized_profile, _, _ = _profile(profile, bound_accounts=True)
+                values["outputs"] = _workflow_outputs(
+                    values["outputs"], normalized_profile
+                )
+            for name, value in values.items():
+                column = "outputs_json" if name == "outputs" else name
+                if name == "outputs":
+                    value = json.dumps(
+                        value,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                assignments.append(f"{column}=?")
+                parameters.append(value)
+            assignments.extend(("revision=revision+1", "updated_at=?"))
+            parameters.extend((_now(), workflow_id))
             changed = db.execute(
                 f"UPDATE workflows SET {','.join(assignments)} WHERE id=?",
                 parameters,
@@ -1241,15 +1535,34 @@ class WorkflowService:
     def _public(self, row: sqlite3.Row) -> dict[str, Any]:
         try:
             profile = json.loads(row["profile_json"])
-            upload_job_ids = json.loads(row["upload_job_ids_json"])
+            legacy_job_ids = json.loads(row["upload_job_ids_json"])
+            raw_outputs = json.loads(row["outputs_json"])
         except (TypeError, ValueError):
             raise WorkflowError("workflow_data_invalid") from None
-        if not isinstance(profile, dict) or not isinstance(upload_job_ids, list):
+        if not isinstance(profile, dict) or legacy_job_ids != []:
             raise WorkflowError("workflow_data_invalid")
-        _, encoded, profile_digest = _profile(profile, bound_accounts=True)
+        normalized_profile, encoded, profile_digest = _profile(
+            profile, bound_accounts=True
+        )
         if encoded != row["profile_json"] or profile_digest != row["profile_sha256"]:
             raise WorkflowError("workflow_data_invalid")
-        if any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in upload_job_ids):
+        outputs = _workflow_outputs(raw_outputs, normalized_profile)
+        outputs_json = json.dumps(
+            outputs,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if (
+            outputs_json != row["outputs_json"]
+            or row["edit_output_id"] is not None
+            or row["upload_source_id"] is not None
+        ):
+            raise WorkflowError("workflow_data_invalid")
+        expected_output_count = len(normalized_profile["edit_recipe"]["segments"]) or 1
+        if not workflow_outputs_match_state(
+            row["state"], outputs, expected_output_count
+        ):
             raise WorkflowError("workflow_data_invalid")
         for field in ("batch_id", "download_asset_id"):
             if row[field] is not None and not _download_identifier(row[field]):
@@ -1257,9 +1570,7 @@ class WorkflowService:
         for field in (
             "edit_project_id",
             "edit_plan_id",
-            "edit_output_id",
             "edit_cover_id",
-            "upload_source_id",
             "upload_cover_id",
         ):
             value = row[field]
@@ -1272,8 +1583,31 @@ class WorkflowService:
         public.pop("request_digest")
         public.pop("profile_json")
         public.pop("upload_job_ids_json")
-        public["profile"] = profile
+        public.pop("outputs_json")
+        edit_output_ids = [item["edit_output_id"] for item in outputs]
+        upload_source_ids = [
+            item["upload_source_id"]
+            for item in outputs
+            if item["upload_source_id"] is not None
+        ]
+        upload_job_ids = [
+            target["job_id"]
+            for item in outputs
+            for target in item["targets"]
+        ]
+        public["profile"] = normalized_profile
+        public["outputs"] = outputs
+        public["edit_output_ids"] = edit_output_ids
+        public["upload_source_ids"] = upload_source_ids
         public["upload_job_ids"] = upload_job_ids
+        public["edit_output_id"] = (
+            edit_output_ids[0] if len(edit_output_ids) == 1 else None
+        )
+        public["upload_source_id"] = (
+            upload_source_ids[0] if len(upload_source_ids) == 1 else None
+        )
+        public["edit_output_count"] = len(edit_output_ids)
+        public["upload_job_count"] = len(upload_job_ids)
         public["auto_confirm_edit"] = bool(row["auto_confirm_edit"])
         public["auto_confirm_upload"] = bool(row["auto_confirm_upload"])
         public["schema_version"] = SCHEMA_VERSION

@@ -8,6 +8,47 @@ from typing import Any, Literal, Mapping, Protocol, Sequence
 
 StepStatus = Literal["waiting", "ready", "failed", "attention"]
 UploadOutcome = Literal["submitted", "draft_saved", "mixed"]
+MAX_WORKFLOW_SEGMENTS = 10
+MAX_WORKFLOW_ACCOUNTS = 3
+MAX_WORKFLOW_UPLOAD_JOBS = MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
+
+
+def workflow_outputs_match_state(
+    state: object,
+    outputs: Sequence[Mapping[str, Any]],
+    expected_count: int,
+) -> bool:
+    """Return whether a canonical fan-out shape is reachable in ``state``."""
+
+    if (
+        isinstance(expected_count, bool)
+        or not isinstance(expected_count, int)
+        or not 1 <= expected_count <= MAX_WORKFLOW_SEGMENTS
+        or not isinstance(outputs, Sequence)
+        or isinstance(outputs, (str, bytes))
+        or len(outputs) not in {0, expected_count}
+    ):
+        return False
+    prepared_count = sum(
+        isinstance(output, Mapping) and output.get("upload_source_id") is not None
+        for output in outputs
+    )
+    if state in {
+        "created",
+        "downloading",
+        "preparing_edit",
+        "awaiting_ai_review",
+    }:
+        return not outputs
+    if state in {"awaiting_edit_confirmation", "rendering"}:
+        return not outputs or prepared_count == 0
+    if state == "preparing_upload":
+        return len(outputs) == expected_count
+    if state in {"awaiting_upload_confirmation", "uploading", "completed"}:
+        return len(outputs) == expected_count and prepared_count == expected_count
+    if state in {"attention_required", "canceled"}:
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +80,11 @@ class EditSnapshot:
     output_id: str | None = None
     cover_id: str | None = None
     code: str = ""
+    # Ordered by the recipe segment ordinal.  ``output_id`` remains populated
+    # only for the historical single-output shape so older workflow stores fail
+    # closed instead of silently selecting the first item from a multi-output
+    # render.
+    output_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,9 +156,15 @@ class WorkflowDomainAdapter(Protocol):
         output_id: str,
         cover_id: str | None,
         upload: Mapping[str, Any],
+        *,
+        segment_ordinal: int = 1,
     ) -> UploadPrepared: ...
 
-    def inspect_upload(self, job_ids: Sequence[str]) -> UploadSnapshot: ...
+    def inspect_upload(
+        self,
+        job_ids: Sequence[str],
+        expected_targets: Sequence[Mapping[str, str]] | None = None,
+    ) -> UploadSnapshot: ...
 
     def confirm_uploads(
         self,

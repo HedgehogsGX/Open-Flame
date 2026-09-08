@@ -46,6 +46,7 @@ const codeNames={submission_acknowledged:'平台已确认接收投稿；审核�
 Object.assign(codeNames,{submission_and_draft_acknowledged:'投稿平台已确认接收，草稿平台已确认保存；审核、定时执行与公开状态仍须后台核对'});
 Object.assign(codeNames,{ai_authorization_required:'此旧流程未绑定精确 AI runtime、模型修订与硬预算，请按当前能力重建流程',ai_authorization_binding_required:'此旧流程未绑定精确 AI runtime、模型修订与硬预算，请按当前能力重建流程',ai_authorization_changed:'AI runtime、模型修订或硬预算已变化，请刷新能力并重建流程',ai_authorization_invalid:'AI 授权数据无效，请重建流程',ai_budget_exceeded:'AI 操作超过本次授权的硬预算，请缩短分段或减少文字后重建流程',ai_budget_invalid:'AI 硬预算数据无效，请重建流程',workflow_profile_confirmation_required:'此操作需要确认当前流程参数快照',workflow_profile_changed:'流程参数快照已变化，请刷新后重新核对',invalid_workflow_profile_confirmation:'流程参数确认摘要无效，请刷新后重试',workflow_domain_data_invalid:'流程中的 AI 授权数据无效，请重建流程'});
 Object.assign(codeNames,{ai_remote_result_unknown:'远程 AI 结果无法确认；请先到编辑页核对调用账本',ai_remote_retry_blocked:'远程调用账本已阻止重试；请到编辑页查看固定核对结论',ai_remote_reconciliation_required:'必须先到编辑页核对远程调用结果',ai_remote_not_accepted:'已确认远程服务没有接受本次调用，可以建立待确认重试',ai_remote_accepted_without_result:'已确认远程服务接受调用但没有可用结果；当前流程不允许重试',ai_remote_abandoned:'本次远程调用已放弃；当前流程不允许重试'});
+Object.assign(codeNames,{workflow_ai_segments_must_be_contiguous:'自动 AI 多分段必须首尾连续，避免外发未选择的音频',workflow_output_count_invalid:'自动流程支持 1–10 个分段',workflow_requires_single_video_output:'旧流程只支持一个视频输出，请重新创建',workflow_progress_limit:'流程同步步骤超过安全上限，请刷新后重试'});
 const ledgerReviewCodes=new Set(['ai_remote_result_unknown','ai_remote_retry_blocked','ai_remote_reconciliation_required','ai_remote_accepted_without_result','ai_remote_abandoned']);
 Object.assign(codeNames,{workflow_preset_invalid:'预设参数无效，请核对后重新保存',workflow_preset_not_found:'预设不存在，请刷新列表',workflow_preset_conflict:'预设数量已达上限',workflow_preset_authorization_changed:'预设的 AI 能力已变化，请核对后保存新预设',workflow_preset_storage_unavailable:'预设文件不可读或校验失败，请检查本地存储'});
 function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('danger',error);}
@@ -152,7 +153,7 @@ function render(items){
       button.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/confirm-upload',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
       actions.append(button);
     }
-    const needsLedgerReview=item.state==='attention_required'&&ledgerReviewCodes.has(item.code),aiRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_plan_id&&!item.edit_output_id&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
+    const needsLedgerReview=item.state==='attention_required'&&ledgerReviewCodes.has(item.code),aiRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_plan_id&&!(item.edit_output_ids||[]).length&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
     if(needsLedgerReview){const ledger=el('a','在编辑页核对远程调用账本','button-link');ledger.href='/edits';actions.append(ledger);}
     if(aiRetry||renderRetry){
       const retry=el('button',renderRetry?'创建编辑重试计划':'创建 AI 重试任务');
@@ -201,7 +202,7 @@ function showPresetTargets(overrides){
 function applyPreset(id){
   if(!id){appliedPreset=null;$('preset-help').textContent='已解除预设关联；已载入的独立投稿参数和当前表单继续保留。';return;}
   const preset=workflowPresets.find(item=>item.id===id);if(!preset)throw new Error('预设已不可用，请刷新');
-  const p=preset.profile,r=p.edit_recipe,u=p.upload,segment=r.segments[0],cover=r.cover,t=r.translation,d=r.dubbing;
+  const p=preset.profile,r=p.edit_recipe,u=p.upload;if(!Array.isArray(r.segments)||r.segments.length>1)throw new Error('该预设包含多个分段；请等待多分段界面完成后再在本页载入，当前不会只显示或授权其中一段。');const segment=r.segments[0],cover=r.cover,t=r.translation,d=r.dubbing;
   appliedPreset=preset;presetParameters=preset;changedUploadFields.clear();$('workflow-name').value=preset.name;$('credential-mode').value=p.download_credential_mode;
   $('segment-enabled').checked=Boolean(segment);$('segment-start').value=(segment?.start_ms??0)/1000;$('segment-end').value=(segment?.end_ms??60000)/1000;$('segment-label').value=segment?.label??'主视频';
   $('cover-enabled').checked=Boolean(cover);$('cover-ratio').value=cover?.aspect_ratio??'4:3';$('cover-time').value=(cover?.timestamp_ms??0)/1000;$('cover-use-title').checked=false;$('cover-title').value=cover?.title??'';$('cover-subtitle').value=cover?.subtitle??'';
