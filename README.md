@@ -2,19 +2,19 @@
 
 这是一个面向单机、单管理员、私有环境的媒体控制面，包含下载器、非破坏性编辑工作台和需要逐项确认的上传器。下载、编辑与上传分别保存数据和任务状态。
 
-> 当前开发版本为 **0.27.0**，下载数据库仍为 **Schema 11**，编辑库独立使用 **Schema 1**，上传库独立使用 **Schema 3**。编辑页支持把已登记下载成品复制进独立编辑区，建立版本化草稿，生成多个 H.264/AAC MP4 分段，并抽帧、裁切、缩放和叠加标题制作 PNG 封面；计划须先核对再确认，编辑视频还须显式复制进上传区。AI 时间轴与听写/翻译/配音 provider 合同已经建立，但隔离模型运行时尚未安装或验收，因此页面明确显示为不可用。首批上传仍只有 Bilibili、抖音和视频号。此前 0.24.2 构建曾由用户完成 Bilibili 扫码和账号检查；0.27.0 没有重新验证登录态，三平台真实投稿、定时发布和审核结果仍需由外部测试员分别验收。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
+> 当前开发版本为 **0.28.0**，下载数据库仍为 **Schema 11**，编辑库独立使用 **Schema 3**，上传库独立使用 **Schema 3**，自动流程使用独立 **Workflow Schema 1**。除分段和封面外，编辑域现在支持隔离 runtime 驱动的 OpenAI `whisper-1` 听写、`gpt-5.6-luna` 翻译和 `gpt-4o-mini-tts` 标准音色配音；时间轴须审核，处理计划冻结已批准修订。`/workflows` 可把一个 URL 串接到下载、编辑、AI 和所选 Bilibili、抖音、视频号上传草稿，并按用户预先授权或逐步确认继续。AI runtime 和密钥不随包提供，三平台真实投稿、定时发布和审核结果仍需外部测试员分别验收。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
-编辑入口为 `/edits`，也可从 ready 下载成品点击“进入编辑”；具体流程见[编辑工作台指南](docs/EDITOR.md)。外部上传测试入口仍为[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。
+自动流程入口为 `/workflows`；编辑入口为 `/edits`，也可从 ready 下载成品点击“进入编辑”。具体流程见[编辑工作台指南](docs/EDITOR.md)与[可选 AI Runtime](docs/AI_RUNTIME.md)。外部上传测试入口仍为[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。
 
 2026-09-05 的八项 Debug 发现已进入 0.24.3 修复：上传异常恢复、完整运行时校验、原件完整性与类型、Worker 状态、历史列表、上传库结构和运维文档。当前提交前复验及追加边界修复见[最终源码审查](validation/iteration-0.24.3-final-review.md)；[此前修复记录](validation/iteration-0.24.3-debug-fixes.md)和[原始核验报告](validation/full-debug-20260905.md)保留各自历史构建，[后续执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)跟踪剩余工作。旧上传运行时须按[升级步骤](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，账号和上传数据保留。
 
-0.27.0 在 0.26.0 的 T17 上传参数基础上完成 T18 本地编辑切片；当前证据见[编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)，此前[上传参数与 Schema 3 记录](validation/iteration-0.26.0-upload-parameters-evidence.md)、[前端与冻结记录](validation/iteration-0.25.0-t16-frontend-evidence.md)和[0.24.4 数据生命周期记录](validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)保留各自历史范围。精确 Upload Schema 1 或 2 仍按固定迁移转换为 Schema 3；未知、损坏或更高版本保持原样并拒绝启动。固定 Git commit、制品 identity、五个发行文件和独立安装的实际结果由包外 release receipt 绑定，不能写回被打包源码自证。
+0.28.0 在 0.27.0 的 T18 本地编辑切片上完成 T19 AI runtime 与 URL 自动流程；当前证据见[0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)，此前[编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)、[上传参数与 Schema 3 记录](validation/iteration-0.26.0-upload-parameters-evidence.md)及更早记录保留各自历史范围。Editing Schema 1/2 会按精确结构逐步迁移到 Schema 3；Upload Schema 1/2 会迁移到 Upload Schema 3。未知、损坏或更高版本保持原样并拒绝启动。固定 Git commit、制品 identity、五个发行文件和独立安装的实际结果由包外 release receipt 绑定，不能写回被打包源码自证。
 
 下载、编辑和上传三页共用[设计规范](docs/DESIGN_SYSTEM.md)、语义 token、主题脚本和固定本地资源路由；[交互式视觉基准](docs/design-preview.html)直接读取同一生产 CSS。
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。下载备份不包含上传目录；上传数据使用单独的 `video-upload-backup` 命令。
 
-首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)；[0.26.0 上传参数记录](validation/iteration-0.26.0-upload-parameters-evidence.md)、[0.25.0 前端记录](validation/iteration-0.25.0-t16-frontend-evidence.md)及更早记录保持为历史。
+首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
 
 上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
 
@@ -28,7 +28,8 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 | 项目 | 当前状态 |
 |---|---|
-| 编辑工作台 | `/edits`；下载成品只读复制到独立 `data-edits`；版本化草稿、多个分段、封面抽帧/比例裁切/标题叠加、不可变处理计划、逐项确认、取消与重试、成品哈希和显式导入上传；AI provider/时间轴合同已建立，自动听写、翻译和配音仍阻塞于隔离运行时与模型验收 |
+| 编辑工作台 | `/edits`；下载成品只读复制到独立 `data-edits`；版本化草稿、多个分段、封面、AI 听写/翻译任务、可审核时间轴、标准音色配音、绑定时间轴的不可变处理计划、取消与显式重试、成品哈希和导入上传；AI runtime 缺失或无凭据时明确阻塞 |
+| 自动流程 | `/workflows`；持久化串接 URL 下载、单视频编辑、AI 审核/确认、上传草稿和所选账号的原子批量确认；重启与重试会停下再确认。账号登录 revision 改变时拒绝旧绑定；上传重试只沿账号/来源/平台不变的唯一 leaf 对账，未知远端结果停下人工核对 |
 | 上传器 | `/uploads`；Bilibili、抖音、视频号的独立账号与任务；先本地草稿、后明确确认；支持逐平台文案/标签/封面/发布时间及平台参数、本地账号墓碑、媒体与封面占用/显式删除、视频精确恢复；开源工具运行环境独立安装；真实平台投稿与定时发布未验收 |
 | Windows 一体化应用 | `video-download-local-app` 可独立启动控制面、Worker 与浏览器；固定 app/data/database 布局、抢占前预检、严格握手、单实例、异常子进程回收及结构化日志继续保留；Schema 11 的 two-phase run claim gate 将“允许领取”和停机关闭在 SQLite 写事务中线性化，旧 run 不能因 Pipe 检查竞态领取新 Job |
 | Web UI / FastAPI 控制面 | 可由一体化入口启动，也保留开发用单独入口；下载/编辑/上传页共用本地语义样式、系统/浅/深主题、响应式布局与 CSP；显示每个 Job 的中文阶段与估算进度，列出 ready 原件及其缩略图/字幕；无认证，代码强制绑定 loopback |
@@ -46,9 +47,10 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 当前实现包括：
 
-- 独立 Editing Schema 1、下载原件 SHA-256 复核复制、版本化草稿、乐观并发、幂等请求、不可变 render plan、明确确认、单本地 Worker、取消/重试 lineage 和中断恢复；编辑域不会覆盖下载原件。
+- 独立 Editing Schema 3、下载原件 SHA-256 复核复制、版本化草稿、乐观并发、幂等请求、不可变 AI task/timeline/render plan 及 plan-to-timeline 绑定、明确确认、单本地 Worker、取消/重试 lineage 和中断恢复；编辑域不会覆盖下载原件。
 - 固定 FFmpeg/ffprobe 的多分段 MP4 和 Pillow 封面制作，输出记录大小、SHA-256、时长、尺寸、容器与 codec；固定文件名不包含用户标题，媒体命令不经过 shell。
-- 严格 SRT/VTT 时间轴读写及 transcription/translation/speech provider 接口；未安装模型时 capability 保持 blocked，翻译/配音参数不会被静默忽略。
+- 严格 SRT/VTT 时间轴读写、隔离 CPython runtime 与标准库 OpenAI provider；`whisper-1` 听写、`gpt-5.6-luna` 结构化翻译和 `gpt-4o-mini-tts` 标准音色均经 manifest 显式声明。每个 cue 最多 4096 字符；自动流程只把第一个已选分段的派生音频交给听写，结果再换算回源时间。runtime、凭据或能力缺失时保持 blocked。
+- AI 渲染按每个已选分段过滤并把字幕/配音时间归零；边界切入 cue 时以 `ai_segment_boundary_splits_cue` 拒绝，纯 B-roll 分段生成空 VTT 和本地静音而不调用 TTS。保留原声时将原声压到 22% 后与配音混合；AI 或配音重试须再次确认，已经完成的远程批次/cue 仍可能重复计费。
 - 编辑视频通过 `edit_output_id` 显式复制到上传域并再次校验；该动作不创建上传任务，更不会调用平台适配器。
 - Web 提交页面、最近批次恢复入口、ready 原件及其缩略图/字幕链接和显式响应 DTO；JSON、TXT、CSV 一批最多 50 条输入。
 - X 单帖、YouTube 单视频/Shorts、Bilibili 普通 BV/av 默认分 P、Douyin 单作品、TikTok `/@handle/video/{id}` 与 Instagram `/reel/{shortcode}` 的 URL 提取、白名单校验、规范化和去重；Bilibili `p > 1` 与 Instagram 帖子/轮播/Story/Live 会明确拒绝。TikTok `vm`/`vt` 被建模为需受控展开的短链，不会静默当作直链。
@@ -67,7 +69,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 - deployment-owned Cookie source override、六平台 0–6 映射、完整祖先/ACL/路径重叠检查、Worker core-dump 禁用，以及默认只读且需要二次明确授权才执行变更的 Linux/Docker acceptance runner。
 - [ADR-0001](docs/adr/0001-x-attachment-discovery.md) 的 Schema 8 graph-v2 编排已实现；真实 stable key 与 exact-selector 仍未经过 Stage 0，故真实 X graph 路由保持 gate 关闭。
 
-准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在 [Iteration 0.27.0 编辑工作台证据](validation/iteration-0.27.0-editing-workspace-evidence.md)；[Iteration 0.26.0 上传参数与 Schema 3](validation/iteration-0.26.0-upload-parameters-evidence.md)、[Iteration 0.25.0 T16 前端](validation/iteration-0.25.0-t16-frontend-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前构建、AI 模型或真实平台验收。
+准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在 [Iteration 0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)；[Iteration 0.27.0 编辑工作台证据](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前构建、AI 模型或真实平台验收。
 
 ## 本地启动
 
@@ -236,7 +238,7 @@ uv run video-download-local-worker `
 
 ### Stage 0 v3 证据与决定
 
-先把模板复制到仓库外的私有目录，并从实际执行验证的同一当前版本包读取 build identity；把 JSON 中的完整 `product_identity` 原样填写进 results 的 `product_version` 列。不要只填 `0.27.0`，不要沿用旧构建 identity，也不要手工替换 SHA-256。另填写一个不含主机名、用户名或路径的安全 `environment` token。报告只输出 aggregate，不含 URL、来源 identity hash、sample ID 或 run ID：
+先把模板复制到仓库外的私有目录，并从实际执行验证的同一当前版本包读取 build identity；把 JSON 中的完整 `product_identity` 原样填写进 results 的 `product_version` 列。不要只填 `0.28.0`，不要沿用旧构建 identity，也不要手工替换 SHA-256。另填写一个不含主机名、用户名或路径的安全 `environment` token。报告只输出 aggregate，不含 URL、来源 identity hash、sample ID 或 run ID：
 
 ```powershell
 uv run video-download-validation --print-product-identity
@@ -444,7 +446,7 @@ uv run video-upload-backup restore `
   --restore-upload-root C:\vdc-upload-restore-drill
 ```
 
-上传命令只接受精确 Upload Schema 3，并拒绝活动上传 Worker。备份格式 2 包含静态上传数据库、`media_state=present` 且大小/SHA-256 一致的登记视频与封面，以及数据库内的非秘密账号元数据；排除 `private`、`runtime`、`incoming`、未登记媒体、锁和临时文件。恢复目标必须不存在，恢复后 `running` 任务为 `unknown`、`queued` 任务回到 `draft`，活动账号须重新登录或检查；命令不构造上传 backend，也不访问平台。0.27.0 的应用生命周期以及 started/standby 上传服务会持有 shared activity lease，备份或恢复所需的 exclusive lease 会拒绝这些存活实例。执行前仍应正常停止所有实例；该协作锁无法约束未实现此协议的旧版本或外部写入者，不能把一次 CLI 成功解释为在线备份承诺。
+上传命令只接受精确 Upload Schema 3，并拒绝活动上传 Worker。备份格式 2 包含静态上传数据库、`media_state=present` 且大小/SHA-256 一致的登记视频与封面，以及数据库内的非秘密账号元数据；排除 `private`、`runtime`、`incoming`、未登记媒体、锁和临时文件。恢复目标必须不存在，恢复后 `running` 任务为 `unknown`、`queued` 任务回到 `draft`，活动账号须重新登录或检查；命令不构造上传 backend，也不访问平台。0.28.0 的应用生命周期以及 started/standby 上传服务会持有 shared activity lease，备份或恢复所需的 exclusive lease 会拒绝这些存活实例。执行前仍应正常停止所有实例；该协作锁无法约束未实现此协议的旧版本或外部写入者，不能把一次 CLI 成功解释为在线备份承诺。
 
 ## 安全边界
 
@@ -457,7 +459,7 @@ uv run video-upload-backup restore `
 - 业务数据库只保存 profile ID 与 opaque ref；claim 后 JobLease 仅向 `ProbeRequest` / `DownloadRequest` 传递 opaque ref，不持久化 Cookie 路径或内容。Cookie 源到 Attempt 私有 `0600` 副本的组件已测试路径、权限、identity、swap 与 fsync。当前 override 只是 service-level isolation：单个 Worker 仍能读整棵多平台 source root，真实凭据上线前需要 credential sidecar、per-platform Worker 或 per-attempt mount namespace。
 - 代码中的凭证流已接通；credential-free base Compose 不含 Cookie，显式 override 才把 root-owned source/mapping 只读挂到 Worker。Host preflight 拒绝路径重叠、不安全祖先、named/default ACL、links、错误 owner/mode 与 race；full acceptance 还要求 host `/proc/sys/kernel/core_pattern` 可读且不是 pipe collector，因为 Worker `RLIMIT_CORE=0` 单独不能排除主机侧 crash capture。这些仍只有静态/Windows 离线证据。
 - Linux runner 的 execute mode 还要求 effective root，并固定使用通过 Python 3.12+ 检查的 `/usr/bin/python3`。Docker endpoint 判定遵循 `DOCKER_CONTEXT` 高于 `DOCKER_HOST` 的官方 precedence；execute 拒绝 inherited Docker/Compose/BuildKit endpoint、config 与 project/profile 控制变量，default context 仍须解析为 local Unix Linux daemon。Fresh build tag 只作初始名称；runner 随即捕获并验证不可变 local `sha256:...` image ID，把该 ID 写进 effective Compose，再递归拒绝 `$` 并在 private env 同目录冻结为 `root:root 0600` 文件。二次渲染必须与原 JSON 深等值并再次通过完整校验；之后 Compose mutation 只用 frozen file，direct `docker run` 和 runtime `Image` inspect 均绑定同一 ID，checkpoint 也会重验它，避免 tag rebind 改变验收对象。正常退出只按 identity/snapshot 删除冻结文件，crash 残留必须在受保护目录人工定点审计。
-- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后执行 `pip check`。Runner 的 network-none runtime contract 还精确核对 14 个 runtime-lock distributions + `video-download-control==0.27.0`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；这些 target Linux 检查尚未执行。
+- Dockerfile 不再引用外部 syntax image；两个 Python `FROM` 都硬编码同一 `python:3.12.13-slim-bookworm` digest，不能由 ARG 覆盖。`pyproject.toml`/`requirements.build.in` 精确固定 `hatchling==1.27.0`，`requirements.build.lock` 与 `requirements.runtime.lock` 固定 exact version + SHA-256。唯一允许 Python package 网络访问的是 `pip download --no-deps --only-binary=:all: --require-hashes`；后续 build-dependency install、project wheel build、runtime install 均 `RUN --network=none` + `--no-index`，项目 wheel 用 `--no-build-isolation --no-deps` 构建并按精确路径安装，最后执行 `pip check`。Runner 的 network-none runtime contract 还精确核对 14 个 runtime-lock distributions + `video-download-control==0.28.0`，并拒绝五个 build-only distributions 泄漏。Lock 可能同时列 wheel/sdist hashes，但 `--only-binary=:all:` 在命令层拒绝 sdist；这些 target Linux 检查尚未执行。
 - `VDC_ENABLE_X_GRAPH_V2` 只改变新 X Input 的任务形状，不会让 adapter 获得 exact selector。当前真实 `YtDlpAdapter.supports_exact_selector=False`；即使误入队，Worker claim 也会 fail closed，因此不要把该保护当作启用方案。
 - 下载输出、元数据和媒体文件始终视为不可信输入；不绕过 DRM、付费墙、验证码、地区或其他访问控制。
 

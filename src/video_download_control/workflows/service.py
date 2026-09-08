@@ -1,0 +1,1026 @@
+"""Durable, restart-safe orchestration across download, edit and upload domains."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sqlite3
+from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import RLock
+from typing import Any, Iterator
+from uuid import UUID, uuid4
+
+from ..editing.contracts import EditingError, recipe_from_mapping
+from .contracts import UploadSnapshot, WorkflowDomainAdapter
+from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
+
+
+_REQUEST_KEY = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
+_AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
+_ACTIVE_STATES = {
+    "created",
+    "downloading",
+    "preparing_edit",
+    "awaiting_ai_review",
+    "awaiting_edit_confirmation",
+    "rendering",
+    "preparing_upload",
+    "awaiting_upload_confirmation",
+    "uploading",
+}
+
+
+class WorkflowError(ValueError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def default_workflow_root(data_root: Path) -> Path:
+    data_root = Path(data_root)
+    return data_root.with_name(data_root.name + "-workflows")
+
+
+def _download_identifier(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value
+    except (ValueError, AttributeError):
+        return False
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _canonical(value: Mapping[str, Any]) -> tuple[str, str]:
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        raise WorkflowError("invalid_workflow_profile") from None
+    if len(encoded.encode("utf-8")) > 128 * 1024:
+        raise WorkflowError("workflow_profile_too_large")
+    return encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _text(value: object, maximum: int, *, required: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > maximum:
+        raise WorkflowError("invalid_workflow_profile")
+    if any(ord(character) < 32 and character not in "\n\t\r" for character in value):
+        raise WorkflowError("invalid_workflow_profile")
+    result = value.strip()
+    if required and not result:
+        raise WorkflowError("invalid_workflow_profile")
+    return result
+
+
+def _profile(
+    value: Mapping[str, Any], *, bound_accounts: bool = False
+) -> tuple[dict[str, Any], str, str]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "edit_recipe",
+        "ai",
+        "upload",
+        "download_credential_mode",
+        "auto_confirm_edit",
+        "auto_confirm_upload",
+        "ai_data_egress_accepted",
+    }:
+        raise WorkflowError("invalid_workflow_profile")
+    auto_edit = value.get("auto_confirm_edit")
+    auto_upload = value.get("auto_confirm_upload")
+    if not isinstance(auto_edit, bool) or not isinstance(auto_upload, bool):
+        raise WorkflowError("invalid_workflow_profile")
+    if auto_upload and not auto_edit:
+        raise WorkflowError("upload_automation_requires_edit_automation")
+    ai_data_egress_accepted = value.get("ai_data_egress_accepted")
+    if not isinstance(ai_data_egress_accepted, bool):
+        raise WorkflowError("invalid_workflow_profile")
+    credential_mode = value.get("download_credential_mode")
+    if credential_mode not in {"anonymous", "use_default"}:
+        raise WorkflowError("invalid_workflow_profile")
+    raw_recipe = value.get("edit_recipe")
+    try:
+        parsed_recipe = recipe_from_mapping(raw_recipe)
+        recipe = parsed_recipe.to_dict()
+    except EditingError as exc:
+        raise WorkflowError(exc.code) from None
+    if len(parsed_recipe.segments) > 1 or (
+        not parsed_recipe.dubbing.enabled and len(parsed_recipe.segments) != 1
+    ):
+        raise WorkflowError("workflow_requires_single_video_output")
+    ai_enabled = parsed_recipe.translation.enabled or parsed_recipe.dubbing.enabled
+    if ai_enabled and not ai_data_egress_accepted:
+        raise WorkflowError("ai_data_egress_confirmation_required")
+    if not ai_enabled and ai_data_egress_accepted:
+        raise WorkflowError("invalid_workflow_profile")
+    if parsed_recipe.translation.enabled and not parsed_recipe.dubbing.enabled:
+        raise WorkflowError("workflow_translation_requires_dubbing")
+    raw_ai = value.get("ai")
+    if ai_enabled:
+        runtime_tokens = [
+            parsed_recipe.translation.provider,
+            parsed_recipe.translation.model,
+        ]
+        if parsed_recipe.dubbing.enabled:
+            runtime_tokens.extend(
+                (parsed_recipe.dubbing.provider, parsed_recipe.dubbing.model)
+            )
+        if any(_AI_TOKEN.fullmatch(item) is None for item in runtime_tokens):
+            raise WorkflowError("invalid_workflow_profile")
+        if not isinstance(raw_ai, Mapping) or set(raw_ai) != {
+            "transcription_provider",
+            "transcription_model",
+        }:
+            raise WorkflowError("invalid_workflow_profile")
+        transcription_provider = raw_ai.get("transcription_provider")
+        transcription_model = raw_ai.get("transcription_model")
+        if (
+            not isinstance(transcription_provider, str)
+            or _AI_TOKEN.fullmatch(transcription_provider) is None
+            or not isinstance(transcription_model, str)
+            or _AI_TOKEN.fullmatch(transcription_model) is None
+        ):
+            raise WorkflowError("invalid_workflow_profile")
+        if parsed_recipe.dubbing.enabled and not parsed_recipe.translation.enabled:
+            raise WorkflowError("workflow_dubbing_requires_translation")
+        if (
+            parsed_recipe.translation.source_language.casefold()
+            != "auto"
+            and parsed_recipe.translation.source_language.casefold()
+            == parsed_recipe.translation.target_language.casefold()
+        ):
+            raise WorkflowError("workflow_translation_languages_match")
+        normalized_ai: dict[str, str] | None = {
+            "transcription_provider": transcription_provider,
+            "transcription_model": transcription_model,
+        }
+    else:
+        if raw_ai is not None:
+            raise WorkflowError("invalid_workflow_profile")
+        normalized_ai = None
+    raw_upload = value.get("upload")
+    if not isinstance(raw_upload, Mapping):
+        raise WorkflowError("invalid_workflow_profile")
+    required_upload = {
+        "account_ids",
+        "title",
+        "description",
+        "tags",
+        "category_id",
+        "mode",
+        "copyright",
+        "source_credit",
+        "target_overrides",
+    }
+    expected_upload = required_upload | ({"account_bindings"} if bound_accounts else set())
+    if set(raw_upload) != expected_upload:
+        raise WorkflowError("invalid_workflow_profile")
+    account_ids = raw_upload.get("account_ids")
+    if (
+        not isinstance(account_ids, Sequence)
+        or isinstance(account_ids, (str, bytes))
+        or not 1 <= len(account_ids) <= 3
+        or any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in account_ids)
+        or len(set(account_ids)) != len(account_ids)
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    tags = raw_upload.get("tags")
+    if (
+        not isinstance(tags, Sequence)
+        or isinstance(tags, (str, bytes))
+        or len(tags) > 10
+        or any(not isinstance(item, str) or not item.strip() or len(item) > 40 for item in tags)
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    normalized_tags = [_text(item, 20, required=True) for item in tags]
+    if len(normalized_tags) != len(set(normalized_tags)):
+        raise WorkflowError("invalid_workflow_profile")
+    mode = raw_upload.get("mode")
+    if mode not in {"draft", "publish"}:
+        raise WorkflowError("invalid_workflow_profile")
+    category_id = raw_upload.get("category_id")
+    copyright_value = raw_upload.get("copyright")
+    if category_id is not None and (
+        isinstance(category_id, bool)
+        or not isinstance(category_id, int)
+        or not 1 <= category_id <= 10_000
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    if copyright_value is not None and (
+        isinstance(copyright_value, bool)
+        or not isinstance(copyright_value, int)
+        or copyright_value not in {1, 2}
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    target_overrides = raw_upload.get("target_overrides")
+    if (
+        not isinstance(target_overrides, Sequence)
+        or isinstance(target_overrides, (str, bytes))
+        or len(target_overrides) > len(account_ids)
+        or any(not isinstance(item, Mapping) for item in target_overrides)
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    override_accounts: list[str] = []
+    for item in target_overrides:
+        account_id = item.get("account_id")
+        if (
+            not isinstance(account_id, str)
+            or not _HEX_IDENTIFIER.fullmatch(account_id)
+            or account_id not in account_ids
+            or account_id in override_accounts
+        ):
+            raise WorkflowError("invalid_workflow_profile")
+        override_accounts.append(account_id)
+    normalized_bindings: list[dict[str, str]] = []
+    if bound_accounts:
+        raw_bindings = raw_upload.get("account_bindings")
+        if (
+            not isinstance(raw_bindings, Sequence)
+            or isinstance(raw_bindings, (str, bytes))
+            or len(raw_bindings) != len(account_ids)
+        ):
+            raise WorkflowError("invalid_workflow_profile")
+        seen_bindings: set[str] = set()
+        for item in raw_bindings:
+            if not isinstance(item, Mapping) or set(item) != {
+                "account_id",
+                "platform",
+                "session_revision",
+            }:
+                raise WorkflowError("invalid_workflow_profile")
+            account_id = item.get("account_id")
+            platform = item.get("platform")
+            session_revision = item.get("session_revision")
+            if (
+                not isinstance(account_id, str)
+                or account_id not in account_ids
+                or account_id in seen_bindings
+                or platform not in {"bilibili", "douyin", "tencent"}
+                or not isinstance(session_revision, str)
+                or not _HEX_IDENTIFIER.fullmatch(session_revision)
+            ):
+                raise WorkflowError("invalid_workflow_profile")
+            seen_bindings.add(account_id)
+            normalized_bindings.append(
+                {
+                    "account_id": account_id,
+                    "platform": platform,
+                    "session_revision": session_revision,
+                }
+            )
+    normalized: dict[str, Any] = {
+        "download_credential_mode": credential_mode,
+        "edit_recipe": recipe,
+        "ai": normalized_ai,
+        "upload": {
+            "account_ids": list(account_ids),
+            "title": _text(raw_upload.get("title"), 100, required=True),
+            "description": _text(raw_upload.get("description"), 2000),
+            "tags": normalized_tags,
+            "category_id": category_id,
+            "mode": mode,
+            "copyright": copyright_value,
+            "source_credit": _text(raw_upload.get("source_credit"), 200),
+            "target_overrides": [dict(item) for item in target_overrides],
+        },
+        "auto_confirm_edit": auto_edit,
+        "auto_confirm_upload": auto_upload,
+        "ai_data_egress_accepted": ai_data_egress_accepted,
+    }
+    if bound_accounts:
+        normalized["upload"]["account_bindings"] = normalized_bindings
+    encoded, digest = _canonical(normalized)
+    return normalized, encoded, digest
+
+
+class WorkflowService:
+    """Own one small state machine; domain media and secrets stay in adapters."""
+
+    def __init__(self, root: Path, adapter: WorkflowDomainAdapter) -> None:
+        self.root = Path(root)
+        self.database_path = self.root / "workflows.sqlite3"
+        self.adapter = adapter
+        self._lock = RLock()
+        try:
+            ensure_workflow_schema(self.database_path)
+        except WorkflowSchemaError:
+            raise WorkflowError("workflow_database_unavailable") from None
+
+    @contextmanager
+    def _db(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.database_path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=30000")
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    def create(
+        self,
+        *,
+        source_url: str,
+        name: str,
+        profile: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if not isinstance(idempotency_key, str) or not _REQUEST_KEY.fullmatch(
+            idempotency_key
+        ):
+            raise WorkflowError("invalid_idempotency_key")
+        source_url = _text(source_url, 4096, required=True)
+        if not source_url.startswith(("https://", "http://")):
+            raise WorkflowError("invalid_source_url")
+        name = _text(name, 160, required=True)
+        normalized, _encoded, intent_profile_digest = _profile(profile)
+        request_payload = {
+            "source_url": source_url,
+            "name": name,
+            "profile_sha256": intent_profile_digest,
+        }
+        _, request_digest = _canonical(request_payload)
+        with self._lock:
+            with self._db() as db:
+                prior = db.execute(
+                    "SELECT * FROM workflows WHERE request_key=?", (idempotency_key,)
+                ).fetchone()
+                if prior is not None:
+                    if prior["request_digest"] != request_digest:
+                        raise WorkflowError("idempotency_conflict")
+                    return self._public(prior)
+            cover = normalized["edit_recipe"].get("cover")
+            account_bindings = self.adapter.validate_upload(
+                normalized["upload"],
+                cover_aspect_ratio=(
+                    None if cover is None else cover.get("aspect_ratio")
+                ),
+            )
+            normalized["upload"]["account_bindings"] = [
+                dict(item) for item in account_bindings
+            ]
+            normalized, encoded, profile_digest = _profile(
+                normalized, bound_accounts=True
+            )
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                prior = db.execute(
+                    "SELECT * FROM workflows WHERE request_key=?", (idempotency_key,)
+                ).fetchone()
+                if prior is not None:
+                    if prior["request_digest"] != request_digest:
+                        raise WorkflowError("idempotency_conflict")
+                    return self._public(prior)
+                workflow_id = uuid4().hex
+                now = _now()
+                db.execute(
+                """INSERT INTO workflows(
+ id,request_key,request_digest,source_url,name,profile_json,profile_sha256,
+ state,code,batch_name,upload_job_ids_json,auto_confirm_edit,
+ auto_confirm_upload,revision,created_at,updated_at)
+ VALUES(?,?,?,?,?,?,?,'created','',?,'[]',?,?,1,?,?)""",
+                (
+                    workflow_id,
+                    idempotency_key,
+                    request_digest,
+                    source_url,
+                    name,
+                    encoded,
+                    profile_digest,
+                    f"Open-Flame workflow {workflow_id}",
+                    int(normalized["auto_confirm_edit"]),
+                    int(normalized["auto_confirm_upload"]),
+                    now,
+                    now,
+                ),
+                )
+                self._event(db, workflow_id, None, "created", "", now)
+                return self._by_id(db, workflow_id)
+
+    def get(self, workflow_id: str) -> dict[str, Any]:
+        workflow_id = self._identifier(workflow_id)
+        with self._db() as db:
+            return self._by_id(db, workflow_id)
+
+    def list(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise WorkflowError("invalid_limit")
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT * FROM workflows ORDER BY created_at DESC,id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._public(row) for row in rows]
+
+    def active_page(
+        self,
+        after: tuple[str, str] | None,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return one cursor page so every durable active workflow is reconciled."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise WorkflowError("invalid_limit")
+        if after is not None and (
+            not isinstance(after, tuple)
+            or len(after) != 2
+            or not all(isinstance(item, str) and item for item in after)
+        ):
+            raise WorkflowError("workflow_data_invalid")
+        states = tuple(sorted(_ACTIVE_STATES))
+        placeholders = ",".join("?" for _ in states)
+
+        def fetch(cursor: tuple[str, str] | None) -> list[sqlite3.Row]:
+            query = f"SELECT * FROM workflows WHERE state IN ({placeholders})"
+            values: list[object] = list(states)
+            if cursor is not None:
+                query += " AND (created_at>? OR (created_at=? AND id>?))"
+                values.extend((cursor[0], cursor[0], cursor[1]))
+            query += " ORDER BY created_at,id LIMIT ?"
+            values.append(limit)
+            with self._db() as db:
+                return db.execute(query, values).fetchall()
+
+        rows = fetch(after)
+        if not rows and after is not None:
+            rows = fetch(None)
+        return [self._public(row) for row in rows]
+
+    def events(self, workflow_id: str) -> list[dict[str, Any]]:
+        workflow_id = self._identifier(workflow_id)
+        with self._db() as db:
+            if db.execute("SELECT 1 FROM workflows WHERE id=?", (workflow_id,)).fetchone() is None:
+                raise WorkflowError("workflow_not_found")
+            rows = db.execute(
+                "SELECT sequence,from_state,to_state,code,created_at "
+                "FROM workflow_events WHERE workflow_id=? ORDER BY sequence",
+                (workflow_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def advance(self, workflow_id: str) -> dict[str, Any]:
+        """Advance synchronous seams until the workflow must wait for a domain."""
+
+        workflow_id = self._identifier(workflow_id)
+        with self._lock:
+            for _ in range(12):
+                record = self.get(workflow_id)
+                state = record["state"]
+                if state == "attention_required" and record["upload_job_ids"]:
+                    snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+                    self._sync_upload_job_ids(record, snapshot)
+                    if snapshot.status == "ready":
+                        self._transition(workflow_id, "completed", "")
+                        continue
+                    if snapshot.status == "waiting":
+                        confirmation_codes = {
+                            "upload_restart_confirmation_required",
+                            "upload_retry_confirmation_required",
+                        }
+                        self._transition(
+                            workflow_id,
+                            (
+                                "awaiting_upload_confirmation"
+                                if snapshot.code in confirmation_codes
+                                else "uploading"
+                            ),
+                            snapshot.code,
+                        )
+                        continue
+                    return self.get(workflow_id)
+                if state not in _ACTIVE_STATES:
+                    return record
+                progressed = self._advance_once(record)
+                if not progressed:
+                    return self.get(workflow_id)
+            return self._attention(workflow_id, "workflow_progress_limit")
+
+    def confirm_edit(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+        with self._lock:
+            record = self._expected(workflow_id, expected_revision)
+            if record["state"] != "awaiting_edit_confirmation" or not record["edit_plan_id"]:
+                raise WorkflowError("workflow_state_conflict")
+            self.adapter.confirm_edit(record["edit_plan_id"])
+            self._transition(workflow_id, "rendering", "")
+            return self.advance(workflow_id)
+
+    def confirm_ai(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+        """Authorize exactly the AI action or result review currently waiting."""
+
+        with self._lock:
+            record = self._expected(workflow_id, expected_revision)
+            if record["state"] != "awaiting_ai_review" or not record["edit_project_id"]:
+                raise WorkflowError("workflow_state_conflict")
+            snapshot = self.adapter.advance_ai(
+                workflow_id,
+                record["edit_project_id"],
+                record["profile"]["edit_recipe"],
+                record["profile"]["ai"],
+                authorize=True,
+                explicit=True,
+            )
+            if snapshot.status in {"failed", "attention"}:
+                return self._attention(
+                    workflow_id, snapshot.code or "ai_review_required"
+                )
+            if snapshot.status == "ready":
+                if not snapshot.plan_id or snapshot.draft_version is None:
+                    return self._attention(workflow_id, "workflow_data_invalid")
+                self._set_refs(
+                    workflow_id,
+                    edit_draft_version=snapshot.draft_version,
+                    edit_plan_id=snapshot.plan_id,
+                )
+                self._transition(workflow_id, "awaiting_edit_confirmation", "")
+            else:
+                self._transition(workflow_id, "awaiting_ai_review", snapshot.code)
+            return self.advance(workflow_id)
+
+    def confirm_upload(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+        with self._lock:
+            record = self._expected(workflow_id, expected_revision)
+            if record["state"] != "awaiting_upload_confirmation":
+                raise WorkflowError("workflow_state_conflict")
+            try:
+                self.adapter.confirm_uploads(
+                    record["upload_job_ids"],
+                    record["profile"]["upload"]["account_bindings"],
+                )
+            except WorkflowError as error:
+                if error.code == "account_session_changed":
+                    return self._attention(workflow_id, error.code)
+                raise
+            self._transition(workflow_id, "uploading", "")
+            return self.advance(workflow_id)
+
+    def retry(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+        """Create an explicitly reviewable successor for failed AI or rendering."""
+
+        with self._lock:
+            record = self._expected(workflow_id, expected_revision)
+            if record["state"] != "attention_required" or not record["edit_project_id"]:
+                raise WorkflowError("workflow_retry_not_available")
+            if record["edit_plan_id"] is not None:
+                if record["edit_output_id"] is not None or record["upload_job_ids"]:
+                    raise WorkflowError("workflow_retry_not_available")
+                snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
+                if snapshot.status == "waiting" and snapshot.code in {
+                    "explicit_confirmation_required",
+                    "restart_confirmation_required",
+                }:
+                    self._transition(
+                        workflow_id,
+                        "awaiting_edit_confirmation",
+                        "render_retry_confirmation_required",
+                    )
+                    return self.get(workflow_id)
+                plan_id = self.adapter.retry_edit(
+                    workflow_id, record["edit_plan_id"]
+                )
+                self._set_refs(workflow_id, edit_plan_id=plan_id)
+                self._transition(
+                    workflow_id,
+                    "awaiting_edit_confirmation",
+                    "render_retry_confirmation_required",
+                )
+                return self.get(workflow_id)
+            if record["profile"]["ai"] is None:
+                raise WorkflowError("workflow_retry_not_available")
+            self.adapter.retry_ai(
+                workflow_id,
+                record["edit_project_id"],
+                record["profile"]["edit_recipe"],
+                record["profile"]["ai"],
+            )
+            self._transition(
+                workflow_id,
+                "awaiting_ai_review",
+                "ai_retry_confirmation_required",
+            )
+            return self.get(workflow_id)
+
+    def require_attention(
+        self,
+        workflow_id: str,
+        code: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+            code = "workflow_failed"
+        with self._lock:
+            record = (
+                self.get(self._identifier(workflow_id))
+                if expected_revision is None
+                else self._expected(workflow_id, expected_revision)
+            )
+            if record["state"] not in _ACTIVE_STATES:
+                return record
+            return self._attention(record["id"], code)
+
+    def _advance_once(self, record: dict[str, Any]) -> bool:
+        workflow_id, state = record["id"], record["state"]
+        if state == "created":
+            batch_id = self.adapter.create_download(
+                workflow_id,
+                record["source_url"],
+                record["profile"]["download_credential_mode"],
+            )
+            self._set_refs(workflow_id, batch_id=batch_id)
+            self._transition(workflow_id, "downloading", "")
+            return True
+        if state == "downloading":
+            if not record["batch_id"]:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            snapshot = self.adapter.inspect_download(record["batch_id"])
+            if snapshot.status == "waiting":
+                return False
+            if snapshot.status != "ready" or not snapshot.asset_id:
+                self._attention(workflow_id, snapshot.code or "download_attention_required")
+                return False
+            self._set_refs(workflow_id, download_asset_id=snapshot.asset_id)
+            self._transition(workflow_id, "preparing_edit", "")
+            return True
+        if state == "preparing_edit":
+            if not record["download_asset_id"]:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            prepared = self.adapter.prepare_edit(
+                workflow_id,
+                record["download_asset_id"],
+                record["profile"]["edit_recipe"],
+            )
+            self._set_refs(
+                workflow_id,
+                edit_project_id=prepared.project_id,
+                edit_draft_version=prepared.draft_version,
+                edit_plan_id=prepared.plan_id,
+            )
+            next_state = (
+                "awaiting_ai_review"
+                if prepared.awaiting_ai_review
+                else "awaiting_edit_confirmation"
+            )
+            self._transition(workflow_id, next_state, "")
+            return True
+        if state == "awaiting_ai_review":
+            if not record["edit_project_id"] or record["profile"]["ai"] is None:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            if record["code"] in {
+                "ai_restart_confirmation_required",
+                "ai_retry_confirmation_required",
+            }:
+                return False
+            snapshot = self.adapter.advance_ai(
+                workflow_id,
+                record["edit_project_id"],
+                record["profile"]["edit_recipe"],
+                record["profile"]["ai"],
+                authorize=record["auto_confirm_edit"],
+                explicit=False,
+            )
+            if snapshot.status in {"waiting", "review"}:
+                if snapshot.code != record["code"]:
+                    self._transition(
+                        workflow_id, "awaiting_ai_review", snapshot.code
+                    )
+                return False
+            if snapshot.status != "ready":
+                self._attention(workflow_id, snapshot.code or "ai_review_required")
+                return False
+            if not snapshot.plan_id or snapshot.draft_version is None:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            self._set_refs(
+                workflow_id,
+                edit_draft_version=snapshot.draft_version,
+                edit_plan_id=snapshot.plan_id,
+            )
+            self._transition(workflow_id, "awaiting_edit_confirmation", "")
+            return True
+        if state == "awaiting_edit_confirmation":
+            if not record["edit_plan_id"]:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
+            if snapshot.status == "waiting":
+                code = snapshot.code or record["code"]
+                if code and code != record["code"]:
+                    self._transition(workflow_id, state, code)
+                if (
+                    not record["auto_confirm_edit"]
+                    or code
+                    in {
+                        "restart_confirmation_required",
+                        "edit_restart_confirmation_required",
+                        "render_retry_confirmation_required",
+                    }
+                ):
+                    return False
+            if snapshot.status == "failed" or snapshot.status == "attention":
+                self._attention(workflow_id, snapshot.code or "edit_attention_required")
+                return False
+            if snapshot.status == "ready" and snapshot.output_id:
+                self._set_refs(
+                    workflow_id,
+                    edit_output_id=snapshot.output_id,
+                    edit_cover_id=snapshot.cover_id,
+                )
+                self._transition(workflow_id, "preparing_upload", "")
+                return True
+            self.adapter.confirm_edit(record["edit_plan_id"])
+            self._transition(workflow_id, "rendering", "")
+            return True
+        if state == "rendering":
+            if not record["edit_plan_id"]:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
+            if snapshot.status == "waiting":
+                if snapshot.code:
+                    self._transition(
+                        workflow_id,
+                        "awaiting_edit_confirmation",
+                        "edit_restart_confirmation_required",
+                    )
+                return False
+            if snapshot.status != "ready" or not snapshot.output_id:
+                self._attention(workflow_id, snapshot.code or "edit_attention_required")
+                return False
+            self._set_refs(
+                workflow_id,
+                edit_output_id=snapshot.output_id,
+                edit_cover_id=snapshot.cover_id,
+            )
+            self._transition(workflow_id, "preparing_upload", "")
+            return True
+        if state == "preparing_upload":
+            if not record["edit_output_id"]:
+                self._attention(workflow_id, "workflow_data_invalid")
+                return False
+            prepared = self.adapter.prepare_upload(
+                workflow_id,
+                record["edit_output_id"],
+                record["edit_cover_id"],
+                record["profile"]["upload"],
+            )
+            self._set_refs(
+                workflow_id,
+                upload_source_id=prepared.source_id,
+                upload_cover_id=prepared.cover_id,
+                upload_job_ids=list(prepared.job_ids),
+            )
+            self._transition(workflow_id, "awaiting_upload_confirmation", "")
+            return True
+        if state == "awaiting_upload_confirmation":
+            snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+            self._sync_upload_job_ids(record, snapshot)
+            if snapshot.status == "failed" or snapshot.status == "attention":
+                self._attention(workflow_id, snapshot.code or "upload_attention_required")
+                return False
+            if snapshot.status == "ready":
+                self._transition(workflow_id, "completed", "")
+                return True
+            if snapshot.code and snapshot.code != record["code"]:
+                self._transition(workflow_id, state, snapshot.code)
+            if (
+                not record["auto_confirm_upload"]
+                or snapshot.code
+                in {
+                    "upload_restart_confirmation_required",
+                    "upload_retry_confirmation_required",
+                }
+                or record["code"]
+                in {
+                    "upload_restart_confirmation_required",
+                    "upload_retry_confirmation_required",
+                }
+            ):
+                return False
+            self.adapter.confirm_uploads(
+                record["upload_job_ids"],
+                record["profile"]["upload"]["account_bindings"],
+            )
+            self._transition(workflow_id, "uploading", "")
+            return True
+        if state == "uploading":
+            snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
+            self._sync_upload_job_ids(record, snapshot)
+            if snapshot.status == "waiting":
+                if snapshot.code in {
+                    "upload_restart_confirmation_required",
+                    "upload_retry_confirmation_required",
+                }:
+                    self._transition(
+                        workflow_id,
+                        "awaiting_upload_confirmation",
+                        snapshot.code,
+                    )
+                return False
+            if snapshot.status != "ready":
+                self._attention(workflow_id, snapshot.code or "upload_attention_required")
+                return False
+            self._transition(workflow_id, "completed", "")
+            return True
+        return False
+
+    def _sync_upload_job_ids(
+        self, record: dict[str, Any], snapshot: UploadSnapshot
+    ) -> None:
+        if snapshot.job_ids is None:
+            return
+        current = tuple(record["upload_job_ids"])
+        if snapshot.job_ids != current:
+            replacement = list(snapshot.job_ids)
+            self._set_refs(record["id"], upload_job_ids=replacement)
+            record["upload_job_ids"] = replacement
+
+    def _identifier(self, value: str) -> str:
+        if not isinstance(value, str) or not _HEX_IDENTIFIER.fullmatch(value):
+            raise WorkflowError("workflow_not_found")
+        return value
+
+    def _expected(self, workflow_id: str, revision: int) -> dict[str, Any]:
+        workflow_id = self._identifier(workflow_id)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise WorkflowError("invalid_revision")
+        record = self.get(workflow_id)
+        if record["revision"] != revision:
+            raise WorkflowError("workflow_revision_conflict")
+        return record
+
+    def _set_refs(self, workflow_id: str, **values: object) -> None:
+        allowed = {
+            "batch_id",
+            "download_asset_id",
+            "edit_project_id",
+            "edit_draft_version",
+            "edit_plan_id",
+            "edit_output_id",
+            "edit_cover_id",
+            "upload_source_id",
+            "upload_cover_id",
+            "upload_job_ids",
+        }
+        if not values or set(values) - allowed:
+            raise WorkflowError("workflow_data_invalid")
+        download_identifier_fields = {
+            "batch_id",
+            "download_asset_id",
+        }
+        identifier_fields = {
+            "edit_project_id",
+            "edit_plan_id",
+            "edit_output_id",
+            "edit_cover_id",
+            "upload_source_id",
+            "upload_cover_id",
+        }
+        for name in download_identifier_fields & values.keys():
+            value = values[name]
+            if value is not None and not _download_identifier(value):
+                raise WorkflowError("workflow_data_invalid")
+        for name in identifier_fields & values.keys():
+            value = values[name]
+            if value is not None and (
+                not isinstance(value, str) or not _HEX_IDENTIFIER.fullmatch(value)
+            ):
+                raise WorkflowError("workflow_data_invalid")
+        if "edit_draft_version" in values:
+            version = values["edit_draft_version"]
+            if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+                raise WorkflowError("workflow_data_invalid")
+        if "upload_job_ids" in values:
+            job_ids = values["upload_job_ids"]
+            if (
+                not isinstance(job_ids, list)
+                or not 1 <= len(job_ids) <= 3
+                or any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in job_ids)
+                or len(set(job_ids)) != len(job_ids)
+            ):
+                raise WorkflowError("workflow_data_invalid")
+        assignments: list[str] = []
+        parameters: list[object] = []
+        for name, value in values.items():
+            column = "upload_job_ids_json" if name == "upload_job_ids" else name
+            if name == "upload_job_ids":
+                value = json.dumps(value, separators=(",", ":"))
+            assignments.append(f"{column}=?")
+            parameters.append(value)
+        assignments.extend(("revision=revision+1", "updated_at=?"))
+        parameters.extend((_now(), workflow_id))
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute(
+                f"UPDATE workflows SET {','.join(assignments)} WHERE id=?",
+                parameters,
+            ).rowcount
+            if not changed:
+                raise WorkflowError("workflow_not_found")
+
+    def _transition(self, workflow_id: str, state: str, code: str) -> None:
+        now = _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state,code FROM workflows WHERE id=?", (workflow_id,)
+            ).fetchone()
+            if row is None:
+                raise WorkflowError("workflow_not_found")
+            previous = row["state"]
+            if previous == state and row["code"] == code:
+                return
+            finished = now if state in {"completed", "attention_required", "canceled"} else None
+            db.execute(
+                "UPDATE workflows SET state=?,code=?,revision=revision+1,updated_at=?,"
+                "finished_at=? WHERE id=?",
+                (state, code, now, finished, workflow_id),
+            )
+            self._event(db, workflow_id, previous, state, code, now)
+
+    def _attention(self, workflow_id: str, code: str) -> dict[str, Any]:
+        self._transition(workflow_id, "attention_required", code)
+        return self.get(workflow_id)
+
+    def _event(
+        self,
+        db: sqlite3.Connection,
+        workflow_id: str,
+        previous: str | None,
+        state: str,
+        code: str,
+        now: str,
+    ) -> None:
+        sequence = db.execute(
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM workflow_events WHERE workflow_id=?",
+            (workflow_id,),
+        ).fetchone()[0]
+        db.execute(
+            "INSERT INTO workflow_events(workflow_id,sequence,from_state,to_state,code,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (workflow_id, sequence, previous, state, code, now),
+        )
+
+    def _by_id(self, db: sqlite3.Connection, workflow_id: str) -> dict[str, Any]:
+        row = db.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
+        if row is None:
+            raise WorkflowError("workflow_not_found")
+        return self._public(row)
+
+    def _public(self, row: sqlite3.Row) -> dict[str, Any]:
+        try:
+            profile = json.loads(row["profile_json"])
+            upload_job_ids = json.loads(row["upload_job_ids_json"])
+        except (TypeError, ValueError):
+            raise WorkflowError("workflow_data_invalid") from None
+        if not isinstance(profile, dict) or not isinstance(upload_job_ids, list):
+            raise WorkflowError("workflow_data_invalid")
+        _, encoded, profile_digest = _profile(profile, bound_accounts=True)
+        if encoded != row["profile_json"] or profile_digest != row["profile_sha256"]:
+            raise WorkflowError("workflow_data_invalid")
+        if any(not isinstance(item, str) or not _HEX_IDENTIFIER.fullmatch(item) for item in upload_job_ids):
+            raise WorkflowError("workflow_data_invalid")
+        for field in ("batch_id", "download_asset_id"):
+            if row[field] is not None and not _download_identifier(row[field]):
+                raise WorkflowError("workflow_data_invalid")
+        for field in (
+            "edit_project_id",
+            "edit_plan_id",
+            "edit_output_id",
+            "edit_cover_id",
+            "upload_source_id",
+            "upload_cover_id",
+        ):
+            value = row[field]
+            if value is not None and (
+                not isinstance(value, str) or not _HEX_IDENTIFIER.fullmatch(value)
+            ):
+                raise WorkflowError("workflow_data_invalid")
+        public = dict(row)
+        public.pop("request_key")
+        public.pop("request_digest")
+        public.pop("profile_json")
+        public.pop("upload_job_ids_json")
+        public["profile"] = profile
+        public["upload_job_ids"] = upload_job_ids
+        public["auto_confirm_edit"] = bool(row["auto_confirm_edit"])
+        public["auto_confirm_upload"] = bool(row["auto_confirm_upload"])
+        public["schema_version"] = SCHEMA_VERSION
+        return public

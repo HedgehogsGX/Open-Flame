@@ -100,6 +100,10 @@ from .uploads.activity_lock import UploadActivityLease
 from .uploads.api import install_upload_routes
 from .uploads.service import default_upload_root
 from .web import INDEX_HTML
+from .workflows.api import install_workflow_routes
+from .workflows.local_adapter import LocalWorkflowAdapter
+from .workflows.manager import WorkflowManager
+from .workflows.service import default_workflow_root
 from .worker_runtime_status import ManagedWorkerRuntimeStatus, unknown_runtime_status
 from .worker_repository import (
     CircuitResetConflict,
@@ -1064,6 +1068,7 @@ def create_app(
             lambda: UploadActivityLease.acquire(upload_root, exclusive=False)
         )
         try:
+            await run_in_threadpool(app.state.workflow_manager.resume_existing)
             active_logger.emit(
                 "control.started",
                 app_version=__version__,
@@ -1074,15 +1079,18 @@ def create_app(
                 yield
             finally:
                 try:
-                    await run_in_threadpool(app.state.editing_manager.stop)
+                    await run_in_threadpool(app.state.workflow_manager.stop)
                 finally:
                     try:
-                        await run_in_threadpool(app.state.upload_manager.stop)
+                        await run_in_threadpool(app.state.editing_manager.stop)
                     finally:
-                        if owns_local_short_link_transport:
-                            assert isinstance(short_link_resolver, ControlledShortLinkResolver)
-                            short_link_resolver.transport.close()
-                        active_logger.emit("control.stopped")
+                        try:
+                            await run_in_threadpool(app.state.upload_manager.stop)
+                        finally:
+                            if owns_local_short_link_transport:
+                                assert isinstance(short_link_resolver, ControlledShortLinkResolver)
+                                short_link_resolver.transport.close()
+                            active_logger.emit("control.stopped")
         finally:
             upload_activity.release()
 
@@ -1157,6 +1165,16 @@ def create_app(
         edited_output_resolver=upload_edited_output,
         edited_cover_resolver=upload_edited_cover,
     )
+    workflow_adapter = LocalWorkflowAdapter(
+        batch_service=service,
+        editing_manager=editing_manager,
+        upload_manager=app.state.upload_manager,
+        download_asset_resolver=upload_original_asset,
+    )
+    workflow_manager = WorkflowManager(
+        default_workflow_root(resolved_settings.data_root), workflow_adapter
+    )
+    install_workflow_routes(app, workflow_manager)
 
     @app.exception_handler(CredentialDefaultsError)
     async def credential_defaults_error(_request: Request, _exc: CredentialDefaultsError):

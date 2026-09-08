@@ -1488,7 +1488,7 @@ expected = {
     "typing-extensions": "4.16.0",
     "typing-inspection": "0.4.4",
     "uvicorn": "0.52.4",
-    "video-download-control": "0.27.0",
+    "video-download-control": "0.28.0",
 }
 assert all(version(name) == expected_version for name, expected_version in expected.items())
 for build_only in ("hatchling", "packaging", "pathspec", "pluggy", "trove-classifiers"):

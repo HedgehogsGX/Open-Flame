@@ -15,6 +15,7 @@ import shutil
 import stat
 import sys
 import time
+import wave
 from collections.abc import Iterable
 from dataclasses import dataclass
 from io import BytesIO
@@ -49,7 +50,10 @@ MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_IMAGE_DECODED_BYTES = 64 * 1024 * 1024
 MAX_COVER_FONT_BYTES = 32 * 1024 * 1024
+MAX_TRANSCRIPTION_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_TRANSCRIPTION_DURATION_MS = 90 * 60 * 1000
 SEGMENT_DURATION_TOLERANCE_MS = 500
+PCM_TRACK_DURATION_TOLERANCE_MS = 10
 
 _COVER_DIMENSIONS = {
     "16:9": (1280, 720),
@@ -198,6 +202,8 @@ class MediaProcessor:
         source: Path,
         *,
         cancel_event: Event | None = None,
+        expected_source_size: int | None = None,
+        expected_source_sha256: str | None = None,
     ) -> MediaProbe:
         """Probe one immutable local video with bounded ffprobe output."""
 
@@ -206,10 +212,174 @@ class MediaProcessor:
         path, signature = self._plain_file(source, source=True)
         if path.is_relative_to(self.tool_root):
             raise EditingError("invalid_source_media")
+        self._verify_expected_source(
+            path,
+            signature,
+            expected_size=expected_source_size,
+            expected_sha256=expected_source_sha256,
+            cancel_event=cancel_event,
+        )
         probe = self._probe_path(path, cancel_event, source=True)
         self._assert_signature(path, signature, source=True)
         self._check_cancelled(cancel_event)
         return probe
+
+    def prepare_transcription_audio(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        cancel_event: Event | None = None,
+        expected_source_size: int | None = None,
+        expected_source_sha256: str | None = None,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
+    ) -> Path:
+        """Create a bounded mono AAC copy for a remote transcription provider."""
+
+        self._validate_cancel_event(cancel_event)
+        if (clip_start_ms is None) != (clip_end_ms is None) or (
+            clip_start_ms is not None
+            and (
+                isinstance(clip_start_ms, bool)
+                or not isinstance(clip_start_ms, int)
+                or isinstance(clip_end_ms, bool)
+                or not isinstance(clip_end_ms, int)
+                or clip_start_ms < 0
+                or clip_end_ms <= clip_start_ms
+            )
+        ):
+            raise EditingError("invalid_transcription_clip")
+        if (
+            not isinstance(target, Path)
+            or not target.is_absolute()
+            or target.suffix.lower() != ".m4a"
+        ):
+            raise EditingError("invalid_transcription_output")
+        destination = self._plain_directory(target.parent)
+        if target.parent != destination or destination.is_relative_to(self.tool_root):
+            raise EditingError("invalid_output_directory")
+        if target.exists() or target.is_symlink():
+            raise EditingError("edit_output_exists")
+
+        try:
+            self._check_cancelled(cancel_event)
+            source_path, source_signature = self._plain_file(source, source=True)
+            if source_path.is_relative_to(self.tool_root):
+                raise EditingError("invalid_source_media")
+            self._verify_expected_source(
+                source_path,
+                source_signature,
+                expected_size=expected_source_size,
+                expected_sha256=expected_source_sha256,
+                cancel_event=cancel_event,
+            )
+            source_probe = self._probe_path(
+                source_path,
+                cancel_event,
+                source=True,
+                expected_signature=source_signature,
+            )
+            if source_probe.audio_codec is None:
+                raise EditingError("ai_transcription_audio_unavailable")
+            selected_duration_ms = (
+                source_probe.duration_ms
+                if clip_start_ms is None
+                else clip_end_ms - clip_start_ms
+            )
+            if (
+                clip_start_ms is not None
+                and (
+                    clip_start_ms >= source_probe.duration_ms
+                    or clip_end_ms > source_probe.duration_ms
+                )
+            ):
+                raise EditingError("invalid_transcription_clip")
+            if selected_duration_ms > MAX_TRANSCRIPTION_DURATION_MS:
+                # One remote request must contain the complete audio.  Fail before
+                # encoding instead of ever accepting a size-limited partial file.
+                raise EditingError("ai_transcription_media_too_large")
+            self._require_capacity(
+                destination,
+                MAX_TRANSCRIPTION_AUDIO_BYTES,
+                promotion_copy=False,
+            )
+            guard = _RenderResourceGuard(
+                cancel_event=cancel_event,
+                destination=destination,
+                target=target,
+                completed_bytes=0,
+                file_limit_bytes=MAX_TRANSCRIPTION_AUDIO_BYTES,
+            )
+            clip_arguments: tuple[str, ...] = ()
+            if clip_start_ms is not None:
+                clip_arguments = (
+                    "-ss",
+                    self._seconds(clip_start_ms),
+                    "-t",
+                    self._seconds(selected_duration_ms),
+                )
+            result = self._run(
+                CommandSpec(
+                    executable=self.ffmpeg_executable,
+                    arguments=(
+                        "-nostdin",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-n",
+                        "-f",
+                        self._input_demuxer(source_path, source=True),
+                        "-protocol_whitelist",
+                        "file",
+                        "-i",
+                        str(source_path),
+                        *clip_arguments,
+                        "-map",
+                        "0:a:0",
+                        "-vn",
+                        "-sn",
+                        "-dn",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "32k",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "24000",
+                        "-map_metadata",
+                        "-1",
+                        "-movflags",
+                        "+faststart",
+                        "-f",
+                        "ipod",
+                        str(target),
+                    ),
+                    cwd=destination,
+                    timeout_seconds=60 * 60,
+                    stdout_limit_bytes=64 * 1024,
+                    stderr_limit_bytes=1024 * 1024,
+                ),
+                cancel_event,
+                resource_guard=guard,
+            )
+            if result.returncode != 0:
+                raise EditingError("media_processing_failed")
+            self._assert_signature(source_path, source_signature, source=True)
+            _, output_signature = self._plain_file(target, source=False)
+            if output_signature.size > MAX_TRANSCRIPTION_AUDIO_BYTES:
+                raise EditingError("ai_transcription_media_too_large")
+            self._digest_file(target, expected_signature=output_signature)
+            return target
+        except EditingError as error:
+            self._cleanup((target,))
+            if error.code == "media_output_too_large":
+                raise EditingError("ai_transcription_media_too_large") from None
+            raise
+        except BaseException:
+            self._cleanup((target,))
+            raise
 
     def render(
         self,
@@ -393,6 +563,208 @@ class MediaProcessor:
             return RenderResult(status="canceled", code="canceled")
         except BaseException:
             self._cleanup(owned_paths)
+            raise
+
+    def render_dubbed_video(
+        self,
+        source: Path,
+        audio_track: Path,
+        target: Path,
+        *,
+        track_offset_ms: int = 0,
+        replace_original_audio: bool = False,
+        cancel_event: Event | None = None,
+        expected_source_size: int | None = None,
+        expected_source_sha256: str | None = None,
+    ) -> RenderAsset:
+        """Render one H.264/AAC MP4 using a verified PCM WAV timeline track.
+
+        The caller owns timeline construction.  This method owns the media
+        boundary: it revalidates both inputs, runs only the pinned FFmpeg via
+        ``SecureSubprocessRunner``, verifies the derived file, and removes a
+        partial target on every failure or cancellation.
+        """
+
+        self._validate_cancel_event(cancel_event)
+        if (
+            isinstance(track_offset_ms, bool)
+            or not isinstance(track_offset_ms, int)
+            or track_offset_ms < 0
+            or track_offset_ms > 7 * 24 * 60 * 60 * 1000
+            or type(replace_original_audio) is not bool
+            or not isinstance(target, Path)
+            or not target.is_absolute()
+            or target.suffix.lower() != ".mp4"
+        ):
+            raise EditingError("invalid_dubbing_output")
+        destination = self._plain_directory(target.parent)
+        if target.parent != destination or destination.is_relative_to(self.tool_root):
+            raise EditingError("invalid_output_directory")
+        if target.exists() or target.is_symlink():
+            raise EditingError("edit_output_exists")
+
+        try:
+            self._check_cancelled(cancel_event)
+            source_path, source_signature = self._plain_file(source, source=True)
+            track_path, track_signature = self._plain_file(audio_track, source=False)
+            if (
+                source_path in {track_path, target}
+                or track_path == target
+                or track_path.suffix.lower() != ".wav"
+                or source_path.is_relative_to(self.tool_root)
+                or track_path.is_relative_to(self.tool_root)
+            ):
+                raise EditingError("invalid_dubbing_input")
+            self._verify_expected_source(
+                source_path,
+                source_signature,
+                expected_size=expected_source_size,
+                expected_sha256=expected_source_sha256,
+                cancel_event=cancel_event,
+            )
+            source_probe = self._probe_path(
+                source_path,
+                cancel_event,
+                source=True,
+                expected_signature=source_signature,
+            )
+            track_duration_ms = self._probe_pcm_wave(
+                track_path,
+                expected_signature=track_signature,
+            )
+            if (
+                track_offset_ms + source_probe.duration_ms
+                > track_duration_ms + PCM_TRACK_DURATION_TOLERANCE_MS
+            ):
+                raise EditingError("invalid_dubbing_track")
+            self._digest_file(track_path, expected_signature=track_signature)
+            file_limit = self._segment_output_limit(
+                source_probe.duration_ms,
+                audio=True,
+            )
+            self._require_capacity(destination, file_limit)
+            guard = _RenderResourceGuard(
+                cancel_event=cancel_event,
+                destination=destination,
+                target=target,
+                completed_bytes=0,
+                file_limit_bytes=file_limit,
+            )
+            arguments = [
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-n",
+                "-f",
+                self._input_demuxer(source_path, source=True),
+                "-protocol_whitelist",
+                "file",
+                "-i",
+                str(source_path),
+                "-ss",
+                self._seconds(track_offset_ms),
+                "-f",
+                "wav",
+                "-protocol_whitelist",
+                "file",
+                "-i",
+                str(track_path),
+            ]
+            if not replace_original_audio and source_probe.audio_codec is not None:
+                arguments.extend(
+                    (
+                        "-filter_complex",
+                        "[0:a:0]volume=0.22[original];"
+                        "[original][1:a:0]amix=inputs=2:duration=longest:"
+                        "dropout_transition=0:normalize=0,alimiter=limit=0.95[a]",
+                        "-map",
+                        "0:V:0",
+                        "-map",
+                        "[a]",
+                    )
+                )
+            else:
+                arguments.extend(("-map", "0:V:0", "-map", "1:a:0"))
+            arguments.extend(
+                (
+                    "-t",
+                    self._seconds(source_probe.duration_ms),
+                    "-sn",
+                    "-dn",
+                    "-c:v",
+                    "libopenh264",
+                    "-b:v",
+                    "4M",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-movflags",
+                    "+faststart",
+                    "-map_metadata",
+                    "-1",
+                    "-fs",
+                    str(file_limit),
+                    str(target),
+                )
+            )
+            result = self._run(
+                CommandSpec(
+                    executable=self.ffmpeg_executable,
+                    arguments=tuple(arguments),
+                    cwd=destination,
+                    timeout_seconds=60 * 60,
+                    stdout_limit_bytes=64 * 1024,
+                    stderr_limit_bytes=1024 * 1024,
+                ),
+                cancel_event,
+                resource_guard=guard,
+            )
+            if result.returncode != 0:
+                raise EditingError("media_processing_failed")
+            self._assert_signature(source_path, source_signature, source=True)
+            self._assert_signature(track_path, track_signature, source=False)
+            _, output_signature = self._plain_file(target, source=False)
+            output_probe = self._probe_path(
+                target,
+                cancel_event,
+                source=False,
+                expected_signature=output_signature,
+            )
+            if (
+                "mp4" not in output_probe.container.split(",")
+                or output_probe.video_codec != "h264"
+                or output_probe.audio_codec != "aac"
+                or abs(output_probe.duration_ms - source_probe.duration_ms)
+                > SEGMENT_DURATION_TOLERANCE_MS
+            ):
+                raise EditingError("media_processing_failed")
+            size, digest = self._digest_file(
+                target,
+                expected_signature=output_signature,
+            )
+            if size > file_limit:
+                raise EditingError("media_output_too_large")
+            return RenderAsset(
+                kind="dubbed_video",
+                path=target,
+                name=target.name,
+                mime_type="video/mp4",
+                ordinal=1,
+                size_bytes=size,
+                sha256=digest,
+                duration_ms=output_probe.duration_ms,
+                width=output_probe.width,
+                height=output_probe.height,
+                container=output_probe.container,
+                video_codec=output_probe.video_codec,
+                audio_codec=output_probe.audio_codec,
+            )
+        except BaseException:
+            self._cleanup((target,))
             raise
 
     @staticmethod
@@ -634,6 +1006,44 @@ class MediaProcessor:
             raise EditingError("media_processing_failed")
         self._assert_signature(path, signature, source=source)
         return probe
+
+    @classmethod
+    def _probe_pcm_wave(
+        cls,
+        path: Path,
+        *,
+        expected_signature: _FileSignature,
+    ) -> int:
+        _, signature = cls._plain_file(path, source=False)
+        if signature != expected_signature:
+            raise EditingError("invalid_dubbing_track")
+        try:
+            with path.open("rb") as handle:
+                if cls._signature(os.fstat(handle.fileno())) != signature:
+                    raise EditingError("invalid_dubbing_track")
+                with wave.open(handle, "rb") as stream:
+                    channels = stream.getnchannels()
+                    sample_rate = stream.getframerate()
+                    frames = stream.getnframes()
+                    sample_width = stream.getsampwidth()
+                    compression = stream.getcomptype()
+                finished = cls._signature(os.fstat(handle.fileno()))
+        except EditingError:
+            raise
+        except (EOFError, OSError, wave.Error) as exc:
+            raise EditingError("invalid_dubbing_track") from exc
+        if (
+            finished != signature
+            or channels not in {1, 2}
+            or sample_rate not in {24_000, 44_100, 48_000}
+            or frames <= 0
+            or sample_width not in {2, 3, 4}
+            or compression != "NONE"
+            or signature.size != 44 + frames * channels * sample_width
+        ):
+            raise EditingError("invalid_dubbing_track")
+        cls._assert_signature(path, signature, source=False)
+        return max(1, round(frames * 1000 / sample_rate))
 
     def _run(
         self,

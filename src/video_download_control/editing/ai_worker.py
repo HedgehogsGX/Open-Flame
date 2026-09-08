@@ -289,17 +289,22 @@ def _http_call(
     payload = request["payload"]
     if not isinstance(payload, Mapping):
         raise WorkerFailure("ai_protocol_invalid")
+    try:
+        required_egress = protocol.operation_data_egress(operation)
+    except protocol.AiProtocolError as exc:
+        raise WorkerFailure("ai_http_policy_invalid") from exc
+    if not set(required_egress).issubset(egress):
+        blocked_code = {
+            "transcribe": "ai_media_egress_blocked",
+            "translate": "ai_text_egress_blocked",
+            "synthesize": "ai_speech_egress_blocked",
+        }.get(operation, "ai_http_policy_invalid")
+        raise WorkerFailure(blocked_code)
     if operation == "transcribe":
-        if "video" not in egress and "audio" not in egress:
-            raise WorkerFailure("ai_media_egress_blocked")
         wire_payload = _read_media_for_http(payload)
     elif operation == "translate":
-        if "text" not in egress:
-            raise WorkerFailure("ai_text_egress_blocked")
         wire_payload = payload
     elif operation == "synthesize":
-        if "text" not in egress or "audio" not in egress:
-            raise WorkerFailure("ai_speech_egress_blocked")
         wire_payload = {"text": payload["text"], "options": payload["options"]}
     else:
         wire_payload = {}
@@ -530,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         _verify_source(request, protocol)
         progress = ProgressEmitter(protocol, request_id, sys.__stdout__)
         progress(0.0, "provider_starting")
-        if provider["kind"] == "plugin":
+        if provider["kind"] in {"plugin", "remote_plugin"}:
             provider_payload = _plugin_call(
                 provider, model, root, request, progress, protocol
             )

@@ -8,7 +8,7 @@ from typing import Literal
 
 MAX_SUBTITLE_BYTES = 2 * 1024 * 1024
 MAX_CUES = 10_000
-MAX_CUE_TEXT = 8_000
+MAX_CUE_TEXT = 4_096
 _SRT_TIME = re.compile(
     r"^(?P<h>\d{2,3}):(?P<m>[0-5]\d):(?P<s>[0-5]\d),(?P<ms>\d{3})$"
 )

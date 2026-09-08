@@ -20,7 +20,7 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 
 `--wheelhouse` 使用 `--no-index`，缺项失败，不回退联网；构建只需要 build lock 对应的五个包。命令失败保留独立输出目录供检查，不覆盖旧包、不自动清理数据。更换新的输出名重试。
 
-0.27.0 的 T18 最终冻结和此前 T10/T16/T17 一样，必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在输出根目录、与 `release` 子目录同级生成 `release-receipt.json`，记录 `source_commit`、`working_tree_dirty=false`、完整 `product_identity`、五个发行文件各自的大小/SHA-256 及实际检查结果。receipt 必须直接摘要 `SHA256SUMS`；不要把 receipt 放进 `release`，也不要把最终值回填到被打包文档，否则会改变被绑定的提交与归档字节，形成自引用。
+0.28.0 的 T19 最终冻结和此前 T10/T16/T17 一样，必须从一个 clean、detached 的精确 Git commit checkout 执行。`release.py` 有意只冻结文件字节，不读取 Git，因此 clean 状态和 commit 对应关系由外层流程核对；构建与全部独立验收完成后，在输出根目录、与 `release` 子目录同级生成 `release-receipt.json`，记录 `source_commit`、`working_tree_dirty=false`、完整 `product_identity`、五个发行文件各自的大小/SHA-256 及实际检查结果。receipt 必须直接摘要 `SHA256SUMS`；不要把 receipt 放进 `release`，也不要把最终值回填到被打包文档，否则会改变被绑定的提交与归档字节，形成自引用。
 
 只交付输出下的 **`release` 子目录**中的五个文件，不要交付整个输出目录：
 
@@ -30,7 +30,7 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 - `release-manifest.json`：文件清单、每文件大小/摘要、精确包身份和四个根入口摘要。
 - `SHA256SUMS`：上述三个制品与 manifest 的 SHA-256。
 
-生成器先按 [release-files.txt](../release-files.txt) 的明确清单冻结工作树字节，再构建；不使用 Git index/archive 字节代替当前文件。新增源文件、文档或脚本需要人工复核后更新清单。`tests/` 中的历史回归只在仓库/CI 使用，不进入源码 ZIP、sdist 或 wheel；临时验证材料只放在已忽略的 `validation/local/`。包树中存在未列出的可导入文件会拒绝构建；清单之外的日志、下载内容、缓存、凭据和历史制品不打包。历史许可迁移证据含自引用摘要，因此不打包，其余选择以清单为准。
+生成器先按 [release-files.txt](../release-files.txt) 的明确清单冻结工作树字节，再构建；不使用 Git index/archive 字节代替当前文件。新增源文件、文档或脚本需要人工复核后更新清单。`tests/` 中的历史回归只在仓库/CI 使用，不进入源码 ZIP、sdist 或 wheel；临时验证材料只放在已忽略的 `validation/local/`。AI runtime builder/provider 源码与 lock 会随包发布，但构建出的 `data-ai-runtime`、CPython ZIP、`OPEN_FLAME_AI_OPENAI_API_KEY`、远程结果和账单均不进入制品。包树中存在未列出的可导入文件会拒绝构建；清单之外的日志、下载内容、缓存、凭据和历史制品不打包。历史许可迁移证据含自引用摘要，因此不打包，其余选择以清单为准。
 
 ## 核对已有制品（只读）
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-download-control"
-version = "0.27.0"
+version = "0.28.0"
 description = "Local-first media downloads, reviewable editing, and explicitly confirmed multi-platform uploads"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,11 +48,13 @@ packages = ["src/video_download_control"]
 # nested negated .env.example rules can otherwise re-include files from an
 # ignored parent directory in some archive builders.
 exclude = [
+  "/tests/**",
   "/validation/apache-2.0-license-migration-evidence.md",
   "/validation/local/**",
   "/runtime-tools/**",
   "/data-uploads/**",
   "/data-edits/**",
+  "/data-workflows/**",
   "/dist/**",
   "/build/**",
   "/.venv/**",

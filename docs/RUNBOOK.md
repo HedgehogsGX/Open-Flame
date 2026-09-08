@@ -1,10 +1,10 @@
-# Open-Flame / Video Download Control v0.27.0 Runbook
+# Open-Flame / Video Download Control v0.28.0 Runbook
 
-> 当前版本：Iteration 0.27.0 / v0.27.0，下载数据库 Schema 11、独立编辑数据库 Schema 1、独立上传数据库 Schema 3。编辑页支持把 ready 下载视频显式复制到编辑根，保存版本化草稿，经人工核对和确认后生成 H.264/AAC MP4 分段与 PNG 封面；AI 听写、翻译和配音仍因隔离 runtime 与模型未安装而明确阻塞。上传首批为 Bilibili、抖音、视频号，继续支持本地草稿、前端扫码、受管封面、逐平台文案/标签/封面/发布时间及平台参数、逐项最终确认、本地账号断开、受管媒体生命周期和独立停机备份/恢复。三页使用同一套本地 Apple 风格界面基础。Windows 仍为 direct/non-isolated；本地回归不等于 AI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 3、独立上传数据库 Schema 3、独立 Workflow Schema 1。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
 
-0.27.0 编辑工作台与本地验证边界见[本轮证据](../validation/iteration-0.27.0-editing-workspace-evidence.md)和[编辑指南](EDITOR.md)；此前 [0.26.0 上传参数与 Schema 3](../validation/iteration-0.26.0-upload-parameters-evidence.md)、[0.25.0 前端升级](../validation/iteration-0.25.0-t16-frontend-evidence.md)、[0.24.4 上传生命周期与恢复](../validation/iteration-0.24.4-upload-data-lifecycle-evidence.md)和 [0.24.2 全量核验](../validation/full-debug-20260905.md)保留各自冻结构建的历史范围。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。重复批次不创建新下载，也不改变原任务的凭证。
+0.28.0 AI runtime、自动流程与本地验证边界见[本轮证据](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI Runtime](AI_RUNTIME.md)和[编辑指南](EDITOR.md)；此前 [0.27.0 编辑工作台](../validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保留各自冻结构建的历史范围。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。重复批次不创建新下载，也不改变原任务的凭证。
 
-0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2。这些短语只用于识别旧记录。当前 0.27.0 新增独立编辑 Schema 1，上传库仍为 Schema 3，上传备份仍使用格式 2；不能用旧程序打开当前数据。
+0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1。这些短语只用于识别旧记录。当前 0.28.0 将精确 Editing Schema 1/2 向前迁移到 Schema 3，并新增 Workflow Schema 1；上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
 
 ### 启动失败时
 
@@ -34,6 +34,8 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 - graph-v2 的 exact-selector 证据只来自测试内的离线 `ScriptedGraphFakeAdapter`。Windows 本机 Worker 在领取任务的同一 SQL 事务中跳过 `discover` 与 `x_attachment`，让这些任务保持 queued 并继续寻找可处理的 flat-v1 `download`；这不是 graph 支持。candidate real Worker 同样不能据此运行真实 X graph。
 - 任意现存批次可通过 `GET /api/v1/batches/{batch_id}/assets` 获得已完成原件的元数据与相对下载 URL，包括沿实际重复输入引用找到的原 owner 成品；空列表不表示其他任务已经结束。`GET /api/v1/assets/{asset_id}/download` 仍只提供数据库登记且重验通过的 original。前端不再等待整个批次 ready，并提供“刷新成品”；不会按同链接的后来任务替换原 owner，也不使用批次名或平台标题拼接下载文件名。
 - 控制面与 Worker 具有本地、有界、轮转、字段白名单的 JSONL 排障日志；`/health` 在队列未暂停时报告 `worker=external_status_unknown`，明确表示控制面不知道外部 Worker 进程状态，而不是心跳、在线或已启动证明。
+- `/workflows` 的 AI 步骤只把第一个已选分段的派生音频发送给听写；单 cue 上限 4096 字符。字幕与配音按每个分段过滤并把时间归零，边界切入 cue 时拒绝，空 B-roll 段使用本地静音，保留原声时固定压到 22% 后混音。应用重启及 AI/配音重试都需要再次确认；当前无远程 request ID reconciliation，重试可能重复计费。
+- Workflow 冻结每个上传账号的 `session_revision`。待确认的账号若重新登录则以 `account_session_changed` 停下；上传重试只沿账号、来源和平台不变的唯一 retry leaf 对账，分叉、循环或身份变化失败关闭。远端 `unknown` 永远要求先查平台后台，不能自动重发。
 
 代码已把 Linux Worker network namespace、只读 digest 镜像、受控 proxy 私有 Unix socket、loopback relay、精确版本、资源限制、Cookie boundary 和短链可信 transport 组装成 fail-closed candidate；v0.9.0 可显式提供唯一受校验的 Node/Deno/Bun/QuickJS 路径且保持 remote components 禁用，但目标镜像尚未随附或验收 JS runtime。Windows 本机直连闭环不满足这条隔离 contract；没有 Docker/Linux 实跑、Stage 0 host allowlist、外部认证和生产规模恢复证据时，不得把 Linux candidate 改称可部署版本。
 
@@ -634,13 +636,13 @@ uv run video-download-unix-relay \
 - Compose 没有控制面 service，也没有发布端口；FastAPI 继续只在宿主 loopback 运行，避免在无认证时放宽 bind guard。
 - `wheel_builder` 与 `runtime` 的两个 Python `FROM` 都直接写死同一个 `python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2`，没有可覆盖它们的 Python image ARG；tool bundle 仍必须以受审阅的 `name@sha256:...` 提供。Registry 可用性、目标 platform manifest、镜像 provenance 与批准记录仍是发布边界。
 - `pyproject.toml` 与 `requirements.build.in` 精确固定 `hatchling==1.27.0`；`requirements.build.lock` 固定 build closure，`requirements.runtime.lock` 固定从 `uv.lock` 导出的 runtime closure。两份 lock 都是 exact-version + SHA-256，可能同时列出 upstream wheel 与 sdist hash；实际 `pip download/install --only-binary=:all:` 会拒绝 sdist，不能把 lock 中的 sdist hash 写成执行许可。
-- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.27.0-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
+- 唯一允许普通 Python package 网络访问的是 hash-checked `pip download --no-deps --only-binary=:all: --require-hashes`。build dependency install、`pip wheel` 和 runtime install 都使用 `RUN --network=none` 与 `--no-index`；项目 wheel 以 `--no-build-isolation --no-deps` 构建、按精确 `video_download_control-0.28.0-py3-none-any.whl` 路径复制/安装，最后执行 `pip check`。Base/tool image registry resolution 属于 Docker 自身的独立联网输入。
 
 目标 Linux 必须提供绝对 `/usr/bin/python3` 且该解释器实际为 Python 3.12+；runner 不通过 `PATH` 解析它，Cookie rotation 另须验证绝对 `/usr/bin/mv` 是支持 `-fT` 的 GNU coreutils。可执行清单和默认只读 runner 见 [Linux/Docker acceptance](../validation/linux-docker-acceptance.md)。默认 `--preflight` 不 build、不启动/停止容器、不写数据库；mutation mode 还必须以 effective UID 0 运行，并显式给出 `--execute --authorize I_ACCEPT_TARGET_LINUX_MUTATIONS`。完整执行比产品 contract 更窄：只接受 checked-in、reviewed `run-candidate-worker.sh` wrapper 与其精确的 Worker-only read-only root/mapping binds；直接逐文件 `--cookie-source`、通用 command override、任意非 Worker service 变化都被拒绝。完整合成验收还要求六个不同的 `acceptance-*` ref/source，这不是使用真实 Cookie 的授权。
 
 传给 runner 的 private env 和可选 private Compose override 必须各自为 canonical、single-link、`root:root`、mode `0600`、base-ACL-only regular file；直到 `/` 的 ancestor 必须 root-owned、无 symlink、无 group/world write 且只有 base ACL。Egress policy 必须为 canonical、single-link、`root:10001`、mode `0440`、1–16384-byte、base-ACL-only regular file，并具有同样安全的 root-owned ancestor。Policy 必须与 repository、data/socket/recovery roots、private env/override 双向不重叠。runner 对这些输入记录 device/inode、size、high-resolution mtime/ctime snapshot，并在相关 service 每次 start/restart 前重新验证；Cookie validator 也在执行边界重跑。Runner 同时在 preflight 和 mutation checkpoints 重新读取 `/proc/sys/kernel/core_pattern`；不可读或首字符为 `|` 时 fail closed。必须在启动前通过目标 host 的受控配置停用 pipe collector 或改用审阅过的 non-pipe pattern；`RLIMIT_CORE=(0, 0)` 不能单独证明 host collector 不会接收进程内存。
 
-Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验它。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 14 个 distributions 与 `video-download-control==0.27.0`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
+Full mode 只把随机 local build tag 用作新构建的初始名称；构建后立即解析并验证不可变 `sha256:...` image ID。Runner 将该 ID 写入重新取得的 effective Compose JSON，递归拒绝任意 string key/value 中的 `$`，再在 private env 同目录创建 `.vdc-effective-<run-id>.json` 冻结输入。该文件必须保持 `root:root 0600`、single-link、base-ACL-only 与原 identity/metadata snapshot。Runner 用冻结文件二次执行 `docker compose config`，要求结果与原 JSON 深等值、重新通过完整安全 validator，并再次核对冻结文件 snapshot；之后 Compose mutation 只使用冻结文件，direct `docker run` 也只使用同一 ID，runtime inspect 要求每个 container 的 `Image` 精确等于该 ID，并在 mutation checkpoints 重验它。另一个 network-none direct run 会按 exact version 核对 `requirements.runtime.lock` 的 14 个 distributions 与 `video-download-control==0.28.0`，并拒绝 runtime 中出现 build-only 的 `hatchling`、`packaging`、`pathspec`、`pluggy`、`trove-classifiers`。即使 tag 随后 rebind，也不能改变本次验收对象。上述逻辑尚未在 target Linux execute。正常退出只在 identity/snapshot 未变时删除冻结文件；crash/强制终止可能留下含部署路径/config 的文件，须在受保护目录按 exact path 与 identity 人工审计，确认未变后再定点清理，不能泛化删除。
 
 最外层必须由 clean trusted root launcher 以 empty/scrubbed environment 和 absolute trusted path 启动 runner。`#!/bin/bash -p`、脚本内 `unset` 与固定 `PATH` 都只能在 process/interpreter 已启动后生效，不能把 inherited `BASH_FUNC_*`、`LD_PRELOAD` 等 pre-body loader/interpreter 行为变成可信输入，也不能保护从不可信外层环境启动的子 shell。Endpoint 的只读判定遵循官方 precedence：非空 `DOCKER_CONTEXT` 高于 `DOCKER_HOST`，否则读取当前/default context；无论来源都必须解析为 local Unix Linux daemon。Execute 为避免重定向 daemon/build/config，明确拒绝 inherited `DOCKER_CONTEXT`、`DOCKER_HOST`、`DOCKER_CONFIG`、`DOCKER_CERT_PATH`、`DOCKER_TLS_VERIFY`、`BUILDKIT_HOST`、`BUILDX_BUILDER`、`COMPOSE_FILE`、`COMPOSE_PROJECT_NAME`、`COMPOSE_PROFILES`，此时 default context 仍必须通过同一 local-Unix/Linux 检查。
 
@@ -752,7 +754,7 @@ data-uploads/
 
 对 9.1～9.3 的下载备份而言：**本节命令不包含这些上传数据**；对 9.4 的上传备份而言，它也不包含下载数据库或下载资产。
 
-`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.27.0 版本只接受通过 readiness 的精确 Schema 11 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
+`video-download-backup create` 在 Iteration 0.5 引入；当前 v0.28.0 版本只接受通过 readiness 的精确 Schema 11 数据库。它不会删除或改写源数据，并在与目标同一父目录先构建隐藏 staging directory；所有文件写入、SHA-256、内部审计与目录同步成功后才以一次 rename 发布最终备份目录。目标已存在时会拒绝覆盖。
 
 ### 9.1 一致性边界与停机要求
 
@@ -908,17 +910,17 @@ uv run video-upload-backup restore `
 
 恢复在发布前核对 manifest sidecar、规范相对路径、文件 inventory/大小/SHA-256、link/reparse/hard link/alternate data stream、精确 Upload Schema 3、`quick_check`、外键，以及账号、来源、封面、任务、operation、request 与 retry 的业务关系。当前格式中原 `running` 任务恢复为 `unknown / interrupted_result_unknown`，原 `queued` 任务恢复为 `draft / restart_confirmation_required`；旧格式任务同时发生平台参数或标签迁移时改用 `legacy_metadata_interrupted_result_unknown` / `legacy_metadata_restart_confirmation_required`，让页面同时说明中断状态和迁移复核。未完成账号操作变为 `failed / operation_interrupted`；活动账号原 `ready`/`checking` 变为 `unchecked / account_missing`。断开账号墓碑、历史任务、平台参数和定时值保留，媒体恢复不会自动执行旧任务。
 
-恢复过程不构造上传 backend，不读取账号秘密，不登录、扫码或发起上传。成功后先以独立端口/独立 app root 打开恢复副本，核对账号墓碑、来源/封面状态、任务与 storage summary；重新登录仍由测试员显式执行，任何 `unknown` 任务仍须先到平台后台核对。当前 0.27.0 只完成本机 synthetic/offline 工程演练，真实容量、异机/offsite、NAS、RTO/RPO 和人工值班流程仍为 NOT RUN。
+恢复过程不构造上传 backend，不读取账号秘密，不登录、扫码或发起上传。成功后先以独立端口/独立 app root 打开恢复副本，核对账号墓碑、来源/封面状态、任务与 storage summary；重新登录仍由测试员显式执行，任何 `unknown` 任务仍须先到平台后台核对。当前 0.28.0 只完成本机 synthetic/offline 工程演练，真实容量、异机/offsite、NAS、RTO/RPO 和人工值班流程仍为 NOT RUN。
 
 ## 11. 升级与回滚（Schema 11 forward-only）
 
 Schema 11 在保留 Schema 10 capability ledger 的基础上增加唯一 `worker_claim_gate`。Schema 10→11 迁移只创建该表和关闭的初始 singleton；它不会把恢复出的旧 supervisor 状态视为启动授权。Schema 10 本身是在 Iteration 0.13.0 将 Schema 9 的可写 `platform_capabilities` 封存为只读 `capability_legacy_schema9`，并建立 evidence/decision ledger 与只读 current-head view。生产升级必须分别演练迁移前与迁移后的恢复点：
 
 1. 记录待迁移应用 revision、Schema、依赖锁与 Worker/tool digest；停止 Worker 和控制面。
-2. 用与原 Schema 8、9 或 10 精确兼容的历史工具创建备份，并用同一版本恢复到独立新根。v0.27.0 的下载 restore 只接受 Schema 11，不能直接恢复旧下载备份。
-3. 只在恢复副本上用 v0.27.0 启动迁移；确认 marker 精确为 1–11、`quick_check` / `foreign_key_check` 和 readiness 通过，`worker_claim_gate` 只有 `id=1` 的关闭初始行，并抽查 Schema 9 archive、evidence/decision/current view 及资产状态未漂移。
+2. 用与原 Schema 8、9 或 10 精确兼容的历史工具创建备份，并用同一版本恢复到独立新根。v0.28.0 的下载 restore 只接受 Schema 11，不能直接恢复旧下载备份。
+3. 只在恢复副本上用 v0.28.0 启动迁移；确认 marker 精确为 1–11、`quick_check` / `foreign_key_check` 和 readiness 通过，`worker_claim_gate` 只有 `id=1` 的关闭初始行，并抽查 Schema 9 archive、evidence/decision/current view 及资产状态未漂移。
 4. 检查 `/health`、Batch/Input/Job/asset API，以及三个 capability 分层端点。用 `video-download-local-app --check` 验证 gate 只 prepare、不 activate且无 claim；使用 synthetic 私有 CSV 演练 import、approve、revoke、stale revision 与 history，但不要把 synthetic 决定带入生产库。
-5. 使用 v0.27.0 创建 Schema 11 baseline，并恢复到另一个不存在的独立根；核对 claim gate singleton、archive、evidence、完整 decision chain、current view、资产与 manifest。恢复后再启动 local-app 时，确认新 `run_id` 先 prepare 为关闭状态。
+5. 使用 v0.28.0 创建 Schema 11 baseline，并恢复到另一个不存在的独立根；核对 claim gate singleton、archive、evidence、完整 decision chain、current view、资产与 manifest。恢复后再启动 local-app 时，确认新 `run_id` 先 prepare 为关闭状态。
 6. 最后才在维护窗口切换，同时保留迁移前后各自匹配的应用、锁文件和恢复工具。回滚只能整体恢复已经用历史版本实际演练过的旧数据库及匹配资产树。
 
 旧程序不得打开 Schema 11。不得原地删除 migration marker、`worker_claim_gate`、trigger、ledger 表或 view，也不得把旧数据库覆盖到新的资产树。没有经过实际恢复验证的迁移前备份时，只能修复并向前升级，不能声称可安全回滚。

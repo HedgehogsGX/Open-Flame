@@ -16,6 +16,7 @@ data/
 data-uploads/
 data-edits/
 .data-edits.activity.lock
+data-workflows/
 validation/local/
 dist/
 build/

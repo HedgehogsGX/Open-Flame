@@ -39,7 +39,7 @@ python -m video_download_control.uploads.runtime_setup `
 
 ## 从旧运行时升级
 
-0.27.0 继续使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。这里的运行时 manifest Schema 2 与上传数据库 Schema 3 是两套独立版本，不应混用。
+0.28.0 继续使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。这里的运行时 manifest Schema 2 与上传数据库 Schema 3 是两套独立版本，不应混用。
 
 1. 正常停止使用该上传数据目录的所有 Open-Flame 实例，确认没有仍在运行的扫码或投稿。已经开始且结果不明的投稿须先核对远端。
 2. 核对实际 `--root`。仅把其中的 `runtime` 目录改名为一个尚不存在的留档名称，例如 `runtime-legacy-20260905`；保留 `uploads.sqlite3`、`media`、`assets`、`private` 和其他数据原位。不要合并新旧运行时，也不要只删除 manifest。
@@ -80,6 +80,8 @@ manifest 是本机运维完整性记录，未做数字签名。Chromium 与 CPyt
 本机首次安装检测到 Chromium 145.0.7632.6 在应用存储路径下的 Windows SideBySide 错误 14001；同一组二进制在独立临时硬链接目录可启动。运行时因此建立临时的、只含固定浏览器字节的视图并显式指定 executable_path；不切换到用户日常 Chrome，不修改系统安装。浏览器 profile 仍写私有操作临时目录。硬链接不额外复制整套浏览器；不支持硬链接的文件系统回退为临时复制，结束后清理。
 
 Bilibili 的 Known Folder checkpoint 不完全服从环境变量；桥接使用唯一的单次媒体路径并只清理该次操作对应的新 checkpoint，防止跨账号恢复旧上传。应用不会将平台日志、请求正文或凭据返回到 HTTP 客户端。
+
+`/workflows` 在建立流程时保存所选账号、平台和最近一次登录 operation ID 组成的 `session_revision`。只有仍处于本地草稿、即将确认的账号需要与该 revision 精确匹配；若期间重新登录，流程以 `account_session_changed` 停止并要求重建，而不会把旧授权套到新会话。已经进入 queued/running/terminal 的同一任务不会因后来登录被改写。上传任务发生显式 retry 时，自动流程只沿账号、来源和平台不变的唯一后继链更新到 retry leaf；分叉、循环、超过 32 代或身份漂移均失败关闭，leaf 为 draft 时仍须再次确认。
 
 ## 页面内扫码登录
 

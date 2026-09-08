@@ -20,6 +20,7 @@ INDEX_HTML = """<!doctype html>
         <a class="nav-link" href="/" aria-current="page">下载</a>
         <a class="nav-link" href="/edits">编辑</a>
         <a class="nav-link" href="/uploads">上传</a>
+        <a class="nav-link" href="/workflows">自动流程</a>
       </nav>
       <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观">
         <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
@@ -33,6 +34,10 @@ INDEX_HTML = """<!doctype html>
       <p class="lede">创建批次、跟踪真实处理阶段，并从同一处取得原件、缩略图和字幕。上传工作台继续使用独立账号与逐项确认。</p>
       <p class="notice page-note">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
     </header>
+
+    <section class="card" aria-labelledby="automation-entry-heading">
+      <div class="card-header"><div><p class="section-index">自动流程</p><h2 id="automation-entry-heading">从一个网址完成翻译、配音与投稿</h2><p class="muted">使用独立、可恢复的流程记录串联下载、AI 时间轴、封面、编辑成品和三平台投稿参数。</p></div><a class="button-link" href="/workflows">打开自动流程</a></div>
+    </section>
 
     <section class="status-strip" aria-label="当前运行摘要">
       <div class="status-tile">
@@ -122,7 +127,7 @@ INDEX_HTML = """<!doctype html>
         </section>
       </div>
     </details>
-    <p class="page-footer">Open-Flame 0.27.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
+    <p class="page-footer">Open-Flame 0.28.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
   </main>
   <script>
     const form = document.querySelector('#batch-form');

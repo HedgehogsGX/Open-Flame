@@ -12,7 +12,9 @@ from .timeline import MAX_CUES, TimelineCue, TimelineError, serialize_webvtt
 
 
 MAX_AI_REQUEST_BYTES = 256 * 1024
-MAX_TIMELINE_JSON_BYTES = 8 * 1024 * 1024
+# Leave deterministic room inside the 4 MiB isolated-runtime request envelope
+# for operation metadata and the separately bounded glossary.
+MAX_TIMELINE_JSON_BYTES = 3 * 1024 * 1024
 MAX_GLOSSARY_ITEMS = 200
 MAX_TIMELINE_MILLISECONDS = 7 * 24 * 60 * 60 * 1000
 
@@ -120,7 +122,17 @@ def canonical_ai_request(
     if operation == "transcribe":
         if source_revision_id is not None:
             raise AiPipelineError("transcription cannot have a source revision")
-        _exact_keys(options, {"language", "word_timestamps", "vad"}, set())
+        _exact_keys(
+            options,
+            {
+                "language",
+                "word_timestamps",
+                "vad",
+                "clip_start_ms",
+                "clip_end_ms",
+            },
+            set(),
+        )
         language_value = options.get("language")
         language = None if language_value is None else _language(language_value)
         normalized_options: dict[str, Any] = {
@@ -128,6 +140,25 @@ def canonical_ai_request(
             "vad": _boolean(options.get("vad", True)),
             "word_timestamps": _boolean(options.get("word_timestamps", True)),
         }
+        clip_start = options.get("clip_start_ms")
+        clip_end = options.get("clip_end_ms")
+        if (clip_start is None) != (clip_end is None):
+            raise AiPipelineError("incomplete transcription clip")
+        if clip_start is not None:
+            if (
+                isinstance(clip_start, bool)
+                or not isinstance(clip_start, int)
+                or isinstance(clip_end, bool)
+                or not isinstance(clip_end, int)
+                or clip_start < 0
+                or clip_end <= clip_start
+                or clip_end > MAX_TIMELINE_MILLISECONDS
+            ):
+                raise AiPipelineError("invalid transcription clip")
+            normalized_options.update(
+                clip_start_ms=clip_start,
+                clip_end_ms=clip_end,
+            )
     elif operation == "translate":
         source_revision_id = _identifier(source_revision_id)
         _exact_keys(

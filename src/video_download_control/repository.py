@@ -331,6 +331,23 @@ class BatchRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def find_batches_by_name(self, name: str) -> list[dict[str, Any]]:
+        """Resolve an internal workflow batch name without a recency window."""
+
+        if not isinstance(name, str) or not name or len(name) > 200:
+            raise ValueError("invalid batch name")
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM batches WHERE name=? ORDER BY created_at,id", (name,)
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            batch = self.get_batch(row["id"])
+            if batch is None:
+                raise RuntimeError("named batch disappeared")
+            results.append(batch)
+        return results
+
     def list_ready_assets_for_batch(
         self, batch_id: str
     ) -> list[dict[str, Any]] | None:

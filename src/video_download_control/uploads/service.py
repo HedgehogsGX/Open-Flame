@@ -16,6 +16,7 @@ import struct
 import threading
 import time
 import zlib
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import wraps
@@ -1934,6 +1935,51 @@ class UploadService:
             records = {row["id"]: self._job_public(row) for row in rows}
         return [records[job_id] for job_id in job_ids if job_id in records]
 
+    def latest_jobs_by_ids(self, job_ids: list[str]) -> list[dict]:
+        """Resolve each job through its unique retry chain to the current leaf."""
+
+        if (
+            not isinstance(job_ids, list)
+            or not 1 <= len(job_ids) <= 64
+            or len(set(job_ids)) != len(job_ids)
+        ):
+            raise UploadError("invalid_job_ids")
+        normalized = [_identifier(job_id) for job_id in job_ids]
+        leaves: list[dict] = []
+        with self._db() as db:
+            for root_id in normalized:
+                root = self._get_job(db, root_id)
+                current = root
+                seen = {root_id}
+                for _ in range(32):
+                    successors = list(
+                        db.execute(
+                            "SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid",
+                            (current["id"],),
+                        )
+                    )
+                    if not successors:
+                        break
+                    if len(successors) != 1:
+                        raise UploadError("job_retry_lineage_invalid")
+                    successor_id = _identifier(successors[0]["id"])
+                    if successor_id in seen:
+                        raise UploadError("job_retry_lineage_invalid")
+                    seen.add(successor_id)
+                    successor = self._get_job(db, successor_id)
+                    if any(
+                        successor[field] != root[field]
+                        for field in ("account_id", "source_id", "platform")
+                    ):
+                        raise UploadError("job_retry_lineage_invalid")
+                    current = successor
+                else:
+                    raise UploadError("job_retry_lineage_invalid")
+                leaves.append(current)
+        if len({job["id"] for job in leaves}) != len(leaves):
+            raise UploadError("job_retry_lineage_invalid")
+        return leaves
+
     def _get_job(self, db, job_id: str) -> dict:
         row = db.execute(self._job_query() + " WHERE j.id=?", (_identifier(job_id),)).fetchone()
         if row is None:
@@ -2139,12 +2185,175 @@ class UploadService:
             "publish_timezone_offset_minutes": offset, "platform_options": options,
         }
 
+    @staticmethod
+    def _workflow_account_binding(
+        db: sqlite3.Connection, account: sqlite3.Row
+    ) -> dict[str, str]:
+        latest_login = db.execute(
+            "SELECT id FROM operations WHERE account_id=? AND action='login' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (account["id"],),
+        ).fetchone()
+        return {
+            "account_id": account["id"],
+            "platform": account["platform"],
+            # The account id is generation zero. Every login attempt creates a
+            # durable operation id before it can alter the local browser session.
+            "session_revision": (
+                account["id"] if latest_login is None else latest_login["id"]
+            ),
+        }
+
+    def _validate_workflow_account_bindings(
+        self,
+        db: sqlite3.Connection,
+        accounts_by_id: Mapping[str, sqlite3.Row],
+        expected: list[dict] | None,
+        *,
+        verify_account_ids: set[str] | None = None,
+    ) -> None:
+        if expected is None:
+            return
+        if (
+            not isinstance(expected, list)
+            or len(expected) != len(accounts_by_id)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"account_id", "platform", "session_revision"}
+                for item in expected
+            )
+        ):
+            raise UploadError("invalid_account_bindings")
+        by_id: dict[str, dict] = {}
+        for item in expected:
+            account_id = _identifier(item.get("account_id"))
+            session_revision = _identifier(item.get("session_revision"))
+            platform = item.get("platform")
+            if (
+                account_id not in accounts_by_id
+                or account_id in by_id
+                or platform not in PLATFORMS
+            ):
+                raise UploadError("invalid_account_bindings")
+            by_id[account_id] = {
+                "account_id": account_id,
+                "platform": platform,
+                "session_revision": session_revision,
+            }
+        account_ids = set(accounts_by_id)
+        if verify_account_ids is None:
+            verify_account_ids = account_ids
+        elif not isinstance(verify_account_ids, set) or not verify_account_ids <= account_ids:
+            raise UploadError("invalid_account_bindings")
+        for account_id in verify_account_ids:
+            account = accounts_by_id[account_id]
+            if by_id.get(account_id) != self._workflow_account_binding(db, account):
+                raise UploadError("account_session_changed")
+
+    @_requires_activity
+    def preflight_jobs(
+        self,
+        *,
+        account_ids: list[str],
+        title: str,
+        description: str,
+        tags: list[str],
+        category_id: int | None = None,
+        mode: str = "publish",
+        copyright: int | None = None,
+        source_credit: str = "",
+        target_overrides: list[dict] | None = None,
+    ) -> list[dict]:
+        """Validate workflow upload metadata before download or AI work begins."""
+
+        if (
+            not isinstance(account_ids, list)
+            or not 1 <= len(account_ids) <= 20
+            or len(set(account_ids)) != len(account_ids)
+        ):
+            raise UploadError("invalid_accounts")
+        for account_id in account_ids:
+            _identifier(account_id)
+        base = {
+            "title": _text(title, 100, required=True),
+            "description": _text(description, 2000),
+            "tags": self._normalize_tags(tags),
+            "category_id": category_id,
+            "mode": mode,
+            "copyright": copyright,
+            "source_credit": _text(source_credit, 200),
+            "cover_landscape_asset_id": None,
+            "cover_portrait_asset_id": None,
+            "publish_at_unix": None,
+            "publish_timezone_offset_minutes": None,
+            "platform_options": {},
+        }
+        if (
+            mode not in {"publish", "draft"}
+            or (
+                category_id is not None
+                and (type(category_id) is not int or not 1 <= category_id <= 10_000)
+            )
+            or (
+                copyright is not None
+                and (type(copyright) is not int or copyright not in {1, 2})
+            )
+        ):
+            raise UploadError("invalid_metadata")
+        target_overrides = [] if target_overrides is None else target_overrides
+        if not isinstance(target_overrides, list) or len(target_overrides) > len(account_ids):
+            raise UploadError("invalid_target_overrides")
+        override_map: dict[str, dict] = {}
+        for override in target_overrides:
+            if (
+                not isinstance(override, dict)
+                or set(override) - _TARGET_OVERRIDE_KEYS
+                or set(override) == {"account_id"}
+            ):
+                raise UploadError("invalid_target_override")
+            account_id = _identifier(override.get("account_id"))
+            if account_id not in account_ids or account_id in override_map:
+                raise UploadError("invalid_target_override")
+            override_map[account_id] = override
+        with self._db() as db:
+            # Keep account readiness and the durable login generation in one
+            # snapshot.  A concurrent login must either finish before this
+            # preflight or start after it; it cannot be spliced between the two
+            # reads and accidentally bless a different browser session.
+            db.execute("BEGIN IMMEDIATE")
+            targets: list[dict] = []
+            for account_id in account_ids:
+                account = db.execute(
+                    "SELECT * FROM accounts WHERE id=?", (account_id,)
+                ).fetchone()
+                if account is None:
+                    raise UploadError("account_not_found")
+                if account["lifecycle_state"] != "active":
+                    raise UploadError("account_disconnected")
+                if account["auth_state"] != "ready":
+                    raise UploadError("account_not_ready")
+                if account["platform"] not in PLATFORMS:
+                    raise UploadError("invalid_platform")
+                target = self._normalize_target(
+                    db=db,
+                    account=account,
+                    base=base,
+                    override=override_map.get(account_id, {}),
+                    verify_assets=False,
+                )
+                target["account_binding"] = self._workflow_account_binding(
+                    db, account
+                )
+                targets.append(target)
+        return targets
+
     @_requires_activity
     def create_jobs(self, *, source_id: str, account_ids: list[str], title: str,
                     description: str, tags: list[str], idempotency_key: str,
                     category_id: int | None = None, mode: str = "publish",
                     copyright: int | None = None, source_credit: str = "",
-                    target_overrides: list[dict] | None = None) -> list[dict]:
+                    target_overrides: list[dict] | None = None,
+                    expected_account_bindings: list[dict] | None = None) -> list[dict]:
         _identifier(source_id)
         if not isinstance(account_ids, list) or not 1 <= len(account_ids) <= 20 or len(set(account_ids)) != len(account_ids):
             raise UploadError("invalid_accounts")
@@ -2198,6 +2407,9 @@ class UploadService:
                 if account is None:
                     raise UploadError("account_not_found")
                 accounts_by_id[account_id] = account
+            self._validate_workflow_account_bindings(
+                db, accounts_by_id, expected_account_bindings
+            )
             if prior:
                 if prior["digest_version"] == 1:
                     replay_tags = (
@@ -2311,36 +2523,98 @@ class UploadService:
             job = self._get_job(db, job_id)
             if job["state"] in ("queued", "running", "submitted", "draft_saved"):
                 return job
-            if job["state"] != "draft":
-                raise UploadError("job_requires_new_draft")
-            if not self.backend.inspect().get("ready"):
-                raise UploadError("runtime_missing")
-            account = db.execute(
-                "SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
-                (job["account_id"],),
-            ).fetchone()
-            if account["lifecycle_state"] != "active":
-                raise UploadError("account_disconnected")
-            if account["auth_state"] != "ready":
-                raise UploadError("account_not_ready")
-            self._validate_schedule(
-                job["platform"], job["publish_at_unix"],
-                job["publish_timezone_offset_minutes"],
-            )
-            source = db.execute("SELECT * FROM sources WHERE id=?", (job["source_id"],)).fetchone()
-            if source is None:
-                raise UploadError("source_not_found")
-            self._verified_source_media_path(source)
-            self._verified_job_cover_rows(
-                db,
-                job["platform"],
-                job["cover_landscape_asset_id"],
-                job["cover_portrait_asset_id"],
-            )
+            self._validate_confirmation(db, job)
             db.execute("UPDATE jobs SET state='queued',code='',updated_at=? WHERE id=?", (_now(), job_id))
             result = self._get_job(db, job_id)
         self._wake.set()
         return result
+
+    @_requires_activity
+    def confirm_many(
+        self,
+        job_ids: tuple[str, ...],
+        *,
+        expected_account_bindings: list[dict] | None = None,
+    ) -> list[dict]:
+        """Validate and queue one workflow's upload drafts atomically."""
+
+        if (
+            not isinstance(job_ids, tuple)
+            or not job_ids
+            or len(job_ids) > 32
+            or len(set(job_ids)) != len(job_ids)
+        ):
+            raise UploadError("invalid_job_batch")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            jobs = [self._get_job(db, job_id) for job_id in job_ids]
+            account_ids = {job["account_id"] for job in jobs}
+            accounts_by_id = {
+                account_id: db.execute(
+                    "SELECT * FROM accounts WHERE id=?", (account_id,)
+                ).fetchone()
+                for account_id in account_ids
+            }
+            if any(account is None for account in accounts_by_id.values()):
+                raise UploadError("account_not_found")
+            pending = [job for job in jobs if job["state"] == "draft"]
+            self._validate_workflow_account_bindings(
+                db,
+                accounts_by_id,
+                expected_account_bindings,
+                verify_account_ids={job["account_id"] for job in pending},
+            )
+            if any(
+                job["state"]
+                not in ("draft", "queued", "running", "submitted", "draft_saved")
+                for job in jobs
+            ):
+                raise UploadError("job_requires_new_draft")
+            for job in pending:
+                self._validate_confirmation(db, job)
+            now = _now()
+            for job in pending:
+                db.execute(
+                    "UPDATE jobs SET state='queued',code='',updated_at=? WHERE id=?",
+                    (now, job["id"]),
+                )
+            result = [self._get_job(db, job_id) for job_id in job_ids]
+        if pending:
+            self._wake.set()
+        return result
+
+    def _validate_confirmation(self, db: sqlite3.Connection, job: dict) -> None:
+        if job["state"] != "draft":
+            raise UploadError("job_requires_new_draft")
+        if not self.backend.inspect().get("ready"):
+            raise UploadError("runtime_missing")
+        account = db.execute(
+            "SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
+            (job["account_id"],),
+        ).fetchone()
+        if account is None:
+            raise UploadError("account_not_found")
+        if account["lifecycle_state"] != "active":
+            raise UploadError("account_disconnected")
+        if account["auth_state"] != "ready":
+            raise UploadError("account_not_ready")
+        self._validate_schedule(
+            job["platform"],
+            job["publish_at_unix"],
+            job["publish_timezone_offset_minutes"],
+        )
+        source = db.execute(
+            "SELECT * FROM sources WHERE id=?", (job["source_id"],)
+        ).fetchone()
+        if source is None:
+            raise UploadError("source_not_found")
+        self._verified_source_media_path(source)
+        self._verified_job_cover_rows(
+            db,
+            job["platform"],
+            job["cover_landscape_asset_id"],
+            job["cover_portrait_asset_id"],
+        )
 
     @_requires_activity
     def cancel(self, job_id: str) -> dict:

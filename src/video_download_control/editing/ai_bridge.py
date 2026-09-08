@@ -47,6 +47,7 @@ from .ai_protocol import (
     PROTOCOL_SCHEMA,
     AiProtocolError,
     file_sha256,
+    operation_data_egress as protocol_operation_data_egress,
     read_json_file,
     validate_progress,
     validate_request,
@@ -79,6 +80,22 @@ class AiBridgeError(RuntimeError):
             else "ai_bridge_failed"
         )
         super().__init__(self.code)
+
+
+def operation_data_egress(
+    provider: RuntimeProvider, operation: str
+) -> tuple[str, ...]:
+    """Describe the user payload actually sent by this bridge operation."""
+
+    if provider.kind not in {"http", "remote_plugin"}:
+        return ()
+    try:
+        required = protocol_operation_data_egress(operation)
+    except AiProtocolError as exc:
+        raise AiBridgeError(exc.code) from exc
+    if not set(required).issubset(provider.data_egress):
+        raise AiBridgeError("ai_runtime_invalid")
+    return required
 
 
 def _plain_directory(path: Path, *, create: bool = False) -> Path:
@@ -341,6 +358,7 @@ class AiRuntimeBridge:
             provider, _model = self.runtime.verify_for_operation(
                 provider_id, operation, model_id
             )
+            operation_data_egress(provider, operation)
         except AiProtocolError as exc:
             raise AiBridgeError(exc.code) from exc
         except AiRuntimeError as exc:
@@ -528,11 +546,15 @@ class RuntimeTranscriptionProvider:
             operation="transcribe",
             label="自动听写",
             status="unverified",
-            execution="remote" if provider.kind == "http" else "local",
+            execution=(
+                "remote"
+                if provider.kind in {"http", "remote_plugin"}
+                else "local"
+            ),
             description="通过隔离 AI runtime 生成严格时间轴。",
             provider_id=provider.id,
             model_id=self.model_id,
-            data_egress=provider.data_egress,
+            data_egress=operation_data_egress(provider, "transcribe"),
             requirements=("provider_health",),
             reason_code="provider_health_required",
         )
@@ -600,11 +622,15 @@ class RuntimeTranslationProvider:
             operation="translate",
             label="自动翻译",
             status="unverified",
-            execution="remote" if provider.kind == "http" else "local",
+            execution=(
+                "remote"
+                if provider.kind in {"http", "remote_plugin"}
+                else "local"
+            ),
             description="通过隔离 AI runtime 翻译并保持字幕段落对齐。",
             provider_id=provider.id,
             model_id=self.model_id,
-            data_egress=provider.data_egress,
+            data_egress=operation_data_egress(provider, "translate"),
             requirements=("provider_health",),
             reason_code="provider_health_required",
         )
@@ -671,11 +697,15 @@ class RuntimeSpeechProvider:
             operation="dub",
             label="自动 AI 配音",
             status="unverified",
-            execution="remote" if provider.kind == "http" else "local",
+            execution=(
+                "remote"
+                if provider.kind in {"http", "remote_plugin"}
+                else "local"
+            ),
             description="通过隔离 AI runtime 生成标准音色 WAV。",
             provider_id=provider.id,
             model_id=self.model_id,
-            data_egress=provider.data_egress,
+            data_egress=operation_data_egress(provider, "synthesize"),
             requirements=("provider_health", "standard_voice_review"),
             reason_code="provider_health_required",
         )
@@ -694,7 +724,10 @@ class RuntimeSpeechProvider:
                     for item in health["voices"]  # type: ignore[union-attr]
                 )
             return tuple(
-                voice for voice in self._voices if language in voice.languages
+                voice
+                for voice in self._voices
+                if language.casefold()
+                in {value.casefold() for value in voice.languages}
             )
 
     def synthesize(

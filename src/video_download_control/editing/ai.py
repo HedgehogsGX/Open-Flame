@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-from .timeline import TimelineCue
+from .timeline import MAX_CUE_TEXT, TimelineCue
 
 CapabilityStatus = Literal["ready", "blocked", "unverified", "unsupported"]
 ExecutionLocation = Literal["local", "remote"]
@@ -74,7 +74,7 @@ class TranslationItem:
     def __post_init__(self) -> None:
         if not self.segment_id or len(self.segment_id) > 64:
             raise ValueError("invalid translation segment id")
-        if not self.target_text.strip() or len(self.target_text) > 8_000:
+        if not self.target_text.strip() or len(self.target_text) > MAX_CUE_TEXT:
             raise ValueError("invalid translated text")
         if any(ord(character) < 32 and character not in "\n\t" for character in self.target_text):
             raise ValueError("invalid translated text")

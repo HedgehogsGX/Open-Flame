@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -463,7 +464,9 @@ class EditingService:
             raise EditingError("source_not_found")
         return self._verified_source_row(row)
 
-    def project_source_path(self, project_id: str) -> Path:
+    def project_source_identity(self, project_id: str) -> tuple[Path, int, str]:
+        """Return the verified project source and its immutable database identity."""
+
         with self._db() as db:
             row = db.execute(
                 "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id WHERE p.id=?",
@@ -471,7 +474,10 @@ class EditingService:
             ).fetchone()
         if row is None:
             raise EditingError("project_not_found")
-        return self._verified_source_row(row)
+        return self._verified_source_row(row), row["size"], row["sha256"]
+
+    def project_source_path(self, project_id: str) -> Path:
+        return self.project_source_identity(project_id)[0]
 
     def open_project_source(
         self, project_id: str
@@ -742,7 +748,19 @@ class EditingService:
             if original is None:
                 raise EditingError("ai_task_not_found")
             original_public, request = self._ai_task_from_row(original)
-            if original_public["state"] not in {"failed", "canceled"}:
+            retryable = original_public["state"] in {"failed", "canceled"}
+            if original_public["state"] == "succeeded":
+                result_revision_id = original_public.get("result_revision_id")
+                timeline = (
+                    None
+                    if result_revision_id is None
+                    else db.execute(
+                        "SELECT state FROM timeline_revisions WHERE id=?",
+                        (result_revision_id,),
+                    ).fetchone()
+                )
+                retryable = timeline is not None and timeline["state"] == "rejected"
+            if not retryable:
                 raise EditingError("ai_task_retry_not_allowed")
             successor = db.execute(
                 "SELECT * FROM ai_tasks WHERE retry_of=?", (task_id,)
@@ -1095,14 +1113,23 @@ class EditingService:
         project_id: str,
         expected_version: int,
         idempotency_key: str,
+        *,
+        timeline_revision_id: str | None = None,
     ) -> dict[str, Any]:
         project_id = _identifier(project_id)
+        if timeline_revision_id is not None:
+            timeline_revision_id = _identifier(timeline_revision_id)
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 1:
             raise EditingError("invalid_version")
         key = _request_id(idempotency_key)
-        request_digest = _digest("create_plan", {
-            "project_id": project_id, "expected_version": expected_version
-        })
+        request_digest = _digest(
+            "create_plan",
+            {
+                "project_id": project_id,
+                "expected_version": expected_version,
+                "timeline_revision_id": timeline_revision_id,
+            },
+        )
         existing = self._request_result(key, "create_plan", request_digest)
         if existing is not None:
             return self.plan(existing)
@@ -1123,6 +1150,7 @@ class EditingService:
         if draft is None or source_row is None:
             raise EditingError("editing_data_invalid")
         self._draft_public(draft)
+        recipe = self._recipe_from_row(draft)
         self._verified_source_row(source_row)
         plan_id, now = uuid4().hex, _now()
         with self._db() as db:
@@ -1135,22 +1163,62 @@ class EditingService:
             ).fetchone()
             if current is None or current["current_version"] != expected_version:
                 raise EditingError("draft_version_conflict")
+            binding = self._timeline_binding(
+                db,
+                project_id=project_id,
+                recipe=recipe,
+                revision_id=timeline_revision_id,
+            )
             db.execute(
                 "INSERT INTO render_plans(id,project_id,draft_version,recipe,recipe_sha256,"
                 "state,code,created_at,updated_at) VALUES(?,?,?,?,?,'review',"
                 "'explicit_confirmation_required',?,?)",
                 (plan_id, project_id, expected_version, draft["recipe"], draft["recipe_sha256"], now, now),
             )
+            if binding is not None:
+                db.execute(
+                    "INSERT INTO plan_timeline_bindings("
+                    "plan_id,revision_id,cues_sha256,parent_id,parent_cues_sha256,"
+                    "source_language,target_language,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        plan_id,
+                        binding["revision_id"],
+                        binding["cues_sha256"],
+                        binding["parent_id"],
+                        binding["parent_cues_sha256"],
+                        binding["source_language"],
+                        binding["target_language"],
+                        now,
+                    ),
+                )
             self._insert_request(db, key, "create_plan", request_digest, plan_id, now)
             return self._plan_by_id(db, plan_id)
 
-    def confirm_plan(self, plan_id: str) -> dict[str, Any]:
+    def confirm_plan(
+        self,
+        plan_id: str,
+        *,
+        expected_recipe_sha256: str | None = None,
+        ai_data_egress_accepted: bool = False,
+    ) -> dict[str, Any]:
         plan_id = _identifier(plan_id)
+        if type(ai_data_egress_accepted) is not bool or (
+            expected_recipe_sha256 is not None
+            and (
+                not isinstance(expected_recipe_sha256, str)
+                or not _SHA256.fullmatch(expected_recipe_sha256)
+            )
+        ):
+            raise EditingError("invalid_plan_confirmation")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM render_plans WHERE id=?", (plan_id,)).fetchone()
             if row is None:
                 raise EditingError("plan_not_found")
+            if expected_recipe_sha256 is not None and not hmac.compare_digest(
+                row["recipe_sha256"], expected_recipe_sha256
+            ):
+                raise EditingError("plan_definition_changed")
             if row["state"] in {"queued", "running", "canceling", "ready"}:
                 return self._plan_public(db, row)
             if row["state"] != "review":
@@ -1158,6 +1226,15 @@ class EditingService:
             recipe = self._recipe_from_row(row)
             if recipe.translation.state == "blocked" or recipe.dubbing.state == "blocked":
                 raise EditingError("ai_operation_blocked")
+            if (
+                recipe.translation.enabled
+                and recipe.translation.state != "ready"
+            ) or (recipe.dubbing.enabled and recipe.dubbing.state != "ready"):
+                raise EditingError("ai_operation_not_ready")
+            if recipe.dubbing.enabled and (
+                expected_recipe_sha256 is None or not ai_data_egress_accepted
+            ):
+                raise EditingError("ai_data_egress_confirmation_required")
             source_row = db.execute(
                 "SELECT s.* FROM sources s JOIN projects p ON p.source_id=s.id "
                 "WHERE p.id=?", (row["project_id"],),
@@ -1165,6 +1242,8 @@ class EditingService:
         if source_row is None:
             raise EditingError("editing_data_invalid")
         self._verified_source_row(source_row)
+        if recipe.translation.enabled or recipe.dubbing.enabled:
+            self.approved_timeline_for_plan(plan_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             now = _now()
@@ -1197,6 +1276,28 @@ class EditingService:
                 raise EditingError("plan_not_found")
             if original["state"] not in {"failed", "canceled"}:
                 raise EditingError("plan_retry_not_allowed")
+            successor = db.execute(
+                "SELECT id FROM render_plans WHERE retry_of=?", (plan_id,)
+            ).fetchone()
+            if successor is not None:
+                successor_id = _identifier(successor["id"])
+                self._insert_request(
+                    db, key, "retry_plan", request_digest, successor_id, _now()
+                )
+                return self._plan_by_id(db, successor_id)
+            recipe = self._recipe_from_row(original)
+            original_binding = db.execute(
+                "SELECT * FROM plan_timeline_bindings WHERE plan_id=?",
+                (plan_id,),
+            ).fetchone()
+            if (recipe.translation.enabled or recipe.dubbing.enabled) and (
+                original_binding is None
+            ):
+                raise EditingError("ai_timeline_binding_required")
+            if not (recipe.translation.enabled or recipe.dubbing.enabled) and (
+                original_binding is not None
+            ):
+                raise EditingError("editing_data_invalid")
             new_id, now = uuid4().hex, _now()
             db.execute(
                 "INSERT INTO render_plans(id,project_id,draft_version,recipe,recipe_sha256,"
@@ -1205,6 +1306,30 @@ class EditingService:
                 (new_id, original["project_id"], original["draft_version"], original["recipe"],
                  original["recipe_sha256"], now, now, plan_id),
             )
+            if original_binding is not None:
+                binding = self._timeline_binding(
+                    db,
+                    project_id=original["project_id"],
+                    recipe=recipe,
+                    revision_id=original_binding["revision_id"],
+                )
+                if binding is None:
+                    raise EditingError("editing_data_invalid")
+                db.execute(
+                    "INSERT INTO plan_timeline_bindings("
+                    "plan_id,revision_id,cues_sha256,parent_id,parent_cues_sha256,"
+                    "source_language,target_language,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        new_id,
+                        binding["revision_id"],
+                        binding["cues_sha256"],
+                        binding["parent_id"],
+                        binding["parent_cues_sha256"],
+                        binding["source_language"],
+                        binding["target_language"],
+                        now,
+                    ),
+                )
             self._insert_request(db, key, "retry_plan", request_digest, new_id, now)
             return self._plan_by_id(db, new_id)
 
@@ -1259,6 +1384,135 @@ class EditingService:
 
     def source_path_for_plan(self, plan_id: str) -> Path:
         return self.source_identity_for_plan(plan_id)[0]
+
+    def _timeline_binding(
+        self,
+        db: sqlite3.Connection,
+        *,
+        project_id: str,
+        recipe: EditRecipe,
+        revision_id: str | None,
+    ) -> dict[str, Any] | None:
+        ai_enabled = recipe.translation.enabled or recipe.dubbing.enabled
+        if not ai_enabled:
+            if revision_id is not None:
+                raise EditingError("ai_timeline_not_expected")
+            return None
+        if (
+            not recipe.translation.enabled
+            or recipe.translation.state != "ready"
+            or (recipe.dubbing.enabled and recipe.dubbing.state != "ready")
+        ):
+            if revision_id is not None:
+                raise EditingError("ai_timeline_not_expected")
+            # A blocked or review-state plan can still be inspected, but
+            # confirm_plan will refuse to queue it until a new ready draft is
+            # frozen with an exact approved timeline revision.
+            return None
+        if revision_id is None:
+            raise EditingError("ai_timeline_revision_required")
+        row = db.execute(
+            "SELECT * FROM timeline_revisions WHERE id=?", (revision_id,)
+        ).fetchone()
+        if row is None:
+            raise EditingError("ai_timeline_required")
+        public, timeline = self._timeline_from_row(row)
+        parent_id = public["parent_id"]
+        if (
+            public["kind"] != "translation"
+            or public["state"] != "approved"
+            or public["project_id"] != project_id
+            or public["language"].casefold()
+            != recipe.translation.target_language.casefold()
+            or public["provider"] != recipe.translation.provider
+            or public["model"] != recipe.translation.model
+            or parent_id is None
+        ):
+            raise EditingError("ai_timeline_mismatch")
+        parent_row = db.execute(
+            "SELECT * FROM timeline_revisions WHERE id=?", (parent_id,)
+        ).fetchone()
+        if parent_row is None:
+            raise EditingError("editing_data_invalid")
+        parent_public, parent = self._timeline_from_row(parent_row)
+        if (
+            parent_public["kind"] != "transcription"
+            or parent_public["state"] != "approved"
+            or parent_public["project_id"] != project_id
+            or parent_public["parent_id"] is not None
+            or (
+                recipe.translation.source_language.casefold() != "auto"
+                and parent.language.casefold()
+                != recipe.translation.source_language.casefold()
+            )
+            or len(parent.cues) != len(timeline.cues)
+            or any(
+                (source.id, source.order, source.start_ms, source.end_ms)
+                != (translated.id, translated.order, translated.start_ms, translated.end_ms)
+                for source, translated in zip(
+                    parent.cues, timeline.cues, strict=True
+                )
+            )
+        ):
+            raise EditingError("ai_timeline_mismatch")
+        return {
+            "revision_id": public["id"],
+            "cues_sha256": timeline.cues_sha256,
+            "parent_id": parent_public["id"],
+            "parent_cues_sha256": parent.cues_sha256,
+            "source_language": parent.language,
+            "target_language": timeline.language,
+            "timeline": timeline,
+        }
+
+    def approved_timeline_for_plan(
+        self, plan_id: str
+    ) -> tuple[TimelineCue, ...] | None:
+        """Resolve the exact immutable timeline bound when the plan was created."""
+
+        plan_id = _identifier(plan_id)
+        with self._db() as db:
+            plan = db.execute(
+                "SELECT * FROM render_plans WHERE id=?", (plan_id,)
+            ).fetchone()
+            if plan is None:
+                raise EditingError("plan_not_found")
+            recipe = self._recipe_from_row(plan)
+            if not recipe.translation.enabled and not recipe.dubbing.enabled:
+                unexpected = db.execute(
+                    "SELECT 1 FROM plan_timeline_bindings WHERE plan_id=?",
+                    (plan_id,),
+                ).fetchone()
+                if unexpected is not None:
+                    raise EditingError("editing_data_invalid")
+                return None
+            row = db.execute(
+                "SELECT * FROM plan_timeline_bindings WHERE plan_id=?",
+                (plan_id,),
+            ).fetchone()
+            if row is None:
+                raise EditingError("ai_timeline_binding_required")
+            binding = self._timeline_binding(
+                db,
+                project_id=plan["project_id"],
+                recipe=recipe,
+                revision_id=row["revision_id"],
+            )
+            if binding is None:
+                raise EditingError("editing_data_invalid")
+            if (
+                row["plan_id"] != plan_id
+                or row["cues_sha256"] != binding["cues_sha256"]
+                or row["parent_id"] != binding["parent_id"]
+                or row["parent_cues_sha256"] != binding["parent_cues_sha256"]
+                or row["source_language"] != binding["source_language"]
+                or row["target_language"] != binding["target_language"]
+            ):
+                raise EditingError("editing_data_invalid")
+            timeline = binding["timeline"]
+            if not isinstance(timeline, CanonicalTimeline):
+                raise EditingError("editing_data_invalid")
+            return timeline.cues
 
     def source_identity_for_plan(self, plan_id: str) -> tuple[Path, int, str]:
         """Return a verified path plus the immutable database identity."""
@@ -1770,6 +2024,17 @@ class EditingService:
             "created_at", "updated_at", "confirmed_at", "started_at", "finished_at", "retry_of",
         )}
         result["recipe"] = recipe.to_dict()
+        binding = db.execute(
+            "SELECT revision_id,cues_sha256,parent_id,parent_cues_sha256 "
+            "FROM plan_timeline_bindings WHERE plan_id=?",
+            (row["id"],),
+        ).fetchone()
+        result["timeline_revision_id"] = (
+            None if binding is None else binding["revision_id"]
+        )
+        result["timeline_cues_sha256"] = (
+            None if binding is None else binding["cues_sha256"]
+        )
         result["assets"] = [
             self._asset_public(asset) for asset in db.execute(
                 "SELECT * FROM assets WHERE plan_id=? ORDER BY "

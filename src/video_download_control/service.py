@@ -242,6 +242,9 @@ class BatchService:
     def list_batches(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self.repository.list_batches(limit=limit)
 
+    def find_batches_by_name(self, name: str) -> list[dict[str, Any]]:
+        return self.repository.find_batches_by_name(name)
+
     def list_ready_assets_for_batch(
         self, batch_id: str
     ) -> list[dict[str, Any]] | None:

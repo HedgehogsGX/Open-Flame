@@ -1,4 +1,4 @@
-"""Exact Schema 2 creation and forward migration for the editing store."""
+"""Exact Schema 3 creation and forward migration for the editing store."""
 from __future__ import annotations
 
 import os
@@ -9,8 +9,9 @@ import threading
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_V1_VERSION = 1
+_SCHEMA_V2_VERSION = 2
 
 _SCHEMA_V1_TABLE_STATEMENTS = (
     "CREATE TABLE metadata(version INTEGER NOT NULL)",
@@ -138,9 +139,43 @@ _SCHEMA_V2_TRIGGER_STATEMENTS = (
  BEFORE DELETE ON ai_tasks BEGIN SELECT RAISE(ABORT,'immutable ai task'); END""",
 )
 
-TABLE_STATEMENTS = _SCHEMA_V1_TABLE_STATEMENTS + _SCHEMA_V2_TABLE_STATEMENTS
-INDEX_STATEMENTS = _SCHEMA_V1_INDEX_STATEMENTS + _SCHEMA_V2_INDEX_STATEMENTS
-TRIGGER_STATEMENTS = _SCHEMA_V1_TRIGGER_STATEMENTS + _SCHEMA_V2_TRIGGER_STATEMENTS
+_SCHEMA_V3_TABLE_STATEMENTS = (
+    """CREATE TABLE plan_timeline_bindings(
+ plan_id TEXT PRIMARY KEY REFERENCES render_plans(id),
+ revision_id TEXT NOT NULL REFERENCES timeline_revisions(id),
+ cues_sha256 TEXT NOT NULL, parent_id TEXT NOT NULL REFERENCES timeline_revisions(id),
+ parent_cues_sha256 TEXT NOT NULL, source_language TEXT NOT NULL,
+ target_language TEXT NOT NULL, created_at TEXT NOT NULL)""",
+)
+
+_SCHEMA_V3_INDEX_STATEMENTS = (
+    "CREATE INDEX plan_timelines_revision ON plan_timeline_bindings(revision_id,plan_id)",
+)
+
+_SCHEMA_V3_TRIGGER_STATEMENTS = (
+    """CREATE TRIGGER plan_timeline_binding_immutable
+ BEFORE UPDATE ON plan_timeline_bindings
+ BEGIN SELECT RAISE(ABORT,'immutable plan timeline binding'); END""",
+    """CREATE TRIGGER plan_timeline_binding_delete_forbidden
+ BEFORE DELETE ON plan_timeline_bindings
+ BEGIN SELECT RAISE(ABORT,'immutable plan timeline binding'); END""",
+)
+
+TABLE_STATEMENTS = (
+    _SCHEMA_V1_TABLE_STATEMENTS
+    + _SCHEMA_V2_TABLE_STATEMENTS
+    + _SCHEMA_V3_TABLE_STATEMENTS
+)
+INDEX_STATEMENTS = (
+    _SCHEMA_V1_INDEX_STATEMENTS
+    + _SCHEMA_V2_INDEX_STATEMENTS
+    + _SCHEMA_V3_INDEX_STATEMENTS
+)
+TRIGGER_STATEMENTS = (
+    _SCHEMA_V1_TRIGGER_STATEMENTS
+    + _SCHEMA_V2_TRIGGER_STATEMENTS
+    + _SCHEMA_V3_TRIGGER_STATEMENTS
+)
 
 SCHEMA_DDL = ";\n".join(TABLE_STATEMENTS + INDEX_STATEMENTS + TRIGGER_STATEMENTS) + ";"
 _SCHEMA_V1_TABLE_NAMES = (
@@ -152,14 +187,23 @@ _SCHEMA_V1_INDEX_NAMES = (
 _SCHEMA_V1_TRIGGER_NAMES = (
     "render_plan_definition_immutable", "draft_definition_immutable", "draft_delete_forbidden",
 )
-_TABLE_NAMES = _SCHEMA_V1_TABLE_NAMES + ("timeline_revisions", "ai_tasks")
-_INDEX_NAMES = _SCHEMA_V1_INDEX_NAMES + (
+_SCHEMA_V2_TABLE_NAMES = _SCHEMA_V1_TABLE_NAMES + (
+    "timeline_revisions",
+    "ai_tasks",
+)
+_SCHEMA_V2_INDEX_NAMES = _SCHEMA_V1_INDEX_NAMES + (
     "timelines_project", "timelines_parent", "ai_tasks_state", "ai_tasks_project",
     "ai_tasks_source", "ai_tasks_retry", "ai_tasks_result",
 )
-_TRIGGER_NAMES = _SCHEMA_V1_TRIGGER_NAMES + (
+_SCHEMA_V2_TRIGGER_NAMES = _SCHEMA_V1_TRIGGER_NAMES + (
     "timeline_definition_immutable", "timeline_review_once", "timeline_delete_forbidden",
     "ai_task_definition_immutable", "ai_task_delete_forbidden",
+)
+_TABLE_NAMES = _SCHEMA_V2_TABLE_NAMES + ("plan_timeline_bindings",)
+_INDEX_NAMES = _SCHEMA_V2_INDEX_NAMES + ("plan_timelines_revision",)
+_TRIGGER_NAMES = _SCHEMA_V2_TRIGGER_NAMES + (
+    "plan_timeline_binding_immutable",
+    "plan_timeline_binding_delete_forbidden",
 )
 _INITIALIZE_LOCK = threading.Lock()
 
@@ -198,17 +242,29 @@ _EXPECTED_TABLE_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(
         _SCHEMA_V1_TABLE_NAMES, _SCHEMA_V1_TABLE_STATEMENTS
     ),
+    _SCHEMA_V2_VERSION: _expected_sql(
+        _SCHEMA_V2_TABLE_NAMES,
+        _SCHEMA_V1_TABLE_STATEMENTS + _SCHEMA_V2_TABLE_STATEMENTS,
+    ),
     SCHEMA_VERSION: _expected_sql(_TABLE_NAMES, TABLE_STATEMENTS),
 }
 _EXPECTED_INDEX_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(
         _SCHEMA_V1_INDEX_NAMES, _SCHEMA_V1_INDEX_STATEMENTS
     ),
+    _SCHEMA_V2_VERSION: _expected_sql(
+        _SCHEMA_V2_INDEX_NAMES,
+        _SCHEMA_V1_INDEX_STATEMENTS + _SCHEMA_V2_INDEX_STATEMENTS,
+    ),
     SCHEMA_VERSION: _expected_sql(_INDEX_NAMES, INDEX_STATEMENTS),
 }
 _EXPECTED_TRIGGER_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(
         _SCHEMA_V1_TRIGGER_NAMES, _SCHEMA_V1_TRIGGER_STATEMENTS
+    ),
+    _SCHEMA_V2_VERSION: _expected_sql(
+        _SCHEMA_V2_TRIGGER_NAMES,
+        _SCHEMA_V1_TRIGGER_STATEMENTS + _SCHEMA_V2_TRIGGER_STATEMENTS,
     ),
     SCHEMA_VERSION: _expected_sql(_TRIGGER_NAMES, TRIGGER_STATEMENTS),
 }
@@ -351,7 +407,7 @@ def _create_database(path: Path) -> None:
             pass
 
 
-def _migrate_v1_to_v2(path: Path) -> None:
+def _migrate_to_current(path: Path) -> None:
     before = _plain_file(path)
     connection: sqlite3.Connection | None = None
     committed = False
@@ -374,13 +430,24 @@ def _migrate_v1_to_v2(path: Path) -> None:
             ):
                 connection.execute(statement)
             connection.execute(
-                "UPDATE metadata SET version=?", (SCHEMA_VERSION,)
+                "UPDATE metadata SET version=?", (_SCHEMA_V2_VERSION,)
             )
+            connection.execute(f"PRAGMA user_version={_SCHEMA_V2_VERSION}")
+            _validate_connection(connection, _SCHEMA_V2_VERSION)
+            version = _SCHEMA_V2_VERSION
+        if version == _SCHEMA_V2_VERSION:
+            _validate_connection(connection, _SCHEMA_V2_VERSION)
+            for statement in (
+                _SCHEMA_V3_TABLE_STATEMENTS
+                + _SCHEMA_V3_INDEX_STATEMENTS
+                + _SCHEMA_V3_TRIGGER_STATEMENTS
+            ):
+                connection.execute(statement)
+            connection.execute("UPDATE metadata SET version=?", (SCHEMA_VERSION,))
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             _validate_connection(connection, SCHEMA_VERSION)
-        elif version == SCHEMA_VERSION:
-            _validate_connection(connection, SCHEMA_VERSION)
-        else:
+            version = SCHEMA_VERSION
+        if version != SCHEMA_VERSION:
             raise EditingSchemaError
         connection.commit()
         committed = True
@@ -397,7 +464,7 @@ def _migrate_v1_to_v2(path: Path) -> None:
 
 
 def ensure_editing_schema(path: Path) -> None:
-    """Create Schema 2 or migrate one exact Schema 1 database in place."""
+    """Create Schema 3 or migrate one exact Schema 1/2 database in place."""
 
     path = Path(path)
     if path.name in {"", ".", ".."}:
@@ -409,10 +476,11 @@ def ensure_editing_schema(path: Path) -> None:
             if not path.exists():
                 _create_database(path)
             version = _validated_schema_version(
-                path, frozenset({_SCHEMA_V1_VERSION, SCHEMA_VERSION})
+                path,
+                frozenset({_SCHEMA_V1_VERSION, _SCHEMA_V2_VERSION, SCHEMA_VERSION}),
             )
-            if version == _SCHEMA_V1_VERSION:
-                _migrate_v1_to_v2(path)
+            if version != SCHEMA_VERSION:
+                _migrate_to_current(path)
             validate_editing_schema(path)
         except (OSError, sqlite3.Error, EditingSchemaError) as exc:
             raise EditingSchemaError from exc

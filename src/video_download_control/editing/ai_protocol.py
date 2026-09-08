@@ -23,16 +23,22 @@ RUNTIME_ID = "open-flame-ai-runtime"
 RUNTIME_VERSION = "1"
 OPERATIONS = frozenset({"health", "transcribe", "translate", "synthesize"})
 TASK_OPERATIONS = frozenset({"transcribe", "translate", "synthesize"})
+OPERATION_DATA_EGRESS = {
+    "health": (),
+    "transcribe": ("audio",),
+    "translate": ("text",),
+    "synthesize": ("text",),
+}
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 MAX_PROGRESS_LINE_BYTES = 1024
 MAX_PROGRESS_LINES = 256
 MAX_CUES = 10_000
-MAX_CUE_TEXT = 8_000
+MAX_CUE_TEXT = 4_096
 MAX_TRANSLATION_ITEMS = 10_000
 MAX_GLOSSARY_ITEMS = 1_000
 MAX_GLOSSARY_TEXT = 500
-MAX_SYNTHESIS_TEXT = 8_000
+MAX_SYNTHESIS_TEXT = 4_096
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,159}$")
@@ -44,7 +50,11 @@ _ENTRYPOINT = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
     r":[A-Za-z_][A-Za-z0-9_]*$"
 )
-_SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,119}$")
+# Official CPython embeddable distributions contain extension modules such as
+# ``_ssl.pyd`` and ``_socket.pyd``.  A leading underscore is therefore part of
+# the portable runtime inventory; leading dots and traversal segments remain
+# rejected by this expression.
+_SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._+-]{0,119}$")
 
 
 class AiProtocolError(ValueError):
@@ -53,6 +63,15 @@ class AiProtocolError(ValueError):
     def __init__(self, code: str):
         self.code = code if _CODE.fullmatch(code) else "ai_protocol_invalid"
         super().__init__(self.code)
+
+
+def operation_data_egress(operation: str) -> tuple[str, ...]:
+    """Return the exact user payload categories sent for one AI operation."""
+
+    try:
+        return OPERATION_DATA_EGRESS[operation]
+    except (KeyError, TypeError) as exc:
+        raise AiProtocolError("ai_operation_unsupported") from exc
 
 
 def _exact(
@@ -617,6 +636,7 @@ __all__ = [
     "MAX_PROGRESS_LINES",
     "MAX_REQUEST_BYTES",
     "MAX_RESULT_BYTES",
+    "OPERATION_DATA_EGRESS",
     "OPERATIONS",
     "PROTOCOL_SCHEMA",
     "RUNTIME_ID",
@@ -625,6 +645,7 @@ __all__ = [
     "TASK_OPERATIONS",
     "canonical_json_bytes",
     "file_sha256",
+    "operation_data_egress",
     "read_json_file",
     "relative_runtime_path",
     "validate_entrypoint",

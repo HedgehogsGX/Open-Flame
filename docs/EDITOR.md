@@ -1,11 +1,11 @@
-# Open-Flame 0.27.0 编辑工作台指南
+# Open-Flame 0.28.0 编辑工作台指南
 
 日期：2026-09-08
-适用范围：Open-Flame 0.27.0 当前源码中的本地编辑切片
+适用范围：Open-Flame 0.28.0 当前源码中的本地编辑与可选 AI 处理
 
-编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。当前生产能力是**视频分段**与**封面制作**。自动听写、自动翻译和 AI 配音只有时间轴、recipe 与 provider 合同；隔离 AI runtime、模型、云端凭据及真实试听尚未安装或验收，因此当前页面把这些能力显示为“尚不可用”。
+编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在且用户明确接受数据外发与费用边界后才能执行。当前仓库没有凭据，因此真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 Bilibili、抖音或视频号已经接收、审核或公开任何成品。当前本地证据见[Iteration 0.27.0 编辑工作台记录](../validation/iteration-0.27.0-editing-workspace-evidence.md)。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -16,13 +16,17 @@ ready 下载视频
 显式复制到独立编辑根并复核 SHA-256
     ▼
 编辑项目 + 版本化草稿
+    │ 可选：建立并确认听写/翻译任务
     ▼
-冻结当前草稿为 review 计划
-    │ 人工核对并明确确认
+审核完整时间轴并批准或拒绝
+    │ 可选：把已批准译文和标准音色写入草稿
+    ▼
+冻结当前草稿和批准的时间轴为 review 计划
+    │ 核对本地处理及配音外发范围，再明确确认
     ▼
 单个本地 worker 渲染
     ▼
-ready 编辑成品（分段 MP4 / 封面 PNG）
+ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
     │ 对视频点击“用于上传”并再次显式导入
     ▼
 上传域中的独立媒体副本
@@ -31,7 +35,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG）
 上传适配器才可能被调用
 ```
 
-输入网址只创建下载任务。它不会自动建立编辑项目、自动开始渲染、自动导入上传，也不会自动投稿或发布。
+下载页输入网址只创建下载任务。需要持久化串接后续步骤时使用 `/workflows`：它按保存的 recipe 和预授权推进，未授权的 AI、编辑或上传节点会停下等待确认；应用重启、AI/编辑重试、上传 retry leaf 和未知远端结果仍会重新停下，不会凭旧确认静默继续。
 
 ### 1.1 从下载成品建立编辑项目
 
@@ -92,6 +96,10 @@ ready 编辑成品（分段 MP4 / 封面 PNG）
 
 完成前会用 ffprobe 复核 MP4 container、H.264、音频 codec、尺寸和实际时长。实际时长与计划时长误差超过 500 ms 时整项失败，已有部分输出不会发布。
 
+启用已批准的翻译或配音时，时间轴按每个分段单独处理：只保留完整落入该段的 cue，把时间减去分段起点，再分别生成 `caption-001.vtt`、`dubbed-video-001.mp4` 等成品；只有一个输出窗口时字幕名为 `caption.vtt`。分段边界若切入任一 cue，会以 `ai_segment_boundary_splits_cue` 拒绝整项，不能把一句字幕或配音无提示地截断。某段没有 cue 时仍可作为纯 B-roll 输出空 WebVTT 和本地确定性静音，不调用 TTS。
+
+每段配音轨从本段 0 ms 开始独立构造，临时 cue WAV 与轨道在该段渲染后删除。选择“压低原声后叠加”时，原声固定为 22%，配音保持原电平，`amix` 不做自动归一化并在输出前限幅；选择替换时只使用配音轨。这个固定混音只描述实现参数，最终响度和可懂度仍须真人试听。
+
 ## 3. 当前封面能力
 
 封面从源视频指定时间抽取一帧，再在内存中完整解码、居中裁切、缩放并输出静态 PNG。页面当前提供以下比例：
@@ -104,7 +112,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG）
 | 9:16 | 720 × 1280 |
 | 1:1 | 1080 × 1080 |
 
-底层 recipe 还支持 `source`：保持源比例，最长边不超过 1920 × 1080，且不放大；0.27.0 页面没有暴露该选项。底层也定义了副标题字段，但当前页面只提供标题，副标题保存为空。
+底层 recipe 还支持 `source`：保持源比例，最长边不超过 1920 × 1080，且不放大；0.28.0 页面没有暴露该选项。底层也定义了副标题字段，但当前页面只提供标题，副标题保存为空。
 
 标题会自动换行并放在底部黑色圆角底板上。页面限制标题 80 个字符，API 上限为 120 个字符。纯可打印 ASCII 使用 Pillow 随 12.3.0 wheel 提供的内嵌默认字体；标题或副标题含非 ASCII 字符时，只读取固定 OS allowlist 中的系统字体。Windows 依次检查 `C:\Windows\Fonts` 下的 Microsoft YaHei、Noto Sans SC、DengXian 与 SimHei 固定文件名；Linux 只检查 `/usr/share/fonts` 下固定的 Noto Sans CJK 路径。不会调用 fontconfig、接受用户字体路径、联网或从 CDN 下载字体，也不会把系统字体复制进编辑数据或发行包。
 
@@ -139,6 +147,7 @@ stateDiagram-v2
 - 已经 `ready` 的成品不会因再次调用取消而被撤销或删除。
 - 一项 recipe 中任一分段、封面、ffprobe 或发布校验失败时，不发布该次执行的部分成品。
 - `failed` 或 `canceled` 只能创建一个新的 `review` 重试计划；重试复制原计划的不可变 recipe，仍须再次明确确认。
+- AI task 重试和包含远程 TTS 的 render plan 重试都先建立唯一后继并停在待确认状态。已经完成的翻译批次或配音 cue 可能已产生费用；当前 0.28.0 没有远程 request ID reconciliation，也不复用部分远程结果，因此确认重试会重新发送完整步骤并可能再次计费。
 - 应用在取得编辑根独占 lease 后执行重启恢复：`running` 和 `canceling` 会变为 `failed`，错误码为 `render_interrupted`；`queued` 会退回 `review`，清除旧确认并标记 `restart_confirmation_required`。恢复会删除 `sources/` 与 `assets/` 中“严格小写受管 ID + 精确小写允许后缀”但数据库未登记的崩溃残留，也会清理严格 `<plan_id>/<claim_token>` 且不属于活动 claim 的 staging，包括计划已进入终态但上次尚未完成删除的目录。case-only 文件名、未知名称、非普通文件、link/reparse 与其他不安全条目保持原样。不会在重启后静默重放。
 - 停止应用后不再接受新服务操作。如果 worker 或已经进入服务层的 API 操作未能在等待时间内结束，独占 lease 会继续保留；最后一个活动方退出后才通过同一幂等路径交还，避免另一实例在文件已复制但尚未登记时执行恢复。
 - claim token 不匹配的旧 worker 不能登记结果；这类结果以 `stale_render_claim` 拒绝。
@@ -157,12 +166,15 @@ stateDiagram-v2
 | `cover_font_unavailable` | 非 ASCII 封面文字没有可用的固定 OS 系统字体；不回退为方框或联网取字体 |
 | `cover_glyph_unsupported` | 固定候选字体缺少标题或副标题中的至少一个字符；不删除或替换缺字 |
 | `media_processing_failed` | FFmpeg、ffprobe、codec、时长、图片解码或输出校验失败 |
+| `ai_segment_boundary_splits_cue` | 分段边界落在字幕 cue 内；调整分段或时间轴后重新建立计划 |
+| `ai_data_egress_confirmation_required` | 配音计划缺少与冻结 recipe 对应的显式外发/费用确认 |
+| `ai_speech_timing_overflow` | 某个配音 cue 超过其字幕时间槽；不会截断或推迟后续 cue |
 | `asset_changed` | 已登记编辑成品的大小或 SHA-256 已变化 |
 | `render_interrupted` | 本地 running/canceling 计划在上次进程退出时未完成 |
 
 错误响应只返回稳定代码，不返回本机路径或子进程 stderr。真实素材失败时先保留计划 ID、草稿版本和错误码；不要把一次 synthetic 通过解释为任意 container、codec 或损坏媒体都兼容。
 
-## 5. Data root 与 Schema 1
+## 5. Data root 与 Editing Schema 3
 
 若下载数据根为 `data`，编辑数据根默认为它的同级目录 `data-edits`。一般规则是给下载数据根的目录名追加 `-edits`；例如 `D:\OpenFlame\private-data` 对应 `D:\OpenFlame\private-data-edits`。
 
@@ -177,7 +189,7 @@ data-edits/
 
 编辑根与下载数据库/媒体、下载 Cookie、上传 Schema 3、上传媒体及上传账号凭据相互隔离。上传导入会再次复制文件，不通过共享路径绕过两个域的校验。
 
-Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`。启动时要求表、索引和 trigger 与精确 DDL 一致，并执行 `quick_check` 与 foreign-key 检查；未知表、缺失索引、损坏、更高版本、替换竞态或不安全数据库文件都会拒绝打开，不会猜测迁移。
+Editing Schema 3 使用 SQLite `application_id=0x4F464544` 和 `user_version=3`。Schema 1/2 只有在结构与语义精确匹配时才按顺序向前迁移；Schema 3 为每个 AI render plan 增加不可变的已批准时间轴绑定及父时间轴摘要。启动时要求表、索引和 trigger 与精确 DDL 一致，并执行 `quick_check` 与 foreign-key 检查；未知表、缺失索引、损坏、更高版本、替换竞态或不安全数据库文件都会拒绝打开。
 
 | 表 | 用途 |
 | --- | --- |
@@ -186,10 +198,13 @@ Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`�
 | `projects` | 项目与源的关系、当前草稿版本 |
 | `drafts` | 按 `(project_id, version)` 保存不可变 recipe 与摘要 |
 | `render_plans` | 冻结的草稿版本、recipe、状态、claim、确认/开始/完成时间及重试来源 |
+| `timeline_revisions` | 不可变听写/翻译 cue、摘要、父修订及一次性审核状态 |
+| `ai_tasks` | 不可变 provider/model 请求、状态、claim、后继重试和结果修订 |
+| `plan_timeline_bindings` | 计划绑定的已批准译文、父字幕与两份摘要 |
 | `assets` | ready 输出的种类、名称、大小、SHA-256、时长、尺寸、container 与 codec |
 | `requests` | 幂等请求键、操作、请求摘要与结果 ID |
 
-`drafts` 禁止 UPDATE/DELETE，render plan 的项目、草稿版本、recipe、摘要、创建时间和重试来源禁止修改。当前 0.27.0 没有编辑数据库备份 CLI、编辑成品删除/配额 UI 或旧 Schema 迁移；不要把下载/上传备份能力推定到编辑根。
+`drafts` 禁止 UPDATE/DELETE，render plan 的项目、草稿版本、recipe、摘要、创建时间、时间轴绑定和重试来源禁止修改。当前 0.28.0 没有编辑数据库备份 CLI 或编辑成品删除/配额 UI；不要把下载/上传备份能力推定到编辑根。
 
 ## 6. 编辑 API
 
@@ -199,6 +214,7 @@ Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`�
 | --- | --- |
 | `GET /session` | 取得本次进程内 CSRF token |
 | `GET /capabilities` | 返回分段、封面、听写、翻译和配音的诚实能力状态；不安装或探测 AI 模型 |
+| `GET /ai/runtime` / `GET /ai/capabilities` | 分别返回 runtime 完整性与 manifest 中可核对的 provider/model/外发范围；不会替代真实执行健康 |
 | `GET /status` | 返回 Schema 版本、processor 是否配置、项目数与计划状态计数 |
 | `GET /projects` | 列出编辑项目及当前草稿摘要 |
 | `GET /projects/{project_id}` | 读取单个项目 |
@@ -209,7 +225,13 @@ Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`�
 | `GET /projects/{project_id}/source` | 同源预览经过复核的编辑源副本 |
 | `GET /plans?project_id=...` | 列出全部或某项目的计划 |
 | `GET /plans/{plan_id}` | 读取计划、冻结 recipe 和已登记输出 |
-| `POST /plans/{plan_id}/confirm` | 明确确认并排队；processor 未配置时返回冲突且不排队 |
+| `POST /projects/{project_id}/ai-tasks` | 建立待确认听写/翻译任务；创建本身不调用 provider |
+| `GET /ai-tasks` / `GET /ai-tasks/{task_id}` | 列出或读取 AI task、状态、重试来源和结果修订 |
+| `POST /ai-tasks/{task_id}/confirm` | 明确确认本次 AI 外发并排队 |
+| `POST /ai-tasks/{task_id}/cancel` / `retry` | 取消活动任务，或为 failed/canceled 建立唯一待确认后继 |
+| `GET /timelines` / `GET /timelines/{revision_id}` | 读取完整听写/译文时间轴 |
+| `POST /timelines/{revision_id}/review` | 以 `expected_review_version` 一次性批准或拒绝整份修订 |
+| `POST /plans/{plan_id}/confirm` | 明确确认并排队；配音计划还须提交匹配的 `expected_recipe_sha256` 和外发确认；processor 未配置时不排队 |
 | `POST /plans/{plan_id}/cancel` | 取消 review/queued，或请求取消 running |
 | `POST /plans/{plan_id}/retry` | 从 failed/canceled 建立新 review 计划；body 含 `idempotency_key` |
 | `GET /assets?project_id=...` | 列出全部或某项目的正式成品 |
@@ -220,42 +242,26 @@ Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`�
 
 编辑 JSON 不返回本机路径。内部 `resolve_output()` 只解析经过复核的 ready `segment`/`dubbed_video`，随后上传 API 的 `POST /api/v1/uploads/sources/edits/{output_id}` 才执行第二次复制。调用这个上传导入 API仍不会创建 upload job。
 
-## 7. AI 时间轴与 provider 合同：已完成和未完成
+## 7. AI 时间轴、隔离 runtime 与 provider 合同
 
-### 已完成的合同
+- `TimelineCue` 保存稳定 cue ID、顺序、整数毫秒起止时间、来源文字、来源语言与可选 speaker ID。SRT/WebVTT parser 只接受 UTF-8，单文件上限 2 MiB，最多 10000 个 cue；所有进入当前时间轴、翻译和 TTS 的单 cue 文字统一限制为 4096 字符。
+- 听写与翻译分别保存不可变 AI task；创建停在 `review`，明确确认后才进入队列。provider 返回的时间轴或译文先保存为 `review` revision，只有整份批准后才可作为下一步输入。
+- `TranslationRevision` 必须按原 cue ID、数量和顺序返回译文，不能丢段、换序或偷偷合并。时间轴 JSON 上限为 3 MiB，为隔离 runtime 的 4 MiB 请求 envelope 留出操作字段和 glossary 空间。
+- 当前 AI runtime 与核心 `.venv`、上传 runtime 分开；builder 冻结 CPython、worker、协议、provider、model declaration 和全文件摘要。标准库 OpenAI provider 不依赖 SDK，API key 只从 `OPEN_FLAME_AI_OPENAI_API_KEY` 读取。
+- 自动流程的听写请求把第一个已选分段作为 `clip_start_ms` / `clip_end_ms`，本机 FFmpeg 只派生这段 mono AAC；provider 返回的相对时间随后加回片段起点。编辑页直接建立听写任务时当前没有片段选择控件，默认处理完整编辑源。
+- `SpeechOptions` 允许 0.88～1.12 倍语速；每个 cue 独立取得 WAV、检查格式和时长，再在对应分段内构造 PCM 轨。超出时间槽以 `ai_speech_timing_overflow` 失败，不截断或顺延后续 cue。
+- 页面把 provider、model、标准音色、数据外发范围和可能费用显示在确认边界。AI task 和配音计划重试都建立唯一后继并再次确认；当前没有远程 request ID reconciliation、部分批次复用、费用预估、预算上限或远端删除记录。
+- 没有声音克隆；首批只允许 manifest 中 13 个标准音色。不能直接修改 API/SQLite 状态把 AI 能力或 timeline 伪装成 ready。
 
-- `TimelineCue` 保存稳定 cue ID、顺序、整数毫秒起止时间、来源文字、来源语言与可选 speaker ID；provider 的听写、翻译和配音选项另以简化的 BCP-47 格式校验语言值。
-- SRT/WebVTT parser 只接受 UTF-8，单文件上限 2 MiB，最多 10000 个 cue，单 cue 文本最多 8000 字符；序列化可保留 cue 顺序和时间。
-- `TranslationRevision` 必须按原 cue ID 和顺序返回每段译文，不能丢段、换序或偷偷合并。
-- 已定义 `TranscriptionProvider`、`TranslationProvider` 和 `SpeechProvider`，并统一 capability、进度与取消回调。
-- `SpeechOptions` 当前允许 0.88～1.12 倍语速；`SpeechClip` 只接受 24 kHz、44.1 kHz 或 48 kHz及 1/2 声道的受管输出描述。
-- recipe 能保存翻译的源/目标语言、provider/model，以及配音的语言、provider/model/voice、是否替换原声和审阅状态。
+## 8. 后续 AI 验收与本地 provider 方向
 
-### 当前仍未完成
+0.28.0 已完成可选 OpenAI 路径的源码接线，但真实账号、质量和费用仍未验收。下一步先在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、费用和真人试听；真实结果不能由 manifest 或 synthetic 媒体推定。
 
-- 没有安装隔离 AI Python runtime、ASR/翻译/TTS 模型或模型 manifest。
-- 没有生产 provider 实现，也没有将 provider 输出写入 Schema 1 或渲染为 `caption`、`audio`、`dubbed_video`。
-- 页面中的 AI 参数仍禁用；`/capabilities` 将听写、翻译和配音标为 `blocked`，理由为 `ai_runtime_not_installed`。
-- 当前 `MediaProcessor` 会拒绝任何启用的 translation/dubbing recipe，不会静默忽略或伪装完成。
-- 没有云端凭据保存、费用预估、数据外发确认、远程 job reconciliation 或远端删除记录。
-- 没有声音克隆；首批合同明确只考虑标准音色。
-
-因此不能通过直接调用 API 把 AI state 改成 `ready` 来启用功能。状态字段是需要校验的工作流数据，不是绕过 runtime 和验收的开关。
-
-## 8. 本地优先的下一步
-
-建议先实现独立于核心 `.venv` 和上传 runtime 的 `ai-runtime`，并沿用项目现有的精确 manifest、全文件哈希、隔离进程、私有 staging、进度/取消和 fail-closed 边界。
-
-1. **字幕优先。** 若下载成品已有受管 SRT/VTT，先导入并建立 timeline revision；不存在字幕或用户明确要求重识别时才运行 ASR。
-2. **本地 ASR。** 第一候选为 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 与 [CTranslate2](https://github.com/OpenNMT/CTranslate2)。两者项目均采用 MIT License；faster-whisper 支持词级时间戳与 Silero VAD。先验收 Windows CPython 3.12 的 CPU int8；GPU 作为独立能力验收。
-3. **本地翻译。** 第一候选为 [Meta M2M100 418M](https://huggingface.co/facebook/m2m100_418M)，模型卡标注 MIT，并由 [CTranslate2 Transformers 转换指南](https://github.com/OpenNMT/CTranslate2/blob/master/docs/guides/transformers.md)列为支持架构。首批只开放实际验收过的中文与 English 方向，并固定模型 revision、文件 SHA-256 和转换参数。
-4. **本地 TTS。** 第一候选为 [Kokoro](https://github.com/hexgrad/kokoro)；仓库标注 Apache-2.0。中文另评估 [Kokoro-82M-v1.1-zh](https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh)。首批仅标准音色，每个 cue 单独输出 WAV，使用 ffprobe 测量时长；短于时间槽时补静音，超过时间槽时标记待修改，不截断或顺延后续 cue。
-5. **审阅后渲染。** 翻译 revision、音色、语速、模型身份和每段时长都必须先可见；人工确认后才混音生成新的 `dubbed_video`。原下载视频与此前分段保持不可变。
-6. **冻结能力。** 模型安装成功只能把状态推进到 `unverified`。许可证清单、哈希、离线 smoke、中文/英文样本、长短句、取消、重启和真人试听通过后，才能把精确 provider/model/environment 身份标为 `ready`。
+本地 provider 仍是后续方向。若继续实现本地 ASR/翻译/TTS，应分别固定模型 revision、文件 SHA-256、许可证、架构和转换参数，并复用现有 task/timeline/plan 确认边界。候选研究包括 faster-whisper/CTranslate2、M2M100 与 Kokoro；这些候选尚未进入 0.28.0 runtime，也没有 ready 声明。
 
 ## 9. 可选 OpenAI provider 的当前官方边界
 
-以下是可选云 provider 的实现参考，不代表 0.27.0 已经接入或授权使用。启用前必须显示媒体、文字或音频会离开本机，并在服务端取得单独确认。
+0.28.0 已接入一个可选、隔离的 OpenAI provider；安装与凭据步骤见 [AI Runtime](AI_RUNTIME.md)。它不随主包携带模型权重或密钥，启用前必须显示媒体、文字或音频会离开本机，并取得相应确认。
 
 ### 9.1 自动听写
 
@@ -285,10 +291,10 @@ Editing Schema 1 使用 SQLite `application_id=0x4F464544` 和 `user_version=1`�
 - provider capability 应列出精确 data egress：听写上传音频；文本翻译上传 source cue 与上下文；TTS 上传译文、voice 和 instructions。可以用“本地 ASR + 云翻译/TTS”减少完整视频外发，但它仍会外发文字。
 - 根据 OpenAI 当前[API 数据控制说明](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint)，API 数据默认不用于训练，除非客户明确选择共享；不同 endpoint 的 abuse monitoring 与 application-state 保留不同，符合条件的客户可申请 Modified Abuse Monitoring 或 Zero Data Retention。实现时必须显示当时组织/项目的实际配置，不能仅凭 endpoint 名称宣称零保留。
 - 文档当前列出 `/v1/audio/transcriptions` 与 `/v1/audio/translations` 无默认 abuse-monitoring/application-state 保留，`/v1/audio/speech` 有最长 30 天 abuse-monitoring 日志且无 application state；Responses API 的默认 application-state 行为另有 30 天边界。供应商政策可变化，启用和每次发行冻结时均需重新核对。
-- 云请求尚未被服务端接受时可安全取消；一旦接受，应保存 provider request/job ID 并先 reconciliation，再决定重试，避免重复计费或生成重复音频。
+- 云请求尚未被服务端接受时可安全取消；一旦接受，稳健实现应保存 provider request/job ID 并先 reconciliation，再决定重试。0.28.0 尚未保存可对账的远程 request/job ID，因此 UI 明确警告重试可能重复计费，且重试任务或计划必须再次确认。
 
 本地 provider 应保持默认选项。任何云 provider 都必须在凭据存在、数据范围可见、费用边界可核对、用户明确确认且当前隐私说明复核后才进入 `queued`。
 
 ## 10. 当前可以准确声称的结果
 
-0.27.0 当前源码建立了下载成品到独立编辑副本、版本化草稿、待核对计划、明确确认、本地分段与封面渲染、编辑成品以及显式导入上传的完整本地边界。仓库已有 synthetic 自动化和 Chromium 记录；真实媒体兼容性、AI runtime/模型、云 provider、真人试听、三平台真实投稿和最终发行制品仍须分别验收。
+0.28.0 当前源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程。仓库内验证只覆盖本机完整性、synthetic/fake 编排与本地媒体处理；真实 OpenAI 账号调用、真人试听、三平台真实投稿和最终发行制品仍须分别验收。

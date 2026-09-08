@@ -37,7 +37,7 @@ from .ai_protocol import (
 )
 
 
-LOCK_SCHEMA = 1
+LOCK_SCHEMA = 2
 LOCK_PATH = Path(__file__).with_name("ai-runtime-lock.json")
 MANIFEST_NAME = "manifest.json"
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -447,7 +447,9 @@ def _load_lock() -> Mapping[str, Any]:
             "limits",
         },
     )
-    python_value = _exact(lock["python"], {"implementation", "major", "minor", "bits"})
+    python_value = _exact(
+        lock["python"], {"implementation", "major", "minors", "bits"}
+    )
     limits = _exact(
         lock["limits"],
         {
@@ -465,7 +467,12 @@ def _load_lock() -> Mapping[str, Any]:
         or lock["runtime_id"] != RUNTIME_ID
         or lock["runtime_version"] != RUNTIME_VERSION
         or python_value
-        != {"implementation": "cpython", "major": 3, "minor": 12, "bits": 64}
+        != {
+            "implementation": "cpython",
+            "major": 3,
+            "minors": [12, 13],
+            "bits": 64,
+        }
         or limits
         != {
             "request_bytes": MAX_REQUEST_BYTES,
@@ -544,22 +551,31 @@ def _provider(value: object) -> RuntimeProvider:
         },
     )
     kind = row["kind"]
-    if kind not in {"plugin", "http"}:
+    if kind not in {"plugin", "remote_plugin", "http"}:
         raise AiRuntimeError("ai_runtime_invalid")
     operations = _unique_tokens(row["operations"], allowed=TASK_OPERATIONS)
     if not operations:
         raise AiRuntimeError("ai_runtime_invalid")
     model_ids = _unique_tokens(row["model_ids"])
-    artifact_paths = _runtime_paths(row["artifact_paths"], nonempty=kind == "plugin")
+    artifact_paths = _runtime_paths(
+        row["artifact_paths"], nonempty=kind in {"plugin", "remote_plugin"}
+    )
     entrypoint = row["entrypoint"]
     endpoint = row["endpoint"]
     auth_env = row["auth_env"]
-    if kind == "plugin":
+    if kind in {"plugin", "remote_plugin"}:
         try:
             entrypoint = validate_entrypoint(entrypoint)
         except AiProtocolError as exc:
             raise AiRuntimeError("ai_runtime_invalid") from exc
-        if endpoint is not None or auth_env is not None:
+        if endpoint is not None:
+            raise AiRuntimeError("ai_runtime_invalid")
+        if kind == "plugin" and auth_env is not None:
+            raise AiRuntimeError("ai_runtime_invalid")
+        if kind == "remote_plugin" and (
+            not isinstance(auth_env, str)
+            or not _ENVIRONMENT_NAME.fullmatch(auth_env)
+        ):
             raise AiRuntimeError("ai_runtime_invalid")
     else:
         if entrypoint is not None:
@@ -572,7 +588,7 @@ def _provider(value: object) -> RuntimeProvider:
     egress = _unique_tokens(row["data_egress"], allowed=_EGRESS_KINDS)
     if kind == "plugin" and egress:
         raise AiRuntimeError("ai_runtime_invalid")
-    if kind == "http" and not egress:
+    if kind in {"remote_plugin", "http"} and not egress:
         raise AiRuntimeError("ai_runtime_invalid")
     config = _safe_config(row["config"])
     if not isinstance(config, Mapping) or len(canonical_json_bytes(config)) > MAX_PROVIDER_CONFIG_BYTES:
@@ -702,7 +718,8 @@ def load_ai_runtime(root: Path) -> AiRuntime:
         or not isinstance(version, list)
         or len(version) != 3
         or any(type(item) is not int or item < 0 for item in version)
-        or version[:2] != [3, 12]
+        or version[0] != lock["python"]["major"]
+        or version[1] not in lock["python"]["minors"]
         or python_value["bits"] != 64
     ):
         raise AiRuntimeError("ai_runtime_invalid")

@@ -20,6 +20,7 @@ UPLOAD_HTML = r'''<!doctype html>
         <a class="nav-link" href="/">下载</a>
         <a class="nav-link" href="/edits">编辑</a>
         <a class="nav-link" href="/uploads" aria-current="page">上传</a>
+        <a class="nav-link" href="/workflows">自动流程</a>
       </nav>
       <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观">
         <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
@@ -181,7 +182,7 @@ UPLOAD_HTML = r'''<!doctype html>
       <div id="jobs"></div>
       <button id="more-jobs" class="secondary" type="button" hidden>加载更早任务</button>
     </section>
-    <p class="page-footer">Open-Flame 0.27.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
+    <p class="page-footer">Open-Flame 0.28.0 · 本地优先 · 下载、编辑与上传数据相互隔离</p>
   </main>
   <script>
 'use strict';

@@ -11,12 +11,15 @@
     "bits": 64,
     "implementation": "cpython",
     "major": 3,
-    "minor": 12
+    "minors": [
+      12,
+      13
+    ]
   },
   "runtime_id": "open-flame-ai-runtime",
   "runtime_manifest_schema": 1,
   "runtime_version": "1",
-  "schema": 1,
+  "schema": 2,
   "supported_platforms": [
     "windows-x64",
     "linux-x64",

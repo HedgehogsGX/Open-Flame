@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import mimetypes
+import re
 import secrets
 import sqlite3
 from collections.abc import Callable
@@ -20,15 +21,31 @@ from starlette.concurrency import run_in_threadpool
 from ..ui_assets import page_content_security_policy
 from ..uploads.activity_lock import UploadActivityBusy, UploadActivityLease
 from .ai import default_capabilities
+from .ai_bridge import AiBridgeError
+from .ai_execution import AiTaskExecutor
+from .ai_render import AiRenderProcessor
+from .ai_runtime import default_ai_runtime_root
 from .contracts import EditingError, MediaProcessor, RenderResult, recipe_from_mapping
 from .service import EditingService, VERIFIED_MEDIA_CHUNK_BYTES, default_editing_root
 from .web import EDITING_HTML
 
 Identifier = Annotated[str, Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")]
+Sha256Digest = Annotated[
+    str, Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+]
 RequestKey = Annotated[
     str,
     Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"),
 ]
+AiToken = Annotated[
+    str,
+    Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$"),
+]
+LanguageCode = Annotated[
+    str,
+    Field(min_length=2, max_length=71, pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"),
+]
+_PROGRESS_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 
 
 class SegmentRequest(BaseModel):
@@ -92,11 +109,74 @@ class CreatePlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=1, strict=True)
     idempotency_key: RequestKey
+    timeline_revision_id: Identifier | None = None
+
+
+class ConfirmPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_recipe_sha256: Sha256Digest
+    ai_data_egress_accepted: bool = Field(default=False, strict=True)
 
 
 class RetryPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     idempotency_key: RequestKey
+
+
+class TranscriptionOptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: LanguageCode | None = None
+    word_timestamps: bool = Field(default=True, strict=True)
+    vad: bool = Field(default=True, strict=True)
+
+
+class GlossaryItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(min_length=1, max_length=500)
+    target: str = Field(min_length=1, max_length=500)
+
+
+class TranslationOptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_language: LanguageCode
+    target_language: LanguageCode
+    glossary: list[GlossaryItemRequest] = Field(default_factory=list, max_length=200)
+
+
+class CreateTranscriptionTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["transcribe"]
+    provider: AiToken
+    model: AiToken
+    options: TranscriptionOptionsRequest
+    idempotency_key: RequestKey
+
+
+class CreateTranslationTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["translate"]
+    provider: AiToken
+    model: AiToken
+    source_revision_id: Identifier
+    options: TranslationOptionsRequest
+    idempotency_key: RequestKey
+
+
+AiTaskRequest = Annotated[
+    CreateTranscriptionTaskRequest | CreateTranslationTaskRequest,
+    Field(discriminator="operation"),
+]
+
+
+class RetryAiTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    idempotency_key: RequestKey
+
+
+class ReviewTimelineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["approved", "rejected"]
+    expected_review_version: int = Field(ge=0, le=1, strict=True)
 
 
 def _origin(value: str) -> tuple[str, str, int] | None:
@@ -137,12 +217,29 @@ def _safe_error(error: EditingError) -> HTTPException:
         "source_changed",
         "asset_changed",
         "ai_operation_blocked",
+        "ai_task_not_reviewable",
+        "ai_task_state_conflict",
+        "ai_task_retry_not_allowed",
+        "source_timeline_invalid",
+        "timeline_review_conflict",
+        "timeline_parent_not_approved",
+        "ai_runtime_missing",
+        "ai_runtime_invalid",
+        "ai_runtime_changed",
+        "ai_runtime_unsupported",
+        "ai_provider_not_found",
+        "ai_provider_operation_unsupported",
+        "ai_model_not_found",
+        "ai_model_operation_unsupported",
+        "ai_provider_auth_missing",
+        "ai_provider_auth_environment_invalid",
     }:
         status = 409
     elif code in {
         "editing_database_unavailable",
         "editing_storage_unavailable",
         "processor_not_configured",
+        "editing_manager_stopped",
     }:
         status = 503
     else:
@@ -184,15 +281,26 @@ class EditingManager:
         self,
         root: Path,
         processor_factory: Callable[[], MediaProcessor] | None,
+        *,
+        ai_runtime_root: Path | None = None,
     ) -> None:
         self.root = root
         self.processor_factory = processor_factory
+        self.ai_runtime_root = Path(
+            ai_runtime_root if ai_runtime_root is not None else default_ai_runtime_root(root)
+        )
+        self._ai_executor = AiTaskExecutor(
+            self.ai_runtime_root, self.root / "ai-work"
+        )
         self._lock = RLock()
         self._state_changed = Condition(self._lock)
         self._wake = Event()
         self._stop = Event()
         self._current_cancel: Event | None = None
         self._current_plan_id: str | None = None
+        self._current_ai_cancel: Event | None = None
+        self._current_ai_task_id: str | None = None
+        self._current_ai_progress: tuple[float, str] | None = None
         self._service: EditingService | None = None
         self._thread: Thread | None = None
         self._worker_active = False
@@ -225,15 +333,14 @@ class EditingManager:
                 service.recover_interrupted(cleanup_orphans=True)
                 self._activity_lease = lease
                 self._service = service
-                if processor is not None:
-                    thread = Thread(
-                        target=self._worker,
-                        name="open-flame-editing-worker",
-                        daemon=True,
-                    )
-                    self._thread = thread
-                    self._worker_active = True
-                    thread.start()
+                thread = Thread(
+                    target=self._worker,
+                    name="open-flame-editing-worker",
+                    daemon=True,
+                )
+                self._thread = thread
+                self._worker_active = True
+                thread.start()
             except BaseException:
                 self._service = None
                 self._thread = None
@@ -298,6 +405,94 @@ class EditingManager:
         finally:
             self._finish_operation()
 
+    def runtime_status(self) -> dict[str, object]:
+        result = self._ai_executor.runtime_status()
+        with self._lock:
+            active = (
+                None
+                if self._current_ai_task_id is None
+                else {
+                    "task_id": self._current_ai_task_id,
+                    "progress": (
+                        None
+                        if self._current_ai_progress is None
+                        else {
+                            "fraction": self._current_ai_progress[0],
+                            "code": self._current_ai_progress[1],
+                        }
+                    ),
+                }
+            )
+        return {**result, "active_task": active}
+
+    def capabilities(self) -> list[dict[str, object]]:
+        defaults = [
+            item.to_dict() for item in default_capabilities(media_ready=self.media_ready)
+        ]
+        local = [item for item in defaults if item["operation"] in {"segment", "cover"}]
+        return [*local, *self._ai_executor.capabilities()]
+
+    @staticmethod
+    def _as_editing_error(error: AiBridgeError) -> EditingError:
+        return EditingError(error.code)
+
+    def create_ai_task(
+        self,
+        project_id: str,
+        operation: str,
+        provider_id: str,
+        model_id: str,
+        options: dict[str, object],
+        idempotency_key: str,
+        *,
+        source_revision_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            self._ai_executor.verify_operation(operation, provider_id, model_id)
+        except AiBridgeError as error:
+            raise self._as_editing_error(error) from None
+        return self.invoke(
+            "create_ai_task",
+            project_id,
+            operation,
+            provider_id,
+            model_id,
+            options,
+            idempotency_key,
+            source_revision_id=source_revision_id,
+        )
+
+    def confirm_ai_task(self, task_id: str) -> dict[str, Any]:
+        service = self._begin_operation()
+        try:
+            task = service.ai_task(task_id)
+            try:
+                self._ai_executor.verify_operation(
+                    task["operation"], task["provider"], task["model"]
+                )
+            except AiBridgeError as error:
+                raise self._as_editing_error(error) from None
+            result = service.confirm_ai_task(task_id)
+            self._wake.set()
+            return result
+        finally:
+            self._finish_operation()
+
+    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
+        service = self._begin_operation()
+        try:
+            result = service.cancel_ai_task(task_id)
+            with self._lock:
+                if (
+                    self._current_ai_task_id == task_id
+                    and self._current_ai_cancel is not None
+                ):
+                    self._current_ai_cancel.set()
+            self._wake.set()
+            return result
+        finally:
+            self._finish_operation()
+
     def _worker(self) -> None:
         try:
             self._worker_loop()
@@ -315,6 +510,23 @@ class EditingManager:
     def _worker_loop(self) -> None:
         service = self.get()
         while not self._stop.is_set():
+            ai_claim = None
+            claim_ai_task = getattr(service, "claim_next_ai_task", None)
+            try:
+                if callable(claim_ai_task):
+                    ai_claim = claim_ai_task()
+            except EditingError:
+                self._wake.wait(0.5)
+                self._wake.clear()
+                continue
+            if ai_claim is not None:
+                self._process_ai_claim(service, ai_claim)
+                continue
+
+            if getattr(service, "processor", None) is None:
+                self._wake.wait(0.5)
+                self._wake.clear()
+                continue
             claim = None
             try:
                 claim = service.claim_next_plan()
@@ -346,15 +558,44 @@ class EditingManager:
                 source, source_size, source_sha256 = service.source_identity_for_plan(
                     plan_id
                 )
-                result = service.processor.render(
-                    source,
-                    service.output_dir_for_plan(plan_id, token),
-                    recipe_from_mapping(claim["recipe"]),
-                    cancel_event=cancel_event,
-                    expected_source_size=source_size,
-                    expected_source_sha256=source_sha256,
-                )
+                recipe = recipe_from_mapping(claim["recipe"])
+                output_dir = service.output_dir_for_plan(plan_id, token)
+                if recipe.translation.enabled or recipe.dubbing.enabled:
+                    speech_provider = None
+                    if recipe.dubbing.enabled:
+                        speech_provider = self._ai_executor.speech_provider(
+                            recipe.dubbing.provider, recipe.dubbing.model
+                        )
+                    result = AiRenderProcessor(service.processor).render(
+                        source,
+                        output_dir,
+                        recipe,
+                        timeline=service.approved_timeline_for_plan(plan_id),
+                        speech_provider=speech_provider,
+                        cancel_event=cancel_event,
+                        expected_source_size=source_size,
+                        expected_source_sha256=source_sha256,
+                    )
+                else:
+                    result = service.processor.render(
+                        source,
+                        output_dir,
+                        recipe,
+                        cancel_event=cancel_event,
+                        expected_source_size=source_size,
+                        expected_source_sha256=source_sha256,
+                    )
                 service.complete_plan(plan_id, token, result)
+            except AiBridgeError as error:
+                try:
+                    service.fail_plan(
+                        plan_id,
+                        token,
+                        error.code,
+                        canceled=cancel_event.is_set(),
+                    )
+                except EditingError:
+                    pass
             except EditingError as error:
                 try:
                     service.fail_plan(
@@ -380,6 +621,91 @@ class EditingManager:
                     self._current_plan_id = None
                     self._current_cancel = None
 
+    def _process_ai_claim(
+        self, service: EditingService, claim: dict[str, Any]
+    ) -> None:
+        task_id = claim.get("id")
+        token = claim.get("claim_token")
+        if not isinstance(task_id, str) or not isinstance(token, str):
+            return
+        cancel_event = Event()
+        with self._lock:
+            self._current_ai_task_id = task_id
+            self._current_ai_cancel = cancel_event
+            self._current_ai_progress = None
+            if self._stop.is_set():
+                cancel_event.set()
+
+        def cancelled() -> bool:
+            if cancel_event.is_set():
+                return True
+            try:
+                if service.ai_task_cancellation_requested(task_id, token):
+                    cancel_event.set()
+            except (EditingError, sqlite3.Error):
+                cancel_event.set()
+            return cancel_event.is_set()
+
+        def progress(fraction: float, code: str) -> None:
+            if (
+                isinstance(fraction, bool)
+                or not isinstance(fraction, (int, float))
+                or not 0.0 <= float(fraction) <= 1.0
+                or not isinstance(code, str)
+                or not _PROGRESS_CODE.fullmatch(code)
+            ):
+                raise AiBridgeError("ai_progress_invalid")
+            with self._lock:
+                if self._current_ai_task_id == task_id:
+                    self._current_ai_progress = (float(fraction), code)
+
+        try:
+            if cancelled():
+                raise AiBridgeError("ai_operation_canceled")
+            self._ai_executor.execute(
+                service,
+                claim,
+                progress=progress,
+                cancelled=cancelled,
+                cancel_event=cancel_event,
+            )
+        except AiBridgeError as error:
+            try:
+                service.fail_ai_task(
+                    task_id,
+                    token,
+                    error.code,
+                    canceled=(cancelled() or error.code == "ai_operation_canceled"),
+                )
+            except EditingError:
+                pass
+        except EditingError:
+            try:
+                service.fail_ai_task(
+                    task_id,
+                    token,
+                    "ai_execution_failed",
+                    canceled=cancelled(),
+                )
+            except EditingError:
+                pass
+        except Exception:
+            try:
+                service.fail_ai_task(
+                    task_id,
+                    token,
+                    "ai_execution_failed",
+                    canceled=cancelled(),
+                )
+            except EditingError:
+                pass
+        finally:
+            with self._lock:
+                if self._current_ai_task_id == task_id:
+                    self._current_ai_task_id = None
+                    self._current_ai_cancel = None
+                    self._current_ai_progress = None
+
     def stop(self, *, timeout_seconds: float = 10) -> None:
         deadline = monotonic() + max(0.0, timeout_seconds)
         with self._state_changed:
@@ -387,6 +713,8 @@ class EditingManager:
             self._wake.set()
             if self._current_cancel is not None:
                 self._current_cancel.set()
+            if self._current_ai_cancel is not None:
+                self._current_ai_cancel.set()
             thread = self._thread
         if thread is current_thread():
             return
@@ -432,7 +760,11 @@ def install_editing_routes(
 ) -> EditingManager:
     """Install lazy editor routes without creating its database or media root."""
 
-    manager = EditingManager(default_editing_root(data_root), processor_factory)
+    manager = EditingManager(
+        default_editing_root(data_root),
+        processor_factory,
+        ai_runtime_root=default_ai_runtime_root(data_root),
+    )
     nonce = secrets.token_urlsafe(32)
     app.state.editing_manager = manager
 
@@ -480,6 +812,17 @@ def install_editing_routes(
         except sqlite3.Error:
             raise HTTPException(status_code=503, detail="editing_database_unavailable") from None
 
+    async def invoke_manager(method: str, *args, **kwargs):
+        def work():
+            return getattr(manager, method)(*args, **kwargs)
+
+        try:
+            return await run_in_threadpool(work)
+        except EditingError as error:
+            raise _safe_error(error) from None
+        except sqlite3.Error:
+            raise HTTPException(status_code=503, detail="editing_database_unavailable") from None
+
     @app.get("/edits", response_class=HTMLResponse, include_in_schema=False)
     def page():
         return HTMLResponse(
@@ -495,7 +838,19 @@ def install_editing_routes(
 
     @router.get("/capabilities")
     def capabilities():
-        return [item.to_dict() for item in default_capabilities(media_ready=manager.media_ready)]
+        return manager.capabilities()
+
+    @router.get("/ai/runtime")
+    def ai_runtime_status():
+        return manager.runtime_status()
+
+    @router.get("/ai/capabilities")
+    def ai_capabilities():
+        return [
+            item
+            for item in manager.capabilities()
+            if item["operation"] in {"transcribe", "translate", "dub"}
+        ]
 
     @router.get("/status")
     async def status():
@@ -555,6 +910,7 @@ def install_editing_routes(
             project_id,
             payload.expected_version,
             payload.idempotency_key,
+            timeline_revision_id=payload.timeline_revision_id,
         )
 
     @router.get("/projects/{project_id}/source", response_class=Response)
@@ -573,6 +929,70 @@ def install_editing_routes(
             disposition="inline",
         )
 
+    @router.post("/projects/{project_id}/ai-tasks", status_code=201)
+    async def create_ai_task(project_id: Identifier, payload: AiTaskRequest):
+        if isinstance(payload, CreateTranscriptionTaskRequest):
+            options: dict[str, object] = payload.options.model_dump()
+            source_revision_id = None
+        else:
+            options = {
+                "source_language": payload.options.source_language,
+                "target_language": payload.options.target_language,
+                "glossary": [
+                    [item.source, item.target] for item in payload.options.glossary
+                ],
+            }
+            source_revision_id = payload.source_revision_id
+        return await invoke_manager(
+            "create_ai_task",
+            project_id,
+            payload.operation,
+            payload.provider,
+            payload.model,
+            options,
+            payload.idempotency_key,
+            source_revision_id=source_revision_id,
+        )
+
+    @router.get("/ai-tasks")
+    async def ai_tasks(project_id: Identifier | None = Query(default=None)):
+        return await invoke("ai_tasks", project_id=project_id)
+
+    @router.get("/ai-tasks/{task_id}")
+    async def ai_task(task_id: Identifier):
+        return await invoke("ai_task", task_id)
+
+    @router.post("/ai-tasks/{task_id}/confirm")
+    async def confirm_ai_task(task_id: Identifier):
+        return await invoke_manager("confirm_ai_task", task_id)
+
+    @router.post("/ai-tasks/{task_id}/cancel")
+    async def cancel_ai_task(task_id: Identifier):
+        return await invoke_manager("cancel_ai_task", task_id)
+
+    @router.post("/ai-tasks/{task_id}/retry", status_code=201)
+    async def retry_ai_task(task_id: Identifier, payload: RetryAiTaskRequest):
+        return await invoke("retry_ai_task", task_id, payload.idempotency_key)
+
+    @router.get("/timelines")
+    async def timelines(project_id: Identifier | None = Query(default=None)):
+        return await invoke("timelines", project_id=project_id)
+
+    @router.get("/timelines/{revision_id}")
+    async def timeline(revision_id: Identifier):
+        return await invoke("timeline", revision_id)
+
+    @router.post("/timelines/{revision_id}/review")
+    async def review_timeline(
+        revision_id: Identifier, payload: ReviewTimelineRequest
+    ):
+        return await invoke(
+            "review_timeline",
+            revision_id,
+            payload.decision,
+            payload.expected_review_version,
+        )
+
     @router.get("/plans")
     async def plans(project_id: Identifier | None = Query(default=None)):
         return await invoke("plans", project_id=project_id)
@@ -582,10 +1002,21 @@ def install_editing_routes(
         return await invoke("plan", plan_id)
 
     @router.post("/plans/{plan_id}/confirm")
-    async def confirm(plan_id: Identifier):
+    async def confirm(
+        plan_id: Identifier, payload: ConfirmPlanRequest | None = None
+    ):
         if not manager.media_ready:
             raise HTTPException(status_code=409, detail="processor_not_configured")
-        result = await invoke("confirm_plan", plan_id)
+        result = await invoke(
+            "confirm_plan",
+            plan_id,
+            expected_recipe_sha256=(
+                None if payload is None else payload.expected_recipe_sha256
+            ),
+            ai_data_egress_accepted=(
+                False if payload is None else payload.ai_data_egress_accepted
+            ),
+        )
         manager.wake()
         return result
 
