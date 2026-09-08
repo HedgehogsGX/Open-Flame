@@ -1,0 +1,25 @@
+{
+  "limits": {
+    "http_response_bytes": 4194304,
+    "progress_line_bytes": 1024,
+    "progress_lines": 256,
+    "request_bytes": 4194304,
+    "result_bytes": 4194304
+  },
+  "protocol_schema": 1,
+  "python": {
+    "bits": 64,
+    "implementation": "cpython",
+    "major": 3,
+    "minor": 12
+  },
+  "runtime_id": "open-flame-ai-runtime",
+  "runtime_manifest_schema": 1,
+  "runtime_version": "1",
+  "schema": 1,
+  "supported_platforms": [
+    "windows-x64",
+    "linux-x64",
+    "darwin-arm64"
+  ]
+}
