@@ -139,6 +139,7 @@ src/video_download_control/graph.py
 src/video_download_control/importers.py
 src/video_download_control/local_app.py
 src/video_download_control/local_app_cli.py
+src/video_download_control/local_app_storage.py
 src/video_download_control/local_short_links.py
 src/video_download_control/local_worker_cli.py
 src/video_download_control/normalization.py

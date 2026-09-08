@@ -14,14 +14,13 @@ Python.org 为上述 3.13.15 Windows embeddable x64 ZIP 公布的 SHA-256 是 `d
 
 ## 1. 离线构建
 
-默认 Windows 应用数据根为 `%LOCALAPPDATA%\Open-Flame\video-download-control\data`，因此 AI runtime 默认必须构建到同级的 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-ai-runtime`。自定义 `VDC_DATA_ROOT` 时，输出目录同样是在数据根名称后追加 `-ai-runtime`。
+普通 Windows Start 的默认应用根为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，AI runtime 固定放在其下的 `data-ai-runtime`。普通 Start 不读取 `VDC_DATA_ROOT` 来改变这条路径；需要自定义位置时，向 Setup 和 Start 传入同一个 `--app-root` 规范化绝对目录。
 
-先准备以下三个绝对路径。`$pythonExpectedSha256` 中的占位符必须替换为从官方来源独立核对的 64 位十六进制 SHA-256；不要照抄占位符执行。
+先准备本地 CPython 归档，并独立核对官方 SHA-256：
 
 ```powershell
 $pythonEmbedZip = "C:\Installers\python-3.13.15-embed-amd64.zip"
 $pythonExpectedSha256 = "<从 Python.org 官方材料独立核对的 64 位 SHA-256>"
-$aiRuntimeRoot = "$env:LOCALAPPDATA\Open-Flame\video-download-control\data-ai-runtime"
 
 $pythonActualSha256 = (
   Get-FileHash -LiteralPath $pythonEmbedZip -Algorithm SHA256
@@ -31,29 +30,33 @@ if ($pythonActualSha256 -ne $pythonExpectedSha256.ToLowerInvariant()) {
 }
 ```
 
-已通过 wheel 或 editable 安装 Open-Flame 时，执行：
+普通源码用户优先使用现有 Setup。Setup 内部固定上述官方 SHA-256，不接受调用者改成其他摘要，不下载归档，也不调用 provider：
 
 ```powershell
+.\Setup-Open-Flame.cmd --yes `
+  --ai-python-embed-zip $pythonEmbedZip
+```
+
+自定义应用根时，两次命令必须一致：
+
+```powershell
+$appRoot = "D:\Open-Flame\video-download-control"
+.\Setup-Open-Flame.cmd --yes `
+  --ai-python-embed-zip $pythonEmbedZip `
+  --app-root $appRoot
+.\Start-Open-Flame.cmd --app-root $appRoot
+```
+
+Setup 在目标缺失时核验调用时提供的固定 CPython ZIP，再原子构建；已有 runtime 只有在完整文件、manifest、CPython 3.13.15 和当前 worker/protocol/provider 全部匹配时才只读复用，此时不会读取调用时提供的 ZIP。runtime manifest 不保存归档来源，因此只读复用证明当前文件与声明完整匹配，不证明最初归档来自哪个下载位置；来源与官方 SHA-256 须按下文保存在 runtime 外部。已有目标损坏或过期会以固定 `setup_ai_runtime_failed` 拒绝，绝不删除、覆盖或修改 manifest。Setup 与普通 Start 复用 `<app-root>\.local-app.lock`；应用运行中返回 `setup_busy`。先正常停止应用，并把旧 runtime 保留或改名到尚不存在的备份目录后，才能重建。
+
+已通过 wheel 或 editable 安装 Open-Flame 的高级维护者仍可直接调用 builder；此入口不取得普通应用锁，必须自行先停止应用：
+
+```powershell
+$aiRuntimeRoot = "$env:LOCALAPPDATA\Open-Flame\video-download-control\data-ai-runtime"
 python -m video_download_control.editing.ai_runtime_builder `
   --python-embed-zip $pythonEmbedZip `
   --python-sha256 $pythonExpectedSha256 `
   --output $aiRuntimeRoot
-```
-
-普通源码 Setup 不会把项目安装进 `.venv`。从仓库根目录运行时，临时提供 `src`：
-
-```powershell
-$aiPreviousPythonPath = $env:PYTHONPATH
-try {
-  $env:PYTHONPATH = (Resolve-Path .\src).Path
-  & .\.venv\Scripts\python.exe `
-    -m video_download_control.editing.ai_runtime_builder `
-    --python-embed-zip $pythonEmbedZip `
-    --python-sha256 $pythonExpectedSha256 `
-    --output $aiRuntimeRoot
-} finally {
-  $env:PYTHONPATH = $aiPreviousPythonPath
-}
 ```
 
 `--output` 必须是尚不存在的绝对目录。builder 在同级私有 staging 目录中逐项安全解压，验证 CPython 身份为 64-bit 3.12/3.13，复制固定 worker、协议和 provider，生成 manifest，完成全量校验后才以目录重命名发布。失败不会用半成品覆盖既有 runtime。
@@ -72,7 +75,7 @@ try {
 
 `manifest.json` 精确声明 Python、worker、协议、provider、模型及每个 runtime 文件的大小和 SHA-256。加载 runtime 时会枚举完整文件集合并重新计算全部散列；文件新增、缺失、内容变化、manifest 结构变化、symlink/junction/reparse 重定向或平台/Python 身份不符都会失败关闭。每次执行模型操作前，还会重新核对 manifest 以及该 provider、模型、Python、worker 和协议所需的文件。
 
-执行路径会在准备完受限输入后、把可执行路径交给 subprocess runner 前再次复核，并在返回后复核；听写派生音频先复制为私有 scratch 中的固定副本并重新核对大小/SHA-256。这个机制用于发现意外漂移与失败关闭，不是抵抗可用同一系统账号同时改写应用/runtime 的攻击者的密码学 attestation。当前 runtime 只应在受信任的单用户主机使用，维护或替换 runtime 时必须先停止应用；后续仍需为安装器与执行器加入跨进程 runtime lease 或不可变 snapshot。
+执行路径会在准备完受限输入后、把可执行路径交给 subprocess runner 前再次复核，并在返回后复核；听写派生音频先复制为私有 scratch 中的固定副本并重新核对大小/SHA-256。这个机制用于发现意外漂移与失败关闭，不是抵抗可用同一系统账号同时改写应用/runtime 的攻击者的密码学 attestation。普通 Setup 与普通 Start 已用同一 app-root lifetime lock 互斥；高级手动 builder、旧版本或同账号自写程序不一定采用该合同，因此任何维护仍须先由操作者停止相关进程。当前 runtime 只应在受信任的单用户主机使用。
 
 构建后或启动应用前可执行只读检查：
 
@@ -82,7 +85,7 @@ python -m video_download_control.editing.ai_runtime_cli `
   --check
 ```
 
-源码环境继续使用上一节的临时 `PYTHONPATH` 和 `.venv` 解释器。`--check` 只检查本机目录和散列，不连接 OpenAI，不验证账号权限、模型可用性、网络、配额或计费，也不登录或上传任何国内平台。
+上述 CLI 适用于已经安装 wheel 或 editable package 的高级环境；普通源码用户可重复运行上一节的 Setup 命令，它会对已有当前 runtime 做只读全量复核。`--check` 只检查本机目录和散列，不连接 OpenAI，不验证账号权限、模型可用性、网络、配额或计费，也不登录或上传任何国内平台。
 
 需要更换 CPython 版本或重建 runtime 时，先正常停止所有使用该数据根的 Open-Flame 实例。将旧 runtime 整体改名留档，再用一个尚不存在的目标目录重新构建；不要混合两棵 runtime，也不要手改 manifest 或只替换其中一个文件。
 

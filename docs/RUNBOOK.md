@@ -1,10 +1,10 @@
 # Open-Flame / Video Download Control v0.28.0 Runbook
 
-> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 3、独立上传数据库 Schema 3、独立 Workflow Schema 1。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 4、独立上传数据库 Schema 3、独立 Workflow Schema 1。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
 
 0.28.0 AI runtime、自动流程与本地验证边界见[本轮证据](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI Runtime](AI_RUNTIME.md)和[编辑指南](EDITOR.md)；此前 [0.27.0 编辑工作台](../validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保留各自冻结构建的历史范围。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。重复批次不创建新下载，也不改变原任务的凭证。
 
-0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1。这些短语只用于识别旧记录。当前 0.28.0 将精确 Editing Schema 1/2 向前迁移到 Schema 3，并新增 Workflow Schema 1；上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
+0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1，0.28.0 冻结版本先使用 Editing Schema 3。这些短语只用于识别旧记录。当前发布后源码将精确 Editing Schema 1/2/3 向前迁移到 Schema 4，并使用 Workflow Schema 1；上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
 
 ### 启动失败时
 

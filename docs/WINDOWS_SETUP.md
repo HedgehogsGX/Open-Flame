@@ -1,6 +1,6 @@
-# Windows 源码版：首次安装与修复（v0.23）
+# Windows 源码版：首次安装与修复
 
-本流程在源码目录准备本地 Python 环境和锁定媒体工具，之后可独立于 Codex 使用；不要求安装 uv。它仍需要系统 Python，**不是免 Python 的 EXE，也不是已发布的第三方离线工具合集**。
+本流程在源码目录准备本地 Python 环境和锁定媒体工具，也可从用户已下载的固定 CPython 归档构建可选 AI runtime，之后可独立于 Codex 使用；不要求安装 uv。它仍需要系统 Python，**不是免 Python 的 EXE，也不是已发布的第三方离线工具合集**。
 
 本轮已在独立空目录通过默认联网安装、重复安装、失败后修复及正常启动验证，实测系统 Python 为 3.13.14；详情与范围见 [v0.23 验收记录](../validation/iteration-0.23.0-source-setup-evidence.md)。这不代表所有平台或所有 Python 版本都已验收。
 
@@ -50,6 +50,27 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 
 上述为示例路径，不会自动为你准备离线缓存。依赖安装使用 `--no-index --find-links`（指定 wheelhouse 时）、`--only-binary` 和 `--require-hashes`；这些参数含义见 [pip 官方安装文档](https://pip.pypa.io/en/stable/cli/pip_install/)。本流程不验证平台登录或下载真实媒体。
 
+### 可选 AI runtime
+
+普通源码用户可让同一个 Setup 从本地 CPython **3.13.15 Windows x64 embeddable ZIP** 构建 AI runtime。Setup 不下载这份 ZIP，也不调用 OpenAI；它固定只接受 Python.org 已核验 SHA-256 `d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf`：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes `
+  --ai-python-embed-zip 'C:\Installers\python-3.13.15-embed-amd64.zip'
+```
+
+默认输出精确为 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-ai-runtime`。若 Start 使用自定义应用根，Setup 必须传入同一个规范化绝对目录：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes `
+  --ai-python-embed-zip 'C:\Installers\python-3.13.15-embed-amd64.zip' `
+  --app-root 'D:\Open-Flame\video-download-control'
+
+.\Start-Open-Flame.cmd --app-root 'D:\Open-Flame\video-download-control'
+```
+
+`--app-root` 只允许与 `--ai-python-embed-zip` 一起用于 Setup。Setup 先准备原有 `.venv` 和媒体工具，再在 `<app-root>\data-ai-runtime` 缺失时核验 ZIP 并调用现有原子 builder；已有 runtime 只有在完整 manifest、全部文件、CPython 3.13.15 及当前 worker/protocol/provider 字节都匹配时才只读复用，复用时不读取 ZIP，也不把 runtime 自身当作原始归档来源证明。已有目录损坏或来自旧源码时会以 `setup_ai_runtime_failed` 停止，绝不删除、覆盖或改写 manifest；先正常停止应用，保留并将旧目录改名到尚不存在的备份名，再重试。更多来源、完整性和 provider 边界见 [AI runtime 指南](AI_RUNTIME.md)。
+
 ## 修复与已有数据
 
 先在各自窗口正常停止应用和 Worker，再执行：
@@ -62,9 +83,10 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 
 - 已有但不属于 Setup 的环境：健康时可验证并复用；需要修改或显式 `--repair` 时拒绝覆盖。先保留原内容并检查，不要伪造 ownership 标记来强制修复。
 - 已有但损坏的工具包：校验失败并停止；`--repair` 也不会覆盖。保留诊断与原目录，核对来源后再制定恢复方案，不要靠删除文件绕过校验。
+- 已有但损坏或过期的 AI runtime：即使带 `--repair` 也只读拒绝，不自动修补或覆盖；保留或改名后再从固定 CPython 归档重新构建。
 - 安装或修复不迁移、清空业务数据库、下载媒体或 Cookie 配置。默认业务目录仍为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，不在仓库内。中断可能留下 Setup 拥有的部分环境，可在正常停止相关程序后重试。
 
-源码 Start 在整个应用生命周期持有共享锁，Setup 在安装期间需要独占写锁，使用仓库根目录的 `.open-flame-setup.lock`。竞争时立即给出 `setup_busy`，不会等待或强行关闭应用。**直接运行高级 CLI 的旧实例不受这把源码入口锁保护**，修复前必须自行正常停止。锁文件存在不等于有人持锁，不要通过删除锁文件解除占用。
+源码 Start 在整个应用生命周期持有源码共享锁，Setup 在安装期间需要源码独占写锁，使用仓库根目录的 `.open-flame-setup.lock`。AI runtime 安装还与普通 Start 复用目标应用根的 `.local-app.lock`；另一个源码、wheel 或同根应用正在运行时同样立即给出 `setup_busy`。两类锁都不会等待或强行关闭应用。**直接运行不采用普通 app-root 合同的高级 CLI 不受这些锁完整保护**，维护前必须自行正常停止。锁文件存在不等于有人持锁，不要通过删除锁文件解除占用。
 
 从旧版本升级时，如果旧工具完整但与新源码锁不匹配，先正常停止应用，将 `runtime-tools\windows-x64` 改名为同目录下尚不存在的备份名，再运行 Setup 安装当前固定工具；保留旧目录供旧版本回退。v0.23 已将失效的 FFmpeg daily URL 改为月末构建，仍核对精确哈希，不自动采用浮动 `latest`。
 
@@ -88,6 +110,7 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 | `setup_environment_unavailable` | `setup_environment` | 本地环境不可用或不允许修改；保留已有内容，确认是否为 Setup 拥有的环境再考虑修复 |
 | `setup_dependencies_failed` | `setup_dependencies` | 检查 PyPI 连接，或 wheelhouse 是否具备锁定哈希及兼容 wheel；不要改锁文件或关闭哈希检查来绕过 |
 | `setup_toolchain_failed` | `setup_toolchain` | 工具获取、哈希、版本或离线 smoke 失败；核对 GitHub / 本地缓存，已有坏工具不会被自动替换 |
+| `setup_ai_runtime_failed` | `setup_ai_runtime` | 本地 CPython ZIP、目标路径或已有 runtime 校验失败；不会显示私有路径或覆盖目标，停止应用并按 AI runtime 指南保留/改名后重试 |
 | `setup_busy` | `setup_lock` | 源码应用 / 安装器占用，或锁文件不可用；正常停止相关程序后重试；无占用时检查目录权限与锁文件状态 |
 | `setup_interrupted` | `setup_install` | 已开始安装后取消；保留部分环境与业务数据，确认相关进程正常停止后可重试 |
 
@@ -97,4 +120,4 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 
 ## 验收与发布边界
 
-Setup 的 `ready` 只表示本次环境准备与工具离线检查完成；Start 的页面就绪、平台认证和真实下载需要分别确认。软件源码采用 [Apache-2.0](../LICENSE)，保留 [NOTICE](../NOTICE)；第三方工具与依赖仍遵循各自许可，参见 [第三方声明](../THIRD_PARTY_NOTICES.md)。安装入口不等于第三方离线 bundle 已获发布验收，也不改变这些许可义务。
+Setup 的 `ready` 表示本次环境、工具以及明确请求时的本地 AI runtime 完整性检查完成；它不表示 API key、OpenAI 账号/模型、费用、听感、页面、平台认证或真实下载/上传已经通过。软件源码采用 [Apache-2.0](../LICENSE)，保留 [NOTICE](../NOTICE)；第三方工具与依赖仍遵循各自许可，参见 [第三方声明](../THIRD_PARTY_NOTICES.md)。安装入口不等于第三方离线 bundle 已获发布验收，也不改变这些许可义务。

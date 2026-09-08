@@ -849,6 +849,33 @@ def _require_windows_x64() -> None:
         raise AiRuntimeBuildError("ai_runtime_build_platform_unsupported")
 
 
+def load_current_ai_runtime(root: str | os.PathLike[str]) -> AiRuntime:
+    """Fully verify an installed runtime and its exact bundled source payload."""
+
+    try:
+        runtime = load_ai_runtime(Path(root))
+        version = tuple(runtime.python_identity["version"])
+        artifacts = {
+            relative: {"size": artifact.size, "sha256": artifact.sha256}
+            for relative, artifact in runtime.artifacts.items()
+        }
+        expected_manifest = canonical_json_bytes(_manifest(version, artifacts))
+        if hashlib.sha256(expected_manifest).hexdigest() != runtime.manifest_sha256:
+            raise AiRuntimeBuildError("ai_runtime_build_validation_failed")
+
+        package_root = Path(__file__).resolve(strict=True).parent
+        for name in (WORKER_FILE, PROTOCOL_FILE, OPENAI_PROVIDER_FILE):
+            size, digest = _hash_runtime_file(package_root / name)
+            artifact = runtime.artifacts.get(name)
+            if artifact is None or artifact.size != size or artifact.sha256 != digest:
+                raise AiRuntimeBuildError("ai_runtime_build_validation_failed")
+        return runtime
+    except AiRuntimeBuildError:
+        raise
+    except (AiRuntimeError, KeyError, TypeError, ValueError) as exc:
+        raise AiRuntimeBuildError("ai_runtime_build_validation_failed") from exc
+
+
 def build_ai_runtime(
     python_embed_zip: str | os.PathLike[str],
     python_sha256: str,
@@ -914,10 +941,7 @@ def build_ai_runtime(
             _plain_directory(runtime_root, code="ai_runtime_build_validation_failed")
         ) != published_signature:
             raise AiRuntimeBuildError("ai_runtime_build_validation_failed")
-        try:
-            runtime = load_ai_runtime(runtime_root)
-        except AiRuntimeError as exc:
-            raise AiRuntimeBuildError("ai_runtime_build_validation_failed") from exc
+        runtime = load_current_ai_runtime(runtime_root)
         success = True
         return runtime
     except AiRuntimeBuildError:
@@ -1011,4 +1035,9 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["AiRuntimeBuildError", "build_ai_runtime", "main"]
+__all__ = [
+    "AiRuntimeBuildError",
+    "build_ai_runtime",
+    "load_current_ai_runtime",
+    "main",
+]

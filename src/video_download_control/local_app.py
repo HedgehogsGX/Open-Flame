@@ -18,7 +18,6 @@ import os
 import re
 import signal
 import socket
-import stat
 import sys
 import threading
 import time
@@ -59,6 +58,16 @@ from .local_worker_cli import (
     _exclusive_local_worker,
     _runtime_logger as _local_worker_runtime_logger,
     build_local_worker,
+)
+from .local_app_storage import (
+    LocalAppLockUnavailable,
+    LocalAppStorageError,
+    default_local_app_root as _storage_default_local_app_root,
+    ensure_plain_directory_tree as _storage_ensure_plain_directory_tree,
+    exclusive_local_app as _storage_exclusive_local_app,
+    plain_directory_info as _storage_plain_directory_info,
+    reject_existing_link_components as _storage_reject_existing_link_components,
+    validate_windows_local_path as _storage_validate_windows_local_path,
 )
 from .runtime_logging import (
     DEFAULT_RUNTIME_LOG_BACKUP_COUNT,
@@ -159,32 +168,8 @@ def _validate_windows_local_path(path: object, label: str) -> Path:
 
     del label  # Public failures deliberately never reproduce caller text or paths.
     try:
-        if not isinstance(path, Path):
-            raise ValueError
-        text = str(path)
-        if (
-            not path.is_absolute()
-            or Path(os.path.abspath(path)) != path
-            or path == Path(path.anchor)
-            or text.startswith(("\\\\", "\\\\?\\", "\\\\.\\"))
-            or "\x00" in text
-        ):
-            raise ValueError
-        reserved = {"CON", "PRN", "AUX", "NUL", "CLOCK$"}
-        reserved.update(f"COM{index}" for index in range(1, 10))
-        reserved.update(f"LPT{index}" for index in range(1, 10))
-        for component in path.parts[1:]:
-            if (
-                not component
-                or component in {".", ".."}
-                or component.endswith((" ", "."))
-                or ":" in component
-                or any(ord(character) < 32 for character in component)
-                or component.split(".", 1)[0].upper() in reserved
-            ):
-                raise ValueError
-        return path
-    except (OSError, TypeError, ValueError):
+        return _storage_validate_windows_local_path(path)
+    except LocalAppStorageError:
         raise LocalAppError("local application path is invalid") from None
 
 
@@ -201,10 +186,10 @@ def default_local_app_root(
     raw = _environment_value(source, "LOCALAPPDATA")
     if not isinstance(raw, str) or not raw:
         raise LocalAppError("the Windows local application data root is unavailable")
-    base = Path(raw)
-    if not _normalized_absolute_path(base):
-        raise LocalAppError("the Windows local application data root is invalid")
-    return base / "Open-Flame" / "video-download-control"
+    try:
+        return _storage_default_local_app_root(source)
+    except LocalAppStorageError:
+        raise LocalAppError("the Windows local application data root is invalid") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,47 +738,21 @@ def _reserve_loopback_socket(
 
 
 def _plain_directory_info(path: Path) -> os.stat_result:
-    info = path.lstat()
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    attributes = getattr(info, "st_file_attributes", 0)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or stat.S_ISLNK(info.st_mode)
-        or bool(reparse and attributes & reparse)
-    ):
-        raise OSError
-    return info
+    return _storage_plain_directory_info(path)
 
 
 def _ensure_plain_directory_tree(path: Path) -> None:
-    current = Path(path.anchor)
     try:
-        _plain_directory_info(current)
-        for part in path.parts[1:]:
-            current /= part
-            try:
-                _plain_directory_info(current)
-            except FileNotFoundError:
-                current.mkdir(mode=0o700)
-                _plain_directory_info(current)
-    except OSError:
+        _storage_ensure_plain_directory_tree(path)
+    except LocalAppStorageError:
         raise LocalAppError("the local application storage is unavailable") from None
 
 
 def _reject_existing_link_components(path: Path) -> None:
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            return
-        except OSError:
-            raise LocalAppError("the local application storage is unavailable") from None
-        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        attributes = getattr(info, "st_file_attributes", 0)
-        if stat.S_ISLNK(info.st_mode) or bool(reparse and attributes & reparse):
-            raise LocalAppError("the local application storage is unavailable")
+    try:
+        _storage_reject_existing_link_components(path)
+    except LocalAppStorageError:
+        raise LocalAppError("the local application storage is unavailable") from None
 
 
 def _require_plain_directory_tree(path: Path) -> None:
@@ -812,53 +771,11 @@ def _require_plain_directory_tree(path: Path) -> None:
 def _exclusive_local_app(app_root: Path) -> Iterator[None]:
     """Hold one Windows byte-range lock for the whole supervisor lifetime."""
 
-    lock_path = app_root / ".local-app.lock"
-    descriptor: int | None = None
-    locked = False
     try:
-        _reject_existing_link_components(lock_path)
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(lock_path, flags, 0o600)
-        info = os.fstat(descriptor)
-        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        attributes = getattr(info, "st_file_attributes", 0)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_nlink != 1
-            or bool(reparse and attributes & reparse)
-        ):
-            raise OSError
-        if info.st_size == 0:
-            os.write(descriptor, b"\0")
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        import msvcrt
-
-        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-        locked = True
-    except OSError:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
+        with _storage_exclusive_local_app(app_root):
+            yield
+    except LocalAppLockUnavailable:
         raise LocalAppError("another local application instance is already active") from None
-    try:
-        yield
-    finally:
-        if descriptor is not None:
-            if locked:
-                try:
-                    import msvcrt
-
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
 
 
 def _open_browser(url: str) -> None:

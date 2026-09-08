@@ -2,19 +2,19 @@
 
 这是一个面向单机、单管理员、私有环境的媒体控制面，包含下载器、非破坏性编辑工作台和需要逐项确认的上传器。下载、编辑与上传分别保存数据和任务状态。
 
-> 当前开发版本为 **0.28.0**，下载数据库仍为 **Schema 11**，编辑库独立使用 **Schema 3**，上传库独立使用 **Schema 3**，自动流程使用独立 **Workflow Schema 1**。除分段和封面外，编辑域现在支持隔离 runtime 驱动的 OpenAI `whisper-1` 听写、`gpt-5.6-luna` 翻译和 `gpt-4o-mini-tts` 标准音色配音；时间轴须审核，处理计划冻结已批准修订。`/workflows` 可把一个 URL 串接到下载、编辑、AI 和所选 Bilibili、抖音、视频号上传草稿，并按用户预先授权或逐步确认继续。AI runtime 和密钥不随包提供，三平台真实投稿、定时发布和审核结果仍需外部测试员分别验收。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
+> 当前开发版本为 **0.28.0**，下载数据库仍为 **Schema 11**，编辑库独立使用 **Schema 4**，上传库独立使用 **Schema 3**，自动流程使用独立 **Workflow Schema 1**。除分段和封面外，编辑域现在支持隔离 runtime 驱动的 OpenAI `whisper-1` 听写、`gpt-5.6-luna` 翻译和 `gpt-4o-mini-tts` 标准音色配音；时间轴须审核，处理计划冻结已批准修订。`/workflows` 可把一个 URL 串接到下载、编辑、AI 和所选 Bilibili、抖音、视频号上传草稿，并按用户预先授权或逐步确认继续。AI runtime 和密钥不随包提供，三平台真实投稿、定时发布和审核结果仍需外部测试员分别验收。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
 自动流程入口为 `/workflows`；编辑入口为 `/edits`，也可从 ready 下载成品点击“进入编辑”。具体流程见[编辑工作台指南](docs/EDITOR.md)与[可选 AI Runtime](docs/AI_RUNTIME.md)。外部上传测试入口仍为[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。
 
 2026-09-05 的八项 Debug 发现已进入 0.24.3 修复：上传异常恢复、完整运行时校验、原件完整性与类型、Worker 状态、历史列表、上传库结构和运维文档。当前提交前复验及追加边界修复见[最终源码审查](validation/iteration-0.24.3-final-review.md)；[此前修复记录](validation/iteration-0.24.3-debug-fixes.md)和[原始核验报告](validation/full-debug-20260905.md)保留各自历史构建，[后续执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)跟踪剩余工作。旧上传运行时须按[升级步骤](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，账号和上传数据保留。
 
-0.28.0 在 0.27.0 的 T18 本地编辑切片上完成 T19 AI runtime 与 URL 自动流程；当前证据见[0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)，此前[编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)、[上传参数与 Schema 3 记录](validation/iteration-0.26.0-upload-parameters-evidence.md)及更早记录保留各自历史范围。Editing Schema 1/2 会按精确结构逐步迁移到 Schema 3；Upload Schema 1/2 会迁移到 Upload Schema 3。未知、损坏或更高版本保持原样并拒绝启动。固定 Git commit、制品 identity、五个发行文件和独立安装的实际结果由包外 release receipt 绑定，不能写回被打包源码自证。
+0.28.0 在 0.27.0 的 T18 本地编辑切片上完成 T19 AI runtime 与 URL 自动流程；当前证据见[0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)，此前[编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)、[上传参数与 Schema 3 记录](validation/iteration-0.26.0-upload-parameters-evidence.md)及更早记录保留各自历史范围。Editing Schema 1/2/3 会按精确结构逐步迁移到 Schema 4；Upload Schema 1/2 会迁移到 Upload Schema 3。未知、损坏或更高版本保持原样并拒绝启动。固定 Git commit、制品 identity、五个发行文件和独立安装的实际结果由包外 release receipt 绑定，不能写回被打包源码自证。
 
 下载、编辑和上传三页共用[设计规范](docs/DESIGN_SYSTEM.md)、语义 token、主题脚本和固定本地资源路由；[交互式视觉基准](docs/design-preview.html)直接读取同一生产 CSS。
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。下载备份不包含上传目录；上传数据使用单独的 `video-upload-backup` 命令。
 
-首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
+首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；如需 AI，可向同一 Setup 传入 `--ai-python-embed-zip ABSOLUTE_ZIP`，从固定核验的 CPython 3.13.15 归档构建默认 `data-ai-runtime`，完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
 
 上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
 
@@ -47,7 +47,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 当前实现包括：
 
-- 独立 Editing Schema 3、下载原件 SHA-256 复核复制、版本化草稿、乐观并发、幂等请求、不可变 AI task/timeline/render plan 及 plan-to-timeline 绑定、明确确认、单本地 Worker、取消/重试 lineage 和中断恢复；编辑域不会覆盖下载原件。
+- 独立 Editing Schema 4、下载原件 SHA-256 复核复制、版本化草稿、乐观并发、幂等请求、不可变 AI task/timeline/render plan 及 plan-to-timeline 绑定、脱敏远程调用账本与 unknown 人工 reconciliation、明确确认、单本地 Worker、取消/重试 lineage 和中断恢复；编辑域不会覆盖下载原件。
 - 固定 FFmpeg/ffprobe 的多分段 MP4 和 Pillow 封面制作，输出记录大小、SHA-256、时长、尺寸、容器与 codec；固定文件名不包含用户标题，媒体命令不经过 shell。
 - 严格 SRT/VTT 时间轴读写、隔离 CPython runtime 与标准库 OpenAI provider；`whisper-1` 听写、`gpt-5.6-luna` 结构化翻译和 `gpt-4o-mini-tts` 标准音色均经 manifest 显式声明。每个 cue 最多 4096 字符；自动流程只把第一个已选分段的派生音频交给听写，结果再换算回源时间。runtime、凭据或能力缺失时保持 blocked。
 - AI 渲染按每个已选分段过滤并把字幕/配音时间归零；边界切入 cue 时以 `ai_segment_boundary_splits_cue` 拒绝，纯 B-roll 分段生成空 VTT 和本地静音而不调用 TTS。保留原声时将原声压到 22% 后与配音混合；AI 或配音重试须再次确认，已经完成的远程批次/cue 仍可能重复计费。
@@ -73,7 +73,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 ## 本地启动
 
-普通 Windows 使用者优先按 [首次安装与修复](docs/WINDOWS_SETUP.md) 操作，无需安装开发测试依赖。`Setup-Open-Flame.cmd --help` 查看参数；`--wheelhouse` 和 `--artifact-cache` 分别指定精确的本地 Python wheels 与工具缓存。安装器不会自动下载 Python、修改系统 PATH、覆盖未知环境或替换损坏的既有工具包。`--repair` 只用于安装器自己创建的 `.venv`；先正常停止使用该源码的应用。
+普通 Windows 使用者优先按 [首次安装与修复](docs/WINDOWS_SETUP.md) 操作，无需安装开发测试依赖。`Setup-Open-Flame.cmd --help` 查看参数；`--wheelhouse` 和 `--artifact-cache` 分别指定精确的本地 Python wheels 与工具缓存，`--ai-python-embed-zip` 选择性构建 AI runtime。安装器不会自动下载 Python 或 AI 归档、修改系统 PATH、覆盖未知环境/工具/runtime。`--repair` 只用于安装器自己创建的 `.venv`；先正常停止使用该源码或同一 app-root 的应用。
 
 以下为开发者或高级手动入口，仍可使用 uv：
 

@@ -1,9 +1,9 @@
-"""Prepare a Windows source checkout without modifying system Python or data.
+"""Prepare a Windows source checkout and optional rebuildable AI runtime.
 
 All installation children use the existing bounded process runner. Only the
 hash-locked runtime wheels are installed; source is loaded by the root launcher.
 An existing environment is read-only unless this installer owns it. No recursive
-delete, automatic package upgrade or tool-bundle overwrite is performed here.
+delete, automatic package upgrade or tool/runtime overwrite is performed here.
 """
 
 from __future__ import annotations
@@ -20,6 +20,14 @@ import sys
 from collections.abc import Sequence
 
 from .source_environment_lock import SourceEnvironmentBusy, source_environment_lock
+from .local_app_storage import (
+    LocalAppLockUnavailable,
+    LocalAppStorageError,
+    default_local_app_root,
+    ensure_plain_directory_tree,
+    exclusive_local_app,
+    validate_windows_local_path,
+)
 from .startup_diagnostics import DiagnosticCode, emit_failure
 from .subprocess_runner import CommandSpec, SecureSubprocessRunner
 from .toolchain import install_toolchain, run_offline_smoke, verify_toolchain
@@ -27,6 +35,9 @@ from .toolchain import install_toolchain, run_offline_smoke, verify_toolchain
 
 OWNER_FILENAME = "open-flame-source-environment.json"
 _OWNER = {"schema_version": 1, "owner": "open-flame-source-setup"}
+AI_PYTHON_EMBED_SHA256 = (
+    "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf"
+)
 
 
 class SetupFailure(Exception):
@@ -48,12 +59,39 @@ def _path(value: str) -> Path:
     return path
 
 
+def _normalized_path(value: str) -> Path:
+    path = _path(value)
+    if Path(os.path.abspath(path)) != path:
+        raise argparse.ArgumentTypeError("normalized absolute path required")
+    return path
+
+
+def _app_root_path(value: str) -> Path:
+    path = _normalized_path(value)
+    try:
+        return validate_windows_local_path(path)
+    except LocalAppStorageError:
+        raise argparse.ArgumentTypeError("valid local application root required") from None
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(description="Install or repair the Open-Flame Windows source runtime.")
     parser.add_argument("--yes", action="store_true", help="Confirm environment changes and any required PyPI/GitHub downloads.")
     parser.add_argument("--repair", action="store_true", help="Reinstall locked dependencies only in a setup-owned environment.")
     parser.add_argument("--wheelhouse", type=_path, help="Use only local hash-matching dependency wheels (no PyPI access).")
     parser.add_argument("--artifact-cache", type=_path, help="Use only local hash-matching media-tool archives (no GitHub access).")
+    parser.add_argument(
+        "--ai-python-embed-zip",
+        type=_normalized_path,
+        metavar="ABSOLUTE_ZIP",
+        help="Build the optional AI runtime from the verified CPython 3.13.15 embeddable ZIP.",
+    )
+    parser.add_argument(
+        "--app-root",
+        type=_app_root_path,
+        metavar="ABSOLUTE_DIR",
+        help="AI runtime application root; valid only with --ai-python-embed-zip.",
+    )
     return parser
 
 
@@ -240,11 +278,97 @@ def _prepare_tools(repository: Path, python: Path, artifact_cache: Path | None) 
         raise SetupFailure(DiagnosticCode.SETUP_TOOLCHAIN_FAILED) from None
 
 
+_AI_RUNTIME_CHECK = """
+import pathlib, sys
+repository = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(repository / 'src'))
+from video_download_control.editing.ai_runtime_builder import load_current_ai_runtime
+runtime = load_current_ai_runtime(pathlib.Path(sys.argv[2]))
+assert tuple(runtime.python_identity['version']) == (3, 13, 15)
+"""
+
+
+_AI_RUNTIME_BUILD = """
+import pathlib, sys
+repository = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(repository / 'src'))
+from video_download_control.editing.ai_runtime_builder import build_ai_runtime, load_current_ai_runtime
+output = pathlib.Path(sys.argv[3])
+runtime = build_ai_runtime(pathlib.Path(sys.argv[2]), sys.argv[4], output)
+assert tuple(runtime.python_identity['version']) == (3, 13, 15)
+checked = load_current_ai_runtime(output)
+assert checked.manifest_sha256 == runtime.manifest_sha256
+"""
+
+
+def _prepare_ai_runtime(
+    repository: Path,
+    python: Path,
+    python_embed_zip: Path,
+    app_root: Path | None,
+) -> None:
+    try:
+        root = (
+            default_local_app_root(os.environ)
+            if app_root is None
+            else validate_windows_local_path(app_root)
+        )
+        ensure_plain_directory_tree(root)
+        output = root / "data-ai-runtime"
+        with exclusive_local_app(root):
+            if os.path.lexists(output):
+                if not _command(
+                    python,
+                    ("-c", _AI_RUNTIME_CHECK, str(repository), str(output)),
+                    repository=repository,
+                    timeout=120,
+                ):
+                    raise SetupFailure(DiagnosticCode.SETUP_AI_RUNTIME_FAILED)
+                print(
+                    "Open-Flame setup: existing AI runtime verified; no runtime changes.",
+                    flush=True,
+                )
+                return
+            print(
+                "Open-Flame setup: building the optional local AI runtime...",
+                flush=True,
+            )
+            if not _command(
+                python,
+                (
+                    "-c",
+                    _AI_RUNTIME_BUILD,
+                    str(repository),
+                    str(python_embed_zip),
+                    str(output),
+                    AI_PYTHON_EMBED_SHA256,
+                ),
+                repository=repository,
+                timeout=300,
+            ):
+                raise SetupFailure(DiagnosticCode.SETUP_AI_RUNTIME_FAILED)
+    except LocalAppLockUnavailable:
+        raise SetupFailure(DiagnosticCode.SETUP_BUSY) from None
+    except SetupFailure:
+        raise
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        raise SetupFailure(DiagnosticCode.SETUP_AI_RUNTIME_FAILED) from None
+
+
 def _install(repository: Path, arguments: argparse.Namespace) -> None:
     try:
         with source_environment_lock(repository, exclusive=True):
             python = _ensure_environment(repository, repair=arguments.repair, wheelhouse=arguments.wheelhouse)
             _prepare_tools(repository, python, arguments.artifact_cache)
+            if arguments.ai_python_embed_zip is not None:
+                _prepare_ai_runtime(
+                    repository,
+                    python,
+                    arguments.ai_python_embed_zip,
+                    arguments.app_root,
+                )
     except SourceEnvironmentBusy:
         raise SetupFailure(DiagnosticCode.SETUP_BUSY) from None
 
@@ -253,9 +377,22 @@ def main(argv: Sequence[str] | None = None, *, repository_root: Path) -> int:
     started = False
     try:
         arguments = _parser().parse_args(argv)
+        if arguments.app_root is not None and arguments.ai_python_embed_zip is None:
+            raise SetupFailure(DiagnosticCode.INVALID_ARGUMENTS)
         _check_prerequisites(repository_root)
-        print("Open-Flame source setup: prepares .venv and pinned media tools; business data is not changed.", flush=True)
+        if arguments.ai_python_embed_zip is None:
+            print("Open-Flame source setup: prepares .venv and pinned media tools; business data is not changed.", flush=True)
+        else:
+            print(
+                "Open-Flame source setup: prepares .venv and pinned media tools, then creates or verifies the rebuildable AI runtime; business databases and media are not changed.",
+                flush=True,
+            )
         print("Network: PyPI for missing/repaired dependencies unless --wheelhouse; GitHub for missing tools unless --artifact-cache.", flush=True)
+        if arguments.ai_python_embed_zip is not None:
+            print(
+                "AI runtime: when building, uses only the supplied verified local CPython archive; it performs no provider call.",
+                flush=True,
+            )
         if not arguments.yes:
             try:
                 confirmed = input("Continue? [y/N] ").strip().lower() in {"y", "yes"}

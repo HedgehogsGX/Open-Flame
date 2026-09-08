@@ -40,6 +40,7 @@ class DiagnosticCode(Enum):
     SETUP_ENVIRONMENT_UNAVAILABLE = "setup_environment_unavailable"
     SETUP_DEPENDENCIES_FAILED = "setup_dependencies_failed"
     SETUP_TOOLCHAIN_FAILED = "setup_toolchain_failed"
+    SETUP_AI_RUNTIME_FAILED = "setup_ai_runtime_failed"
     SETUP_BUSY = "setup_busy"
     SETUP_INTERRUPTED = "setup_interrupted"
 
@@ -56,6 +57,7 @@ _NEXT_STEPS = {
     DiagnosticCode.SETUP_ENVIRONMENT_UNAVAILABLE: "本地 Python 环境不可用；安装器不会覆盖未知环境。请先保留现有内容，按 README 检查或修复后再运行 Setup-Open-Flame.cmd。",
     DiagnosticCode.SETUP_DEPENDENCIES_FAILED: "项目依赖安装失败；请按 README 检查网络与依赖配置，再运行 Setup-Open-Flame.cmd。",
     DiagnosticCode.SETUP_TOOLCHAIN_FAILED: "下载工具包安装或校验失败；请按 README 检查网络与工具包来源，再运行 Setup-Open-Flame.cmd。",
+    DiagnosticCode.SETUP_AI_RUNTIME_FAILED: "AI runtime 安装或校验失败；安装器不会覆盖已有 runtime。请停止应用，保留或重命名已有目录，并按 AI runtime 指南检查本地 CPython 压缩包后重试。",
     DiagnosticCode.SETUP_BUSY: "源码环境正被安装器或应用占用，或其锁文件不可用；请先正常停止相关程序，再检查目录权限并重试 Setup-Open-Flame.cmd 或启动器，详见 README。",
     DiagnosticCode.SETUP_INTERRUPTED: "安装已取消；已有数据保留。可重新运行 Setup-Open-Flame.cmd，详见 README。",
 }

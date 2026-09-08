@@ -8,9 +8,9 @@
 
 启动成功后浏览器会打开本机页面，默认地址为 `http://127.0.0.1:8000/`。保持启动窗口运行；按 **Ctrl+C** 正常停止。请勿在任务进行中直接关闭窗口，以免来不及完成正常清理。CMD 启动即表示使用本机直连网络；它不是 Linux 隔离部署。
 
-启动器不会改变工作目录或把业务数据放进源码仓库。默认业务目录仍为 `%LOCALAPPDATA%\Open-Flame\video-download-control`。工具选择顺序为显式 `--tool-root`、存在的项目 `runtime-tools\windows-x64`、原有应用默认工具位置；已有但损坏的项目工具包会明确失败，不偷偷更换工具来源。
+启动器不会改变工作目录或把业务数据放进源码仓库。默认业务目录仍为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，可选 AI runtime 位于同一应用根的 `data-ai-runtime`。工具选择顺序为显式 `--tool-root`、存在的项目 `runtime-tools\windows-x64`、原有应用默认工具位置；已有但损坏的项目工具包会明确失败，不偷偷更换工具来源。
 
-v0.23 的源码启动器会持有环境共享读锁，安装器则持有独占写锁；出现 `setup_busy` 时先正常结束占用该源码的应用或安装。高级手动 CLI 不经过此源码锁，修复前也须自行停止这些实例。
+v0.23 的源码启动器会持有环境共享读锁，安装器则持有独占写锁；普通 Start 还会在整个生命周期持有应用根的 `.local-app.lock`，可选 AI runtime Setup 使用同一把锁，避免在运行中替换或出现 runtime。出现 `setup_busy` 时先正常结束占用该源码或同一应用根的应用/安装。高级手动 CLI 不经过全部普通启动锁，修复前也须自行停止这些实例。
 
 需要其他端口或本地配置时，可在 PowerShell 中执行：
 
@@ -18,9 +18,10 @@ v0.23 的源码启动器会持有环境共享读锁，安装器则持有独占�
 .\Start-Open-Flame.cmd --port 8001
 .\Start-Open-Flame.cmd --check --no-open-browser
 .\Start-Open-Flame.cmd --cookie-config "C:\private\cookie-sources.json"
+.\Start-Open-Flame.cmd --app-root "D:\Open-Flame\video-download-control"
 ```
 
-最后一行仅为路径示例。配置必须是用户准备好的只读 JSON；不要将 Cookie 内容作为参数，也不要提交到 Git。`--check` 只预检、不会领取下载任务或自动打开浏览器。
+最后两行仅为路径示例。配置必须是用户准备好的只读 JSON；不要将 Cookie 内容作为参数，也不要提交到 Git。自定义 `--app-root` 时，如需 AI，先向 Setup 传入同一个目录和 `--ai-python-embed-zip`，使 runtime 精确落到 `<app-root>\data-ai-runtime`。`--check` 只预检、不会领取下载任务或自动打开浏览器。
 
 ## 启动失败去哪里查
 
