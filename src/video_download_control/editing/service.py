@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from typing import Any, BinaryIO, Iterator, Mapping
+from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from .contracts import (
@@ -23,7 +23,20 @@ from .contracts import (
     RenderResult,
     recipe_from_mapping,
 )
+from .ai import TranslationRevision
+from .ai_pipeline import (
+    AiPipelineError,
+    CanonicalAiRequest,
+    CanonicalTimeline,
+    canonical_ai_request,
+    canonical_timeline,
+    decode_ai_request,
+    decode_timeline,
+    translation_timeline,
+    validate_translation_timeline,
+)
 from .schema import SCHEMA_VERSION, EditingSchemaError, ensure_editing_schema
+from .timeline import TimelineCue
 
 
 MAX_SOURCE_BYTES = 16 * 1024**3
@@ -37,6 +50,7 @@ _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
 _EMPTY_RECIPE = EditRecipe().to_dict()
 
 
@@ -194,7 +208,7 @@ def _open_verified_file(
 
 
 class EditingService:
-    """Owns Schema 1 records and immutable source/output copies.
+    """Owns Schema 2 records and immutable source/output copies.
 
     The application owns the single render worker. Claims are fenced with a
     random token so a stale worker cannot complete another worker's plan.
@@ -281,6 +295,17 @@ class EditingService:
                 "updated_at=?,confirmed_at=NULL WHERE state='queued'",
                 (now,),
             )
+            db.execute(
+                "UPDATE ai_tasks SET state='failed',code='ai_task_interrupted',"
+                "claim_token=NULL,updated_at=?,finished_at=? "
+                "WHERE state IN ('running','canceling')",
+                (now, now),
+            )
+            db.execute(
+                "UPDATE ai_tasks SET state='review',code='restart_confirmation_required',"
+                "updated_at=?,confirmed_at=NULL WHERE state='queued'",
+                (now,),
+            )
         for plan_id, claim_token in interrupted:
             self._remove_output_dir(self.staging_root / plan_id / claim_token)
         if cleanup_orphans:
@@ -295,11 +320,25 @@ class EditingService:
                 )
             }
             project_count = db.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            ai_counts = {
+                row["state"]: row["amount"]
+                for row in db.execute(
+                    "SELECT state,COUNT(*) amount FROM ai_tasks GROUP BY state"
+                )
+            }
+            timeline_counts = {
+                row["state"]: row["amount"]
+                for row in db.execute(
+                    "SELECT state,COUNT(*) amount FROM timeline_revisions GROUP BY state"
+                )
+            }
         return {
             "schema_version": SCHEMA_VERSION,
             "processor_configured": self.processor is not None,
             "project_count": project_count,
             "plan_counts": counts,
+            "ai_task_counts": ai_counts,
+            "timeline_counts": timeline_counts,
         }
 
     def import_source(
@@ -571,6 +610,485 @@ class EditingService:
     def project(self, project_id: str) -> dict[str, Any]:
         with self._db() as db:
             return self._project_by_id(db, _identifier(project_id))
+
+    def create_ai_task(
+        self,
+        project_id: str,
+        operation: str,
+        provider_id: str,
+        model_id: str,
+        options: Mapping[str, Any],
+        idempotency_key: str,
+        *,
+        source_revision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one immutable, explicitly reviewable transcription/translation task."""
+
+        try:
+            request = canonical_ai_request(
+                project_id=project_id,
+                operation=operation,
+                provider_id=provider_id,
+                model_id=model_id,
+                source_revision_id=source_revision_id,
+                options=options,
+            )
+        except (AiPipelineError, TypeError, ValueError) as exc:
+            raise EditingError("invalid_ai_request") from exc
+        key = _request_id(idempotency_key)
+        request_digest = _digest(
+            "create_ai_task", {"request_sha256": request.request_sha256}
+        )
+        existing = self._request_result(key, "create_ai_task", request_digest)
+        if existing is not None:
+            return self.ai_task(existing)
+
+        with self._db() as db:
+            if db.execute(
+                "SELECT 1 FROM projects WHERE id=?", (request.project_id,)
+            ).fetchone() is None:
+                raise EditingError("project_not_found")
+            if request.source_revision_id is not None:
+                source = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?",
+                    (request.source_revision_id,),
+                ).fetchone()
+                self._validate_ai_source_revision(request, source)
+
+        task_id, now = uuid4().hex, _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(
+                db, key, "create_ai_task", request_digest
+            )
+            if replay is not None:
+                return self._ai_task_by_id(db, replay)
+            if db.execute(
+                "SELECT 1 FROM projects WHERE id=?", (request.project_id,)
+            ).fetchone() is None:
+                raise EditingError("project_not_found")
+            if request.source_revision_id is not None:
+                source = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?",
+                    (request.source_revision_id,),
+                ).fetchone()
+                self._validate_ai_source_revision(request, source)
+            db.execute(
+                "INSERT INTO ai_tasks(id,project_id,operation,source_revision_id,"
+                "target_language,request,request_sha256,provider,model,state,code,"
+                "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'review',"
+                "'explicit_confirmation_required',?,?)",
+                (
+                    task_id,
+                    request.project_id,
+                    request.operation,
+                    request.source_revision_id,
+                    request.target_language,
+                    request.request_json,
+                    request.request_sha256,
+                    request.provider_id,
+                    request.model_id,
+                    now,
+                    now,
+                ),
+            )
+            self._insert_request(
+                db, key, "create_ai_task", request_digest, task_id, now
+            )
+            return self._ai_task_by_id(db, task_id)
+
+    def confirm_ai_task(self, task_id: str) -> dict[str, Any]:
+        task_id = _identifier(task_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM ai_tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise EditingError("ai_task_not_found")
+            task, request = self._ai_task_from_row(row)
+            if task["state"] in {"queued", "running", "canceling", "succeeded"}:
+                return task
+            if task["state"] != "review":
+                raise EditingError("ai_task_not_reviewable")
+            if request.source_revision_id is not None:
+                source = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?",
+                    (request.source_revision_id,),
+                ).fetchone()
+                self._validate_ai_source_revision(request, source)
+            now = _now()
+            changed = db.execute(
+                "UPDATE ai_tasks SET state='queued',code='',confirmed_at=?,updated_at=? "
+                "WHERE id=? AND state='review'",
+                (now, now, task_id),
+            ).rowcount
+            if changed != 1:
+                raise EditingError("ai_task_state_conflict")
+            return self._ai_task_by_id(db, task_id)
+
+    def retry_ai_task(self, task_id: str, idempotency_key: str) -> dict[str, Any]:
+        task_id, key = _identifier(task_id), _request_id(idempotency_key)
+        request_digest = _digest("retry_ai_task", {"task_id": task_id})
+        existing = self._request_result(key, "retry_ai_task", request_digest)
+        if existing is not None:
+            return self.ai_task(existing)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, "retry_ai_task", request_digest)
+            if replay is not None:
+                return self._ai_task_by_id(db, replay)
+            original = db.execute(
+                "SELECT * FROM ai_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if original is None:
+                raise EditingError("ai_task_not_found")
+            original_public, request = self._ai_task_from_row(original)
+            if original_public["state"] not in {"failed", "canceled"}:
+                raise EditingError("ai_task_retry_not_allowed")
+            successor = db.execute(
+                "SELECT * FROM ai_tasks WHERE retry_of=?", (task_id,)
+            ).fetchone()
+            if successor is not None:
+                result = self._ai_task_public(successor)
+                self._insert_request(
+                    db, key, "retry_ai_task", request_digest, result["id"], _now()
+                )
+                return result
+            if request.source_revision_id is not None:
+                source = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?",
+                    (request.source_revision_id,),
+                ).fetchone()
+                self._validate_ai_source_revision(request, source)
+            new_id, now = uuid4().hex, _now()
+            db.execute(
+                "INSERT INTO ai_tasks(id,project_id,operation,source_revision_id,"
+                "target_language,request,request_sha256,provider,model,state,code,"
+                "created_at,updated_at,retry_of) VALUES(?,?,?,?,?,?,?,?,?,'review',"
+                "'explicit_confirmation_required',?,?,?)",
+                (
+                    new_id,
+                    request.project_id,
+                    request.operation,
+                    request.source_revision_id,
+                    request.target_language,
+                    request.request_json,
+                    request.request_sha256,
+                    request.provider_id,
+                    request.model_id,
+                    now,
+                    now,
+                    task_id,
+                ),
+            )
+            self._insert_request(
+                db, key, "retry_ai_task", request_digest, new_id, now
+            )
+            return self._ai_task_by_id(db, new_id)
+
+    def claim_next_ai_task(self) -> dict[str, Any] | None:
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT * FROM ai_tasks WHERE state='queued' "
+                "ORDER BY confirmed_at,id"
+            ).fetchall()
+            for row in rows:
+                task, request = self._ai_task_from_row(row)
+                if request.source_revision_id is not None:
+                    source = db.execute(
+                        "SELECT * FROM timeline_revisions WHERE id=?",
+                        (request.source_revision_id,),
+                    ).fetchone()
+                    try:
+                        self._validate_ai_source_revision(request, source)
+                    except EditingError:
+                        now = _now()
+                        db.execute(
+                            "UPDATE ai_tasks SET state='failed',"
+                            "code='source_timeline_unavailable',updated_at=?,finished_at=? "
+                            "WHERE id=? AND state='queued'",
+                            (now, now, task["id"]),
+                        )
+                        continue
+                token, now = uuid4().hex, _now()
+                changed = db.execute(
+                    "UPDATE ai_tasks SET state='running',claim_token=?,started_at=?,"
+                    "updated_at=? WHERE id=? AND state='queued'",
+                    (token, now, now, task["id"]),
+                ).rowcount
+                if changed != 1:
+                    continue
+                result = self._ai_task_by_id(db, task["id"])
+                result["claim_token"] = token
+                return result
+            return None
+
+    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
+        task_id = _identifier(task_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state FROM ai_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise EditingError("ai_task_not_found")
+            now = _now()
+            if row["state"] in {"review", "queued"}:
+                db.execute(
+                    "UPDATE ai_tasks SET state='canceled',code='canceled',"
+                    "claim_token=NULL,updated_at=?,finished_at=? WHERE id=?",
+                    (now, now, task_id),
+                )
+            elif row["state"] == "running":
+                db.execute(
+                    "UPDATE ai_tasks SET state='canceling',"
+                    "code='cancellation_requested',updated_at=? WHERE id=?",
+                    (now, task_id),
+                )
+            return self._ai_task_by_id(db, task_id)
+
+    def ai_task_cancellation_requested(self, task_id: str, claim_token: str) -> bool:
+        task_id, claim_token = _identifier(task_id), _identifier(claim_token)
+        with self._db() as db:
+            row = db.execute(
+                "SELECT state,claim_token FROM ai_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+        if row is None or row["claim_token"] != claim_token:
+            raise EditingError("stale_ai_claim")
+        return row["state"] == "canceling"
+
+    def complete_ai_task(
+        self,
+        task_id: str,
+        claim_token: str,
+        result: Sequence[TimelineCue] | TranslationRevision,
+        *,
+        language: str | None = None,
+    ) -> dict[str, Any]:
+        task_id, claim_token = _identifier(task_id), _identifier(claim_token)
+        with self._db() as db:
+            row = db.execute("SELECT * FROM ai_tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise EditingError("ai_task_not_found")
+            task, request = self._ai_task_from_row(row)
+            if row["claim_token"] != claim_token or task["state"] not in {
+                "running",
+                "canceling",
+            }:
+                raise EditingError("stale_ai_claim")
+            parent_row = None
+            parent = None
+            if request.source_revision_id is not None:
+                parent_row = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?",
+                    (request.source_revision_id,),
+                ).fetchone()
+                self._validate_ai_source_revision(request, parent_row)
+                parent = self._timeline_from_row(parent_row)[1]
+
+        if task["state"] == "canceling":
+            return self.fail_ai_task(task_id, claim_token, "canceled", canceled=True)
+        try:
+            if request.operation == "transcribe":
+                if isinstance(result, TranslationRevision):
+                    raise AiPipelineError("invalid transcription result")
+                values = tuple(result)
+                result_language = language or (
+                    values[0].source_language if values else None
+                )
+                timeline = canonical_timeline(values, language=result_language)
+                requested_language = request.request["options"]["language"]
+                if (
+                    requested_language is not None
+                    and timeline.language.casefold() != requested_language.casefold()
+                ):
+                    raise AiPipelineError("transcription language mismatch")
+                kind, parent_id = "transcription", None
+            else:
+                if parent is None:
+                    raise AiPipelineError("translation source is missing")
+                if isinstance(result, TranslationRevision):
+                    timeline = translation_timeline(
+                        parent,
+                        result,
+                        provider_id=request.provider_id,
+                        model_id=request.model_id,
+                        source_language=request.source_language,
+                        target_language=request.target_language,
+                    )
+                else:
+                    timeline = canonical_timeline(
+                        tuple(result), language=request.target_language
+                    )
+                    validate_translation_timeline(parent, timeline)
+                kind, parent_id = "translation", request.source_revision_id
+        except (AiPipelineError, AttributeError, TypeError, ValueError) as exc:
+            raise EditingError("invalid_ai_result") from exc
+
+        revision_id, now = uuid4().hex, _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute(
+                "SELECT * FROM ai_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if current is None:
+                raise EditingError("ai_task_not_found")
+            current_public, current_request = self._ai_task_from_row(current)
+            if current["claim_token"] != claim_token:
+                raise EditingError("stale_ai_claim")
+            if current_public["state"] == "canceling":
+                db.execute(
+                    "UPDATE ai_tasks SET state='canceled',code='canceled',claim_token=NULL,"
+                    "updated_at=?,finished_at=? WHERE id=? AND state='canceling' "
+                    "AND claim_token=?",
+                    (now, now, task_id, claim_token),
+                )
+                return self._ai_task_by_id(db, task_id)
+            if current_public["state"] != "running":
+                raise EditingError("stale_ai_claim")
+            if current_request.request_sha256 != request.request_sha256:
+                raise EditingError("editing_data_invalid")
+            if parent_id is not None:
+                current_parent = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?", (parent_id,)
+                ).fetchone()
+                self._validate_ai_source_revision(current_request, current_parent)
+                current_parent_timeline = self._timeline_from_row(current_parent)[1]
+                validate_translation_timeline(current_parent_timeline, timeline)
+            db.execute(
+                "INSERT INTO timeline_revisions(id,project_id,parent_id,kind,language,"
+                "cues,cues_sha256,provider,model,state,review_version,code,created_at,"
+                "updated_at) VALUES(?,?,?,?,?,?,?,?,?,'review',0,"
+                "'explicit_review_required',?,?)",
+                (
+                    revision_id,
+                    request.project_id,
+                    parent_id,
+                    kind,
+                    timeline.language,
+                    timeline.cues_json,
+                    timeline.cues_sha256,
+                    request.provider_id,
+                    request.model_id,
+                    now,
+                    now,
+                ),
+            )
+            changed = db.execute(
+                "UPDATE ai_tasks SET state='succeeded',code='result_review_required',"
+                "claim_token=NULL,result_revision_id=?,updated_at=?,finished_at=? "
+                "WHERE id=? AND state='running' AND claim_token=?",
+                (revision_id, now, now, task_id, claim_token),
+            ).rowcount
+            if changed != 1:
+                raise EditingError("stale_ai_claim")
+            return self._ai_task_by_id(db, task_id)
+
+    def fail_ai_task(
+        self,
+        task_id: str,
+        claim_token: str,
+        code: str,
+        *,
+        canceled: bool = False,
+    ) -> dict[str, Any]:
+        task_id, claim_token = _identifier(task_id), _identifier(claim_token)
+        if not isinstance(code, str) or not _SAFE_CODE.fullmatch(code):
+            raise EditingError("invalid_ai_result")
+        state = "canceled" if canceled else "failed"
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state,claim_token FROM ai_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["claim_token"] != claim_token
+                or row["state"] not in {"running", "canceling"}
+            ):
+                raise EditingError("stale_ai_claim")
+            now = _now()
+            db.execute(
+                "UPDATE ai_tasks SET state=?,code=?,claim_token=NULL,updated_at=?,"
+                "finished_at=? WHERE id=? AND claim_token=?",
+                (state, code, now, now, task_id, claim_token),
+            )
+            return self._ai_task_by_id(db, task_id)
+
+    def ai_tasks(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        query, values = "SELECT * FROM ai_tasks", ()
+        if project_id is not None:
+            query += " WHERE project_id=?"
+            values = (_identifier(project_id),)
+        query += " ORDER BY created_at DESC,id"
+        with self._db() as db:
+            return [self._ai_task_public(row) for row in db.execute(query, values)]
+
+    def ai_task(self, task_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            return self._ai_task_by_id(db, _identifier(task_id))
+
+    def timelines(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        query, values = "SELECT * FROM timeline_revisions", ()
+        if project_id is not None:
+            query += " WHERE project_id=?"
+            values = (_identifier(project_id),)
+        query += " ORDER BY created_at DESC,id"
+        with self._db() as db:
+            return [self._timeline_public(row) for row in db.execute(query, values)]
+
+    def timeline(self, revision_id: str) -> dict[str, Any]:
+        with self._db() as db:
+            return self._timeline_by_id(db, _identifier(revision_id))
+
+    def review_timeline(
+        self, revision_id: str, decision: str, expected_review_version: int
+    ) -> dict[str, Any]:
+        revision_id = _identifier(revision_id)
+        if decision not in {"approved", "rejected"}:
+            raise EditingError("invalid_timeline_decision")
+        if (
+            isinstance(expected_review_version, bool)
+            or not isinstance(expected_review_version, int)
+            or expected_review_version < 0
+        ):
+            raise EditingError("invalid_timeline_review_version")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM timeline_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+            if row is None:
+                raise EditingError("timeline_not_found")
+            public, _timeline = self._timeline_from_row(row)
+            if (
+                public["state"] != "review"
+                or public["review_version"] != expected_review_version
+            ):
+                raise EditingError("timeline_review_conflict")
+            if decision == "approved" and public["parent_id"] is not None:
+                parent = db.execute(
+                    "SELECT * FROM timeline_revisions WHERE id=?", (public["parent_id"],)
+                ).fetchone()
+                if parent is None or self._timeline_public(parent)["state"] != "approved":
+                    raise EditingError("timeline_parent_not_approved")
+            now = _now()
+            changed = db.execute(
+                "UPDATE timeline_revisions SET state=?,review_version=review_version+1,"
+                "code=?,updated_at=?,reviewed_at=? WHERE id=? AND state='review' "
+                "AND review_version=?",
+                (
+                    decision,
+                    "timeline_approved" if decision == "approved" else "timeline_rejected",
+                    now,
+                    now,
+                    revision_id,
+                    expected_review_version,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise EditingError("timeline_review_conflict")
+            return self._timeline_by_id(db, revision_id)
 
     def create_plan(
         self,
@@ -1274,6 +1792,233 @@ class EditingService:
             "ordinal", "duration_ms", "width", "height", "container", "video_codec",
             "audio_codec", "created_at"
         )}
+
+    def _timeline_from_row(
+        self, row: sqlite3.Row
+    ) -> tuple[dict[str, Any], CanonicalTimeline]:
+        try:
+            revision_id = _identifier(row["id"])
+            project_id = _identifier(row["project_id"])
+            parent_id = (
+                None if row["parent_id"] is None else _identifier(row["parent_id"])
+            )
+            kind = row["kind"]
+            if (
+                kind not in {"transcription", "translation"}
+                or (kind == "transcription") != (parent_id is None)
+                or not isinstance(row["provider"], str)
+                or not _AI_TOKEN.fullmatch(row["provider"])
+                or not isinstance(row["model"], str)
+                or not _AI_TOKEN.fullmatch(row["model"])
+            ):
+                raise EditingError("editing_data_invalid")
+            timeline = decode_timeline(
+                row["cues"], row["cues_sha256"], language=row["language"]
+            )
+            state = row["state"]
+            review_version = row["review_version"]
+            if (
+                state not in {"review", "approved", "rejected"}
+                or isinstance(review_version, bool)
+                or review_version not in {0, 1}
+                or (
+                    state == "review"
+                    and (review_version != 0 or row["reviewed_at"] is not None)
+                )
+                or (
+                    state != "review"
+                    and (review_version != 1 or row["reviewed_at"] is None)
+                )
+                or not isinstance(row["code"], str)
+                or (row["code"] and not _SAFE_CODE.fullmatch(row["code"]))
+            ):
+                raise EditingError("editing_data_invalid")
+            for field in ("created_at", "updated_at"):
+                if _text(row[field], 80, required=True) != row[field]:
+                    raise EditingError("editing_data_invalid")
+            if row["reviewed_at"] is not None and (
+                _text(row["reviewed_at"], 80, required=True) != row["reviewed_at"]
+            ):
+                raise EditingError("editing_data_invalid")
+            public = {
+                "id": revision_id,
+                "project_id": project_id,
+                "parent_id": parent_id,
+                "kind": kind,
+                "language": timeline.language,
+                "provider": row["provider"],
+                "model": row["model"],
+                "state": state,
+                "review_version": review_version,
+                "code": row["code"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "reviewed_at": row["reviewed_at"],
+                "cues_sha256": timeline.cues_sha256,
+                "cue_count": len(timeline.cues),
+                "cues": [
+                    {
+                        "id": cue.id,
+                        "order": cue.order,
+                        "start_ms": cue.start_ms,
+                        "end_ms": cue.end_ms,
+                        "source_text": cue.source_text,
+                        "source_language": cue.source_language,
+                        "speaker_id": cue.speaker_id,
+                    }
+                    for cue in timeline.cues
+                ],
+            }
+            return public, timeline
+        except (AiPipelineError, IndexError, KeyError, TypeError, EditingError) as exc:
+            if isinstance(exc, EditingError) and exc.code != "editing_data_invalid":
+                raise
+            raise EditingError("editing_data_invalid") from exc
+
+    def _timeline_public(self, row: sqlite3.Row) -> dict[str, Any]:
+        return self._timeline_from_row(row)[0]
+
+    def _timeline_by_id(
+        self, db: sqlite3.Connection, revision_id: str
+    ) -> dict[str, Any]:
+        row = db.execute(
+            "SELECT * FROM timeline_revisions WHERE id=?", (revision_id,)
+        ).fetchone()
+        if row is None:
+            raise EditingError("timeline_not_found")
+        return self._timeline_public(row)
+
+    def _validate_ai_source_revision(
+        self, request: CanonicalAiRequest, row: sqlite3.Row | None
+    ) -> None:
+        if row is None:
+            raise EditingError("timeline_not_found")
+        public, timeline = self._timeline_from_row(row)
+        if (
+            public["project_id"] != request.project_id
+            or public["state"] != "approved"
+            or timeline.language != request.source_language
+        ):
+            raise EditingError("source_timeline_invalid")
+
+    def _ai_task_from_row(
+        self, row: sqlite3.Row
+    ) -> tuple[dict[str, Any], CanonicalAiRequest]:
+        try:
+            task_id = _identifier(row["id"])
+            project_id = _identifier(row["project_id"])
+            source_revision_id = (
+                None
+                if row["source_revision_id"] is None
+                else _identifier(row["source_revision_id"])
+            )
+            retry_of = (
+                None if row["retry_of"] is None else _identifier(row["retry_of"])
+            )
+            result_revision_id = (
+                None
+                if row["result_revision_id"] is None
+                else _identifier(row["result_revision_id"])
+            )
+            request = decode_ai_request(row["request"], row["request_sha256"])
+            if (
+                request.project_id != project_id
+                or request.operation != row["operation"]
+                or request.source_revision_id != source_revision_id
+                or request.target_language != row["target_language"]
+                or request.provider_id != row["provider"]
+                or request.model_id != row["model"]
+            ):
+                raise EditingError("editing_data_invalid")
+
+            state = row["state"]
+            if state not in {
+                "review",
+                "queued",
+                "running",
+                "canceling",
+                "succeeded",
+                "failed",
+                "canceled",
+            }:
+                raise EditingError("editing_data_invalid")
+            claim_token = row["claim_token"]
+            if state in {"running", "canceling"}:
+                _identifier(claim_token)
+            elif claim_token is not None:
+                raise EditingError("editing_data_invalid")
+            if (state == "succeeded") != (result_revision_id is not None):
+                raise EditingError("editing_data_invalid")
+            code = row["code"]
+            if not isinstance(code, str) or (code and not _SAFE_CODE.fullmatch(code)):
+                raise EditingError("editing_data_invalid")
+
+            timestamps: dict[str, str | None] = {}
+            for field in (
+                "created_at",
+                "updated_at",
+                "confirmed_at",
+                "started_at",
+                "finished_at",
+            ):
+                value = row[field]
+                if value is not None and _text(value, 80, required=True) != value:
+                    raise EditingError("editing_data_invalid")
+                timestamps[field] = value
+            if timestamps["created_at"] is None or timestamps["updated_at"] is None:
+                raise EditingError("editing_data_invalid")
+            if state == "review" and any(
+                timestamps[field] is not None
+                for field in ("confirmed_at", "started_at", "finished_at")
+            ):
+                raise EditingError("editing_data_invalid")
+            if state == "queued" and (
+                timestamps["confirmed_at"] is None
+                or timestamps["started_at"] is not None
+                or timestamps["finished_at"] is not None
+            ):
+                raise EditingError("editing_data_invalid")
+            if state in {"running", "canceling", "succeeded"} and (
+                timestamps["confirmed_at"] is None or timestamps["started_at"] is None
+            ):
+                raise EditingError("editing_data_invalid")
+            if state in {"running", "canceling"} and timestamps["finished_at"] is not None:
+                raise EditingError("editing_data_invalid")
+            if state in {"succeeded", "failed", "canceled"} and timestamps["finished_at"] is None:
+                raise EditingError("editing_data_invalid")
+
+            public = {
+                "id": task_id,
+                "project_id": project_id,
+                "operation": request.operation,
+                "source_revision_id": source_revision_id,
+                "target_language": request.target_language,
+                "provider": request.provider_id,
+                "model": request.model_id,
+                "state": state,
+                "code": code,
+                "request_sha256": request.request_sha256,
+                "options": dict(request.request["options"]),
+                "retry_of": retry_of,
+                "result_revision_id": result_revision_id,
+                **timestamps,
+            }
+            return public, request
+        except (AiPipelineError, EditingError, IndexError, KeyError, TypeError) as exc:
+            if isinstance(exc, EditingError) and exc.code != "editing_data_invalid":
+                raise EditingError("editing_data_invalid") from exc
+            raise EditingError("editing_data_invalid") from exc
+
+    def _ai_task_public(self, row: sqlite3.Row) -> dict[str, Any]:
+        return self._ai_task_from_row(row)[0]
+
+    def _ai_task_by_id(
+        self, db: sqlite3.Connection, task_id: str
+    ) -> dict[str, Any]:
+        row = db.execute("SELECT * FROM ai_tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise EditingError("ai_task_not_found")
+        return self._ai_task_public(row)
 
     def _request_result(self, key: str, operation: str, digest: str) -> str | None:
         with self._db() as db:
