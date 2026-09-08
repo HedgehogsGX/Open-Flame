@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..ui_assets import page_content_security_policy
 from .manager import WorkflowManager
+from .presets import WorkflowPresetError, WorkflowPresetStore
 from .service import WorkflowError
 from .web import WORKFLOW_HTML
 
@@ -32,6 +33,22 @@ RequestKey = Annotated[
 
 
 class CreateWorkflowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_url: str = Field(min_length=8, max_length=4096)
+    name: str = Field(min_length=1, max_length=160)
+    profile: dict[str, Any]
+    idempotency_key: RequestKey
+
+
+class CreatePresetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    profile: dict[str, Any]
+
+
+class CreatePresetWorkflowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_url: str = Field(min_length=8, max_length=4096)
@@ -87,6 +104,7 @@ def _safe_error(exc: WorkflowError) -> HTTPException:
     elif code in {
         "workflow_database_unavailable",
         "workflow_manager_stopped",
+        "workflow_preset_storage_unavailable",
     }:
         status = 503
     else:
@@ -99,6 +117,7 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
 
     nonce = secrets.token_urlsafe(32)
     app.state.workflow_manager = manager
+    preset_store = WorkflowPresetStore(manager.root)
 
     @app.middleware("http")
     async def workflow_boundary(request: Request, call_next):
@@ -151,6 +170,14 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
                 status_code=503, detail="workflow_database_unavailable"
             ) from None
 
+    async def preset_invoke(method: str, *args, **kwargs):
+        try:
+            return await run_in_threadpool(
+                getattr(preset_store, method), *args, **kwargs
+            )
+        except WorkflowPresetError as exc:
+            raise _safe_error(WorkflowError(exc.code)) from None
+
     @app.get("/workflows", response_class=HTMLResponse, include_in_schema=False)
     def page():
         return HTMLResponse(
@@ -169,6 +196,33 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
     @router.get("")
     async def workflows(limit: int = Query(default=50, ge=1, le=100)):
         return await invoke("list", limit=limit)
+
+    @router.get("/presets")
+    async def presets():
+        return await preset_invoke("list")
+
+    @router.post("/presets", status_code=201)
+    async def create_preset(payload: CreatePresetRequest):
+        return await preset_invoke("create", payload.name, payload.profile)
+
+    @router.get("/presets/{preset_id}")
+    async def preset(preset_id: Identifier):
+        return await preset_invoke("get", preset_id)
+
+    @router.post("/presets/{preset_id}/workflows", status_code=201)
+    async def create_from_preset(
+        preset_id: Identifier, payload: CreatePresetWorkflowRequest
+    ):
+        profile = await preset_invoke("materialize", preset_id, payload.profile)
+        result = await invoke(
+            "create",
+            source_url=payload.source_url,
+            name=payload.name,
+            profile=profile,
+            idempotency_key=payload.idempotency_key,
+        )
+        manager.wake()
+        return result
 
     @router.post("", status_code=201)
     async def create(payload: CreateWorkflowRequest):

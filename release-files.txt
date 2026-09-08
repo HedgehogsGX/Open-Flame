@@ -200,6 +200,7 @@ src/video_download_control/workflows/api.py
 src/video_download_control/workflows/contracts.py
 src/video_download_control/workflows/local_adapter.py
 src/video_download_control/workflows/manager.py
+src/video_download_control/workflows/presets.py
 src/video_download_control/workflows/schema.py
 src/video_download_control/workflows/service.py
 src/video_download_control/workflows/web.py
@@ -234,6 +235,7 @@ validation/iteration-0.25.0-t16-frontend-evidence.md
 validation/iteration-0.26.0-upload-parameters-evidence.md
 validation/iteration-0.27.0-editing-workspace-evidence.md
 validation/iteration-0.28.0-ai-invocation-ledger.md
+validation/iteration-0.28.0-workflow-presets.md
 validation/iteration-0.28.0-ai-workflow-evidence.md
 validation/iteration-0.28.0-post-release-ai-authorization.md
 validation/iteration-0.28.0-post-release-automation-correctness.md
