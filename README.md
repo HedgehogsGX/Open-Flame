@@ -14,7 +14,7 @@
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。下载备份不包含上传目录；上传数据使用单独的 `video-upload-backup` 命令。
 
-首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；如需 AI，可向同一 Setup 传入 `--ai-python-embed-zip ABSOLUTE_ZIP`，从固定核验的 CPython 3.13.15 归档构建默认 `data-ai-runtime`，完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md) 和 [启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
+首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；需要三平台上传时可向同一 Setup 传入 `--upload-runtime`，需要 AI 时传入 `--ai-python-embed-zip ABSOLUTE_ZIP`。两者都复用现有安装入口和应用根，不会建立第二套安装服务；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md)、[上传运行环境](docs/UPLOAD_RUNTIME.md)和[启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
 
 上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
 
@@ -73,7 +73,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 
 ## 本地启动
 
-普通 Windows 使用者优先按 [首次安装与修复](docs/WINDOWS_SETUP.md) 操作，无需安装开发测试依赖。`Setup-Open-Flame.cmd --help` 查看参数；`--wheelhouse` 和 `--artifact-cache` 分别指定精确的本地 Python wheels 与工具缓存，`--ai-python-embed-zip` 选择性构建 AI runtime。安装器不会自动下载 Python 或 AI 归档、修改系统 PATH、覆盖未知环境/工具/runtime。`--repair` 只用于安装器自己创建的 `.venv`；先正常停止使用该源码或同一 app-root 的应用。
+普通 Windows 使用者优先按 [首次安装与修复](docs/WINDOWS_SETUP.md) 操作，无需安装开发测试依赖。`Setup-Open-Flame.cmd --help` 查看参数；`--wheelhouse` 和 `--artifact-cache` 分别指定核心环境的精确 Python wheels 与工具缓存，`--upload-runtime` 选择性安装或核验三平台上传 runtime，`--ai-python-embed-zip` 选择性构建 AI runtime。上传 runtime 缺失时会获取自身固定且校验散列的 GitHub、PyPI 与 Chromium 输入；Setup 不自动下载 Python 或 AI 归档，不修改系统 PATH，也不覆盖未知环境、工具或 runtime。`--repair` 只用于安装器自己创建的 `.venv`；先正常停止使用该源码或同一 app-root 的应用。
 
 以下为开发者或高级手动入口，仍可使用 uv：
 

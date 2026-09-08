@@ -13,6 +13,8 @@
 
 2026-09-09 源码 Setup 追加可选 AI runtime 安装：同一 `Setup-Open-Flame.cmd` 接受 `--ai-python-embed-zip ABSOLUTE_ZIP`，固定只接受已核验 CPython 3.13.15 SHA-256，并把输出精确放到默认或显式 `--app-root` 的 `data-ai-runtime`。缺失目标用现有 builder 原子构建；完整且匹配当前 worker/protocol/provider 的目标只读复用；坏/旧目标拒绝且不删除、覆盖或改 manifest。安装与普通 Start 复用 `.local-app.lock`，运行中返回既有 `setup_busy`；其他 AI 失败收敛为 `setup_ai_runtime_failed`，不回显路径或 child 异常。ignored validator 在临时 app-root 禁网验证首次构建、复用、坏/旧/SHA/锁/runner 失败边界；默认应用 runtime 实测 `lexists` 前后均为 false，没有改动实际业务目录、凭据或调用 OpenAI。
 
+2026-09-09 源码 Setup 已进一步复用既有 `uploads.runtime_setup`：显式 `--upload-runtime` 从同一 `--app-root` 派生 `data-uploads`，默认使用已核验的项目 `.venv`，必要时只用 `--upload-python ABSOLUTE_EXE` 覆盖构建解释器。已有 ready runtime 先由 child 完整复核，且不因 build-only Python 不是 3.12 而阻塞；只有缺失目标才先校验 CPython 3.12 x64 后执行原安装器。源码写锁、应用根锁和上传 runtime 锁按固定顺序使用；锁冲突统一 `setup_busy`，其他 child/安装失败固定为 `setup_upload_runtime_failed`，不转发路径或 child 输出。旧 Schema 1、损坏或含非允许内容的部分 runtime 保持原样并失败关闭；空目录和只含允许且散列匹配的固定归档缓存可以续建。当前上传 builder 仍为直接构建而非原子 staging，不能把本入口描述成自动升级或原子替换。ignored validator 已在禁网临时 app-root 覆盖精确路径、默认/覆盖解释器、ready 复用、三层锁、固定失败码、旧/坏/不安全部分目录不变及输出脱敏；默认实际 runtime 前后均保持 Schema 1，本次没有移动它或触发第三方下载、登录、上传。
+
 用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 `0592b6f96c8eef60381b31b1e78e5ebf6d7c6a1d` 的 0.28.0 五件制品已由 ignored 的 `validation/local/release-v028-0592b6f-final/release-receipt.json` 绑定并通过独立源码/wheel 验收；这份 receipt 只证明该冻结提交。当前发布后开发进一步让 workflow 区分“平台接收投稿”“平台保存草稿”和合法的混合结果，远端结果不确定时仍优先停止核对；上传账号失效会标记账号并撤回同账号尚未执行的确认；浏览器幂等键只在响应丢失重试期间复用，成功后同参数可重新运行；后台 reconciliation 在无进展时有界退避。证据见 [自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)。
@@ -30,7 +32,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选安装、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 临时 app-root 的 Setup 首建/复用/失败关闭已禁网通过；真实默认应用目录仍需由操作者用本地固定归档实际构建，并升级上传 runtime；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | AI 与上传 Setup 的临时 app-root 首建/复用/失败关闭均已禁网通过。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -70,7 +72,7 @@
 
 ### v0.23.0 交付历史入口
 
-普通 Windows x64 使用：完整源码 ZIP 解压后，先运行 `Setup-Open-Flame.cmd`，成功后运行 `Start-Open-Flame.cmd`；需要 AI 时向同一 Setup 提供 `--ai-python-embed-zip ABSOLUTE_ZIP`。需要已安装 64 位 CPython 3.12+，无需 Codex 或 uv，仍不是免 Python EXE。安装、修复、日志位置与故障处理见 [Windows 安装](docs/WINDOWS_SETUP.md) 和 [启动指南](docs/WINDOWS_LAUNCHER.md)。
+普通 Windows x64 使用：完整源码 ZIP 解压后，先运行 `Setup-Open-Flame.cmd`，成功后运行 `Start-Open-Flame.cmd`；需要上传时向同一 Setup 提供 `--upload-runtime`，需要 AI 时提供 `--ai-python-embed-zip ABSOLUTE_ZIP`。需要已安装 64 位 CPython 3.12+，无需 Codex 或 uv，仍不是免 Python EXE。安装、修复、日志位置与故障处理见 [Windows 安装](docs/WINDOWS_SETUP.md) 和 [启动指南](docs/WINDOWS_LAUNCHER.md)。
 
 新增 [明确发行清单](release-files.txt) 与仓库内的 [构建/归档核对](scripts/release.py)、[解压安装验收](scripts/verify_windows_release.py)、[wheel 安装验收](scripts/verify_wheel_release.py)，不再依赖 ignored 历史 verifier。实际源码 ZIP 安装/repeat/Start 检查、wheel 新环境的 13 个依赖和 13 个命令入口均通过。前端已在独立正常应用中实际检查页面渲染、无效输入、刷新恢复批次、空成品列表、日志刷新、匿名模式；通过 PTY Ctrl+C 停止后，应用日志为 normal，三个进程退出、端口释放。未做 Explorer 双击或物理键盘验收。
 

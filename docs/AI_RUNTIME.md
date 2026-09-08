@@ -14,7 +14,7 @@ Python.org 为上述 3.13.15 Windows embeddable x64 ZIP 公布的 SHA-256 是 `d
 
 ## 1. 离线构建
 
-普通 Windows Start 的默认应用根为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，AI runtime 固定放在其下的 `data-ai-runtime`。普通 Start 不读取 `VDC_DATA_ROOT` 来改变这条路径；需要自定义位置时，向 Setup 和 Start 传入同一个 `--app-root` 规范化绝对目录。
+普通 Windows Start 的默认应用根为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，AI runtime 固定放在其下的 `data-ai-runtime`。普通 Start 不读取 `VDC_DATA_ROOT` 来改变这条路径；需要自定义位置时，向 Setup 和 Start 传入同一个 `--app-root` 规范化绝对目录。`--app-root` 也可与 `--upload-runtime` 一起使用，使上传 runtime 位于同一应用根派生的 `data-uploads`；两种 runtime 仍保持独立。
 
 先准备本地 CPython 归档，并独立核对官方 SHA-256：
 
@@ -48,6 +48,8 @@ $appRoot = "D:\Open-Flame\video-download-control"
 ```
 
 Setup 在目标缺失时核验调用时提供的固定 CPython ZIP，再原子构建；已有 runtime 只有在完整文件、manifest、CPython 3.13.15 和当前 worker/protocol/provider 全部匹配时才只读复用，此时不会读取调用时提供的 ZIP。runtime manifest 不保存归档来源，因此只读复用证明当前文件与声明完整匹配，不证明最初归档来自哪个下载位置；来源与官方 SHA-256 须按下文保存在 runtime 外部。已有目标损坏或过期会以固定 `setup_ai_runtime_failed` 拒绝，绝不删除、覆盖或修改 manifest。Setup 与普通 Start 复用 `<app-root>\.local-app.lock`；应用运行中返回 `setup_busy`。先正常停止应用，并把旧 runtime 保留或改名到尚不存在的备份目录后，才能重建。
+
+需要同时准备上传 runtime 时，可在同一命令追加 `--upload-runtime`；若项目 `.venv` 不是 CPython 3.12 x64，再追加 `--upload-python ABSOLUTE_EXE`。上传 runtime 复用现有 `uploads.runtime_setup`，它不是本节的原子 AI builder；两者的安装与完整性边界见各自文档。
 
 已通过 wheel 或 editable 安装 Open-Flame 的高级维护者仍可直接调用 builder；此入口不取得普通应用锁，必须自行先停止应用：
 

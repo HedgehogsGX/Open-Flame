@@ -1,6 +1,6 @@
 # Open-Flame 后续执行计划
 
-路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 1、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定和普通源码 Setup 的可选 AI runtime 安装已在禁网临时根验证；下一步由操作者在实际应用根构建 runtime 并准备当前冻结候选，再进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
+路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 1、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定以及普通源码 Setup 的可选 AI/上传 runtime 入口均已在禁网临时根验证；下一步是将 Workflow 编排扩展为多分段、多输出上传 fan-out，再由操作者在实际应用根准备 runtime 和当前冻结候选，进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
 
 ## 1. 目标、边界与完成定义
 
@@ -8,7 +8,7 @@
 
 用户在核验后补充的最终目标：对全部前端进行 Apple 风格升级，改善布局、字体与细节，加入适量动效，并让后续开发沿用同一设计。已建立并同步 [设计规范](DESIGN_SYSTEM.md)与[交互式视觉基准](design-preview.html)；v0.25.0 已完成 **T16** 的生产下载页、上传页、共享资源、交互稳定性和本地浏览器验收。后续新增界面继续沿用同一规范。
 
-2026-09-09 实际启动路径审查发现，普通 Start 原本会在 spawn 前从 control child 环境剔除 `OPEN_FLAME_AI_OPENAI_API_KEY`，使已安装 runtime 也无法进入 AI provider 健康/执行路径。当前已收敛为精确的 control-only 密钥白名单与值校验，下载 Worker 仍剔除该密钥；同一源码 Setup 已可从固定核验的本地 CPython 3.13.15 ZIP 在 `<app-root>/data-ai-runtime` 原子构建或只读复用当前 runtime，并与普通 Start 共用 app-root 锁。合成 sentinel、临时 runtime 和 Setup 首建/复用/拒绝矩阵均不触发网络。普通默认应用目录仍未实际安装 AI runtime；上传 runtime、真实 OpenAI 及三平台验收仍是后续门槛。
+2026-09-09 实际启动路径审查发现，普通 Start 原本会在 spawn control child 前剔除 `OPEN_FLAME_AI_OPENAI_API_KEY`，使已安装 runtime 也无法进入 AI provider 健康/执行路径。当前已收敛为精确的 control-only 密钥白名单与值校验，下载 Worker 仍剔除该密钥；同一源码 Setup 可从固定核验的本地 CPython 3.13.15 ZIP 在 `<app-root>/data-ai-runtime` 原子构建或只读复用 AI runtime，也可用 `--upload-runtime` 从同一应用根派生 `data-uploads` 并复用既有上传安装器。两条入口的合成 sentinel、临时 runtime、路径、锁、复用和失败矩阵均在禁网条件下通过。普通默认应用目录仍未安装 AI runtime，现有上传 runtime 仍为 Schema 1 且保持未改；实际 runtime 准备、真实 OpenAI 及三平台验收仍是后续门槛。
 
 “完成”需要同时满足：本轮已确认问题有明确处置、相应真实模式回归通过、用户能确认当前运行状态、测试包可独立安装并记录身份、三平台结果分别由测试员核对。全量测试绿色、环境 ready、二维码显示或本地 draft 均不能单独替代这些条件。
 
@@ -25,7 +25,7 @@
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
 | T18 / G8（0.27.0 历史阶段） | 独立 Editing Schema 1、版本化草稿、多个分段、封面、确认/取消/重试、真实本地 FFmpeg 与显式导入上传完成 | 由 0.28.0 T19 接续；该阶段证据不证明 AI 或真实平台 |
 | T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 1、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
-| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递；普通源码 Setup 已可选构建/复用当前 AI runtime | 预设边界/API/生产页面浏览器及真实域离线整链已通过；Setup 与密钥边界仅用禁网临时根/sentinel 验证；默认应用根仍未安装；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
+| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递；普通源码 Setup 已可选构建/复用 AI runtime，并复用既有上传安装器准备 upload runtime | 预设边界/API/生产页面浏览器、真实域离线整链和两个 Setup runtime 入口已通过本地禁网验证；默认应用根的 AI runtime 仍缺失、upload runtime 仍是 Schema 1；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
 | T11 / T12 | **NOT RUN** | 三平台真实上传与当前六平台下载必须绑定最终 0.28.0 receipt 后的同一构建分别执行 |
 | T15 | **NOT RUN** | Linux、Docker 与 NAS 仍需目标环境独立验收；Windows 本地 UI 结果不能替代 |
 
@@ -60,6 +60,8 @@ K. 非密钥复用预设与真实域离线整链（T20 已复验；网络与模�
            ↓ 复用参数仍重新绑定 runtime 与账号，禁止真实网络的整链可重复
 K2. 普通源码 Setup 的 AI runtime 安装（T20 已复验；仅临时 app-root）
            ↓ 固定本地 CPython 归档、当前源码字节、原子发布、只读复用和 app-root 锁均失败关闭
+K3. 普通源码 Setup 的上传 runtime 安装（T20 已复验；仅临时 app-root）
+           ↓ 复用既有安装器、精确 data-uploads 派生、三层锁、ready 复用及旧/坏目标失败关闭
 L. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
            ↓ G4：按平台、入口、模式分别接受
 M. 根据真实回报修复并收敛当前功能（T13）
@@ -338,6 +340,7 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 3. **已完成：调用前输入硬上限。** 听写在首次 provider 请求前限制 30 分钟、25 MiB 和 1 次调用；翻译限制 1000 cues、60000 输入字符和最多 20 个按 50 cues 估算的调用单位；TTS 限制 600 cues、60000 输入字符和 600 次逐 cue 调用。上限用于阻止一次确认意外扩大输入或调用数，不代表价格、额度、实际 token/音频计费或供应商账单。
 4. **已完成：Schema 4 远端调用 ledger。** `ai_invocations` 仅保存 owner、operation、ordinal/attempt、调用单位、authorization/owner definition/request fingerprint 摘要、状态、固定 reason code 和时间，不保存正文、密钥、本机路径、endpoint 或 provider 响应。状态只沿 `reserved→dispatched→responded`、`reserved→released`、`dispatched→unknown→reconciled` 前进；迁移只为可能已经远程执行的旧任务/计划建立保守 `unknown` 哨兵，不能证明为远程或缺少 authorization 摘要时仍要求人工核对。`reserved/dispatched/unknown` 阻止完成与重试；`reconciled/accepted_without_result` 和 `reconciled/abandoned` 继续阻止重试，`responded`、`released`、`reconciled/not_accepted` 才可在原有 owner 状态和再次确认规则下继续。翻译 `request_units=ceil(cues/50)` 是 runtime envelope 估算；provider 仍可因 4 MiB 请求边界拆成更多实际 HTTP 请求，因此它不是精确请求数、token/价格或账单收据。`health` 检查不入账，也不证明远端账号/模型可用。
 5. **非密钥复用预设与本地整链 smoke 已接线。** `WorkflowPresetStore` 与 `/api/v1/workflows/presets` 已保存 URL 之外可复用的分段/封面/语言/音色/平台内容参数、authorization 摘要及账号选择意图；不得保存 API key、Cookie、扫码状态或账号 session revision，运行时重新绑定当前能力和账号。旧脚本跳过 AI 的成功声明已撤回；当前真实域整链覆盖预设重载、URL→下载 Worker→隔离听写/翻译/配音→FFmpeg→三平台上传服务，且核对配音确实进入视频，最终为合成 `submission_acknowledged`；真实 OpenAI、下载提取、账号登录和三平台发布仍需单独授权验证。
+6. **普通源码 Setup 的两个可选 runtime 入口已接线。** AI runtime 使用固定本地 CPython ZIP 和原子 builder；上传 runtime 使用显式 `--upload-runtime`、可选 build-only `--upload-python` 并复用 `uploads.runtime_setup`。上传目标固定从 `<app-root>/data-uploads` 派生，锁顺序为 source→app-root→upload runtime；ready 复核、旧/坏/含非允许内容的部分目标拒绝、固定失败码和输出脱敏已在 ignored 禁网 validator 通过。上传 builder 仍直接构建，空目录或仅含散列匹配固定归档的安全预置可以续建，不能描述成原子发布。
 
 **T20 当前证据边界：** 见[发布后自动流程正确性记录](../validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。当前只是未发布源码里程碑；三个 ignored ledger validator、compileall、编辑/自动流程页内联 JS、依赖一致性、diff 与本机浏览器检查已通过，focused 既有测试仍有 3 项旧 Schema 1 断言失败。没有新的 clean release receipt，也没有真实 OpenAI、真实下载、真实平台上传/发布、实际价格或真人质量证据。
 
@@ -362,6 +365,8 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的工作量中。
 
 当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation 已接线；预设与真实域离线 smoke 已按[预设回归](../validation/iteration-0.28.0-workflow-presets.md)和[整链更正](../validation/iteration-0.28.0-full-chain-smoke.md)复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。下一步应由操作者在实际 app-root 用固定本地归档构建并复核 runtime，扩展多 cue 与失败恢复集成范围，再准备当前冻结候选；不得把默认目录不存在推断为本机所有配置均无 runtime。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
+
+上传 Setup 的独立 ignored validator 也已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变、输出脱敏及默认实际 Schema 1 runtime 前后不变。在进入上述外部验收前，下一项工程切片是把当前只接受一个 segment/一个输出的 Workflow Schema 1 扩展为多分段 fan-out，并保留每段×每平台的确认、重启、unknown 与 retry 对账；生产 UI 等本轮液态玻璃方向选定后落地。
 
 ## 5. 每个工作包统一交付检查
 

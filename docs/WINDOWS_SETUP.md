@@ -1,6 +1,6 @@
 # Windows 源码版：首次安装与修复
 
-本流程在源码目录准备本地 Python 环境和锁定媒体工具，也可从用户已下载的固定 CPython 归档构建可选 AI runtime，之后可独立于 Codex 使用；不要求安装 uv。它仍需要系统 Python，**不是免 Python 的 EXE，也不是已发布的第三方离线工具合集**。
+本流程在源码目录准备本地 Python 环境和锁定媒体工具，也可通过同一个入口安装可选上传 runtime，或从用户已下载的固定 CPython 归档构建可选 AI runtime，之后可独立于 Codex 使用；不要求安装 uv。它仍需要系统 Python，**不是免 Python 的 EXE，也不是已发布的第三方离线工具合集**。
 
 本轮已在独立空目录通过默认联网安装、重复安装、失败后修复及正常启动验证，实测系统 Python 为 3.13.14；详情与范围见 [v0.23 验收记录](../validation/iteration-0.23.0-source-setup-evidence.md)。这不代表所有平台或所有 Python 版本都已验收。
 
@@ -42,13 +42,39 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 | `--wheelhouse ABSOLUTE_DIR` | 依赖仅从本地目录安装，不访问 PyPI；不限制媒体工具的 GitHub 获取 | 锁文件要求的全部 wheel，版本、哈希与当前 Python / Windows x64 兼容 |
 | `--artifact-cache ABSOLUTE_DIR` | 缺失工具仅从本地缓存获取，不访问 GitHub；不限制依赖的 PyPI 获取 | [工具锁](../src/video_download_control/toolchains/windows-x64.json) 中各 `cache_name` 对应的文件，包括工具、来源包、校验及签名材料；不是解压后的工具目录 |
 
-需要两部分都离线时，同时传入两个**已存在的绝对目录**。缓存缺项、哈希不匹配或 wheel 不兼容会失败，不会悄悄回退联网：
+只准备核心 `.venv` 与媒体工具并需要两部分都离线时，同时传入两个**已存在的绝对目录**。缓存缺项、哈希不匹配或 wheel 不兼容会失败，不会悄悄回退联网：
 
 ```powershell
 .\Setup-Open-Flame.cmd --yes --wheelhouse 'C:\OpenFlameCache\wheels' --artifact-cache 'C:\OpenFlameCache\tool-archives'
 ```
 
-上述为示例路径，不会自动为你准备离线缓存。依赖安装使用 `--no-index --find-links`（指定 wheelhouse 时）、`--only-binary` 和 `--require-hashes`；这些参数含义见 [pip 官方安装文档](https://pip.pypa.io/en/stable/cli/pip_install/)。本流程不验证平台登录或下载真实媒体。
+上述为示例路径，不会自动为你准备离线缓存。依赖安装使用 `--no-index --find-links`（指定 wheelhouse 时）、`--only-binary` 和 `--require-hashes`；这些参数含义见 [pip 官方安装文档](https://pip.pypa.io/en/stable/cli/pip_install/)。`--wheelhouse` 与 `--artifact-cache` 不控制可选上传 runtime 自身的固定下载；当前源码 Setup 尚未为这部分提供完整离线 cache 参数。本流程不验证平台登录或下载真实媒体。
+
+### 可选上传 runtime
+
+需要 Bilibili、抖音或视频号登录与投稿时，普通源码用户优先让同一个 Setup 调用现有上传 runtime 安装器：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime
+```
+
+Setup 默认用刚刚核验的项目 `.venv` 建立上传 runtime；该解释器必须是 **CPython 3.12 x64**。如果核心 `.venv` 来自 3.13，可另行指定已有的 3.12 x64 解释器。这个解释器只用于创建隔离上传 venv，不会被安装或升级依赖：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime `
+  --upload-python 'C:\Python312\python.exe'
+```
+
+默认目标精确为 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-uploads\runtime`。自定义 Start 根时，只传一次相同的 `--app-root`；Setup 会从它派生 `data-uploads`，不接受另一个上传根：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime `
+  --app-root 'D:\Open-Flame\video-download-control'
+```
+
+`--upload-python` 只允许与 `--upload-runtime` 同时使用。缺失 runtime 会由既有 `uploads.runtime_setup` 下载并核验固定 SAU、biliup、hash-locked wheels 和 Chromium，再执行 CLI help 与纯本地浏览器 smoke；不会登录、扫码、上传或发布。已有当前 runtime 会完整复核并只读复用。旧 Schema 1、损坏或含非允许内容的部分 runtime 会以 `setup_upload_runtime_failed` 停止，绝不覆盖或修改原目录；空 runtime，或只含允许且散列匹配的一个或两个固定归档的预置目录，可以继续构建。需重建时按[上传运行环境的升级步骤](UPLOAD_RUNTIME.md#从旧运行时升级)只保留并改名 `data-uploads\runtime` 后再重试。
+
+当前上传安装器直接在缺失的 `runtime` 目录内构建，不提供原子 staging 发布；下载、创建 venv 或浏览器安装中断可能留下可识别的部分 runtime。若只留下空目录或散列匹配的固定归档缓存，后续运行可安全续建；其他部分内容失败关闭并要求保留或改名后重建。不要把 Setup 成功理解为账号登录或真实投稿验收。
 
 ### 可选 AI runtime
 
@@ -69,7 +95,14 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 .\Start-Open-Flame.cmd --app-root 'D:\Open-Flame\video-download-control'
 ```
 
-`--app-root` 只允许与 `--ai-python-embed-zip` 一起用于 Setup。Setup 先准备原有 `.venv` 和媒体工具，再在 `<app-root>\data-ai-runtime` 缺失时核验 ZIP 并调用现有原子 builder；已有 runtime 只有在完整 manifest、全部文件、CPython 3.13.15 及当前 worker/protocol/provider 字节都匹配时才只读复用，复用时不读取 ZIP，也不把 runtime 自身当作原始归档来源证明。已有目录损坏或来自旧源码时会以 `setup_ai_runtime_failed` 停止，绝不删除、覆盖或改写 manifest；先正常停止应用，保留并将旧目录改名到尚不存在的备份名，再重试。更多来源、完整性和 provider 边界见 [AI runtime 指南](AI_RUNTIME.md)。
+`--app-root` 只允许在 `--ai-python-embed-zip` 或 `--upload-runtime` 至少一项被请求时用于 Setup。Setup 先准备原有 `.venv` 和媒体工具，再在 `<app-root>\data-ai-runtime` 缺失时核验 ZIP 并调用现有原子 AI builder；已有 AI runtime 只有在完整 manifest、全部文件、CPython 3.13.15 及当前 worker/protocol/provider 字节都匹配时才只读复用，复用时不读取 ZIP，也不把 runtime 自身当作原始归档来源证明。已有目录损坏或来自旧源码时会以 `setup_ai_runtime_failed` 停止，绝不删除、覆盖或改写 manifest；先正常停止应用，保留并将旧目录改名到尚不存在的备份名，再重试。更多来源、完整性和 provider 边界见 [AI runtime 指南](AI_RUNTIME.md)。
+
+两项 runtime 可以在一次显式命令中准备，并共享同一个应用根：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime `
+  --ai-python-embed-zip 'C:\Installers\python-3.13.15-embed-amd64.zip'
+```
 
 ## 修复与已有数据
 
@@ -84,9 +117,10 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 - 已有但不属于 Setup 的环境：健康时可验证并复用；需要修改或显式 `--repair` 时拒绝覆盖。先保留原内容并检查，不要伪造 ownership 标记来强制修复。
 - 已有但损坏的工具包：校验失败并停止；`--repair` 也不会覆盖。保留诊断与原目录，核对来源后再制定恢复方案，不要靠删除文件绕过校验。
 - 已有但损坏或过期的 AI runtime：即使带 `--repair` 也只读拒绝，不自动修补或覆盖；保留或改名后再从固定 CPython 归档重新构建。
+- 已有旧版、损坏或含非允许内容的部分上传 runtime：`--repair` 不会改写它；只保留并改名 `data-uploads\runtime`，账号、数据库、媒体和封面继续留在原上传根，再用 `--upload-runtime` 重建。空目录或只含允许且散列匹配的固定归档缓存可由安装器续建。
 - 安装或修复不迁移、清空业务数据库、下载媒体或 Cookie 配置。默认业务目录仍为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，不在仓库内。中断可能留下 Setup 拥有的部分环境，可在正常停止相关程序后重试。
 
-源码 Start 在整个应用生命周期持有源码共享锁，Setup 在安装期间需要源码独占写锁，使用仓库根目录的 `.open-flame-setup.lock`。AI runtime 安装还与普通 Start 复用目标应用根的 `.local-app.lock`；另一个源码、wheel 或同根应用正在运行时同样立即给出 `setup_busy`。两类锁都不会等待或强行关闭应用。**直接运行不采用普通 app-root 合同的高级 CLI 不受这些锁完整保护**，维护前必须自行正常停止。锁文件存在不等于有人持锁，不要通过删除锁文件解除占用。
+源码 Start 在整个应用生命周期持有源码共享锁，Setup 在安装期间需要源码独占写锁，使用仓库根目录的 `.open-flame-setup.lock`。AI 与上传 runtime 安装都与普通 Start 复用目标应用根的 `.local-app.lock`；上传安装子进程还持有 `data-uploads` 的既有 runtime 独占锁。另一个源码、wheel、同根应用或上传维护进程正在占用时会立即停止；应用根或源码锁冲突返回 `setup_busy`，上传子锁冲突也映射为同一码。各锁都不会等待或强行关闭应用。**直接运行不采用普通 app-root 合同的高级 CLI 不受这些锁完整保护**，维护前必须自行正常停止。锁文件存在不等于有人持锁，不要通过删除锁文件解除占用。
 
 从旧版本升级时，如果旧工具完整但与新源码锁不匹配，先正常停止应用，将 `runtime-tools\windows-x64` 改名为同目录下尚不存在的备份名，再运行 Setup 安装当前固定工具；保留旧目录供旧版本回退。v0.23 已将失效的 FFmpeg daily URL 改为月末构建，仍核对精确哈希，不自动采用浮动 `latest`。
 
@@ -111,6 +145,7 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 | `setup_dependencies_failed` | `setup_dependencies` | 检查 PyPI 连接，或 wheelhouse 是否具备锁定哈希及兼容 wheel；不要改锁文件或关闭哈希检查来绕过 |
 | `setup_toolchain_failed` | `setup_toolchain` | 工具获取、哈希、版本或离线 smoke 失败；核对 GitHub / 本地缓存，已有坏工具不会被自动替换 |
 | `setup_ai_runtime_failed` | `setup_ai_runtime` | 本地 CPython ZIP、目标路径或已有 runtime 校验失败；不会显示私有路径或覆盖目标，停止应用并按 AI runtime 指南保留/改名后重试 |
+| `setup_upload_runtime_failed` | `setup_upload_runtime` | 上传解释器、固定下载、安装或完整性复核失败；不会回显 child 输出。先检查 CPython 3.12；若现有 runtime 为旧版、损坏或含非允许内容的部分目录，再按上传运行环境指南保留/改名 runtime 后重试 |
 | `setup_busy` | `setup_lock` | 源码应用 / 安装器占用，或锁文件不可用；正常停止相关程序后重试；无占用时检查目录权限与锁文件状态 |
 | `setup_interrupted` | `setup_install` | 已开始安装后取消；保留部分环境与业务数据，确认相关进程正常停止后可重试 |
 
@@ -120,4 +155,4 @@ Setup 在仓库内准备 `.venv` 与 `runtime-tools\windows-x64`，并校验固�
 
 ## 验收与发布边界
 
-Setup 的 `ready` 表示本次环境、工具以及明确请求时的本地 AI runtime 完整性检查完成；它不表示 API key、OpenAI 账号/模型、费用、听感、页面、平台认证或真实下载/上传已经通过。软件源码采用 [Apache-2.0](../LICENSE)，保留 [NOTICE](../NOTICE)；第三方工具与依赖仍遵循各自许可，参见 [第三方声明](../THIRD_PARTY_NOTICES.md)。安装入口不等于第三方离线 bundle 已获发布验收，也不改变这些许可义务。
+Setup 的 `ready` 表示本次环境、工具以及明确请求的上传/AI runtime 完整性检查完成；它不表示 API key、OpenAI 账号/模型、费用、听感、页面、平台认证或真实下载/上传已经通过。软件源码采用 [Apache-2.0](../LICENSE)，保留 [NOTICE](../NOTICE)；第三方工具与依赖仍遵循各自许可，参见 [第三方声明](../THIRD_PARTY_NOTICES.md)。安装入口不等于第三方离线 bundle 已获发布验收，也不改变这些许可义务。

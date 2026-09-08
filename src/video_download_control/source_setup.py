@@ -1,9 +1,10 @@
-"""Prepare a Windows source checkout and optional rebuildable AI runtime.
+"""Prepare a Windows source checkout and optional rebuildable runtimes.
 
-All installation children use the existing bounded process runner. Only the
-hash-locked runtime wheels are installed; source is loaded by the root launcher.
-An existing environment is read-only unless this installer owns it. No recursive
-delete, automatic package upgrade or tool/runtime overwrite is performed here.
+All installation children use the existing bounded process runner. The core
+environment uses hash-locked wheels; optional runtimes reuse their pinned
+builders and inputs. Source is loaded by the root launcher. An existing core
+environment is read-only unless this installer owns it. No recursive delete,
+automatic package upgrade or tool/runtime overwrite is performed here.
 """
 
 from __future__ import annotations
@@ -87,10 +88,21 @@ def _parser() -> argparse.ArgumentParser:
         help="Build the optional AI runtime from the verified CPython 3.13.15 embeddable ZIP.",
     )
     parser.add_argument(
+        "--upload-runtime",
+        action="store_true",
+        help="Install or verify the optional pinned upload runtime.",
+    )
+    parser.add_argument(
+        "--upload-python",
+        type=_normalized_path,
+        metavar="ABSOLUTE_EXE",
+        help="CPython 3.12 x64 used only to build the upload runtime; valid only with --upload-runtime.",
+    )
+    parser.add_argument(
         "--app-root",
         type=_app_root_path,
         metavar="ABSOLUTE_DIR",
-        help="AI runtime application root; valid only with --ai-python-embed-zip.",
+        help="Optional runtime application root; valid with --ai-python-embed-zip or --upload-runtime.",
     )
     return parser
 
@@ -157,7 +169,13 @@ def _locked_requirements(path: Path) -> dict[str, str]:
         raise SetupFailure(DiagnosticCode.SETUP_DEPENDENCIES_FAILED) from None
 
 
-def _command(python: Path, arguments: Sequence[str], *, repository: Path, timeout: float = 900) -> bool:
+def _command_returncode(
+    python: Path,
+    arguments: Sequence[str],
+    *,
+    repository: Path,
+    timeout: float = 900,
+) -> int:
     runner = SecureSubprocessRunner(allowed_environment_keys=frozenset({"PIP_CONFIG_FILE"}))
     result = runner.run(CommandSpec(
         executable=python,
@@ -169,7 +187,16 @@ def _command(python: Path, arguments: Sequence[str], *, repository: Path, timeou
         stderr_limit_bytes=2 * 1024 * 1024,
     ))
     # Never forward child output, argv, local cache paths or external error text.
-    return result.returncode == 0
+    return result.returncode
+
+
+def _command(python: Path, arguments: Sequence[str], *, repository: Path, timeout: float = 900) -> bool:
+    return _command_returncode(
+        python,
+        arguments,
+        repository=repository,
+        timeout=timeout,
+    ) == 0
 
 
 _RUNTIME_PROBE = """
@@ -300,6 +327,61 @@ checked = load_current_ai_runtime(output)
 assert checked.manifest_sha256 == runtime.manifest_sha256
 """
 
+_UPLOAD_PYTHON_CHECK = """
+import platform, struct, sys
+assert sys.platform == 'win32'
+assert platform.python_implementation() == 'CPython'
+assert platform.machine().lower() in {'amd64', 'x86_64'}
+assert sys.version_info[:2] == (3, 12)
+assert struct.calcsize('P') == 8
+"""
+
+_UPLOAD_RUNTIME_INSPECT = """
+import pathlib, sys
+repository = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(repository / 'src'))
+from video_download_control.uploads.runtime_setup import (
+    SetupError, _reject_redirects, inspect_runtime, runtime_lock, verify_cli,
+)
+try:
+    _reject_redirects(root)
+    root.mkdir(parents=True, exist_ok=True)
+    with runtime_lock(root, exclusive=True):
+        result = inspect_runtime(root)
+        if result.get('ready') is True:
+            verify_cli(root)
+            result = inspect_runtime(root)
+except SetupError as error:
+    raise SystemExit(75 if str(error) == 'runtime_busy' else 1)
+except BaseException:
+    raise SystemExit(1)
+if result.get('ready') is True:
+    raise SystemExit(0)
+raise SystemExit(10 if result.get('code') == 'runtime_missing' else 1)
+"""
+
+_UPLOAD_RUNTIME_INSTALL = """
+import pathlib, sys
+repository = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+target_python = pathlib.Path(sys.argv[3])
+sys.path.insert(0, str(repository / 'src'))
+from video_download_control.uploads.runtime_setup import (
+    SetupError, _reject_redirects, install, runtime_lock,
+)
+try:
+    _reject_redirects(root)
+    root.mkdir(parents=True, exist_ok=True)
+    with runtime_lock(root, exclusive=True):
+        result = install(root, target_python)
+except SetupError as error:
+    raise SystemExit(75 if str(error) == 'runtime_busy' else 1)
+except BaseException:
+    raise SystemExit(1)
+raise SystemExit(0 if result.get('ready') is True else 1)
+"""
+
 
 def _prepare_ai_runtime(
     repository: Path,
@@ -357,6 +439,75 @@ def _prepare_ai_runtime(
         raise SetupFailure(DiagnosticCode.SETUP_AI_RUNTIME_FAILED) from None
 
 
+def _prepare_upload_runtime(
+    repository: Path,
+    python: Path,
+    upload_python: Path | None,
+    app_root: Path | None,
+) -> None:
+    target_python = python if upload_python is None else upload_python
+    try:
+        root = (
+            default_local_app_root(os.environ)
+            if app_root is None
+            else validate_windows_local_path(app_root)
+        )
+        ensure_plain_directory_tree(root)
+        print(
+            "Open-Flame setup: installing or verifying the optional upload runtime...",
+            flush=True,
+        )
+        with exclusive_local_app(root):
+            inspection = _command_returncode(
+                python,
+                (
+                    "-c",
+                    _UPLOAD_RUNTIME_INSPECT,
+                    str(repository),
+                    str(root / "data-uploads"),
+                ),
+                repository=repository,
+                timeout=300,
+            )
+            if inspection == 75:
+                raise SetupFailure(DiagnosticCode.SETUP_BUSY)
+            if inspection == 0:
+                print("Open-Flame setup: upload runtime verified.", flush=True)
+                return
+            if inspection != 10 or not _command(
+                target_python,
+                ("-c", _UPLOAD_PYTHON_CHECK),
+                repository=repository,
+                timeout=30,
+            ):
+                raise SetupFailure(DiagnosticCode.SETUP_UPLOAD_RUNTIME_FAILED)
+            returncode = _command_returncode(
+                python,
+                (
+                    "-c",
+                    _UPLOAD_RUNTIME_INSTALL,
+                    str(repository),
+                    str(root / "data-uploads"),
+                    str(target_python),
+                ),
+                repository=repository,
+                timeout=3600,
+            )
+        if returncode == 75:
+            raise SetupFailure(DiagnosticCode.SETUP_BUSY)
+        if returncode != 0:
+            raise SetupFailure(DiagnosticCode.SETUP_UPLOAD_RUNTIME_FAILED)
+        print("Open-Flame setup: upload runtime verified.", flush=True)
+    except LocalAppLockUnavailable:
+        raise SetupFailure(DiagnosticCode.SETUP_BUSY) from None
+    except SetupFailure:
+        raise
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        raise SetupFailure(DiagnosticCode.SETUP_UPLOAD_RUNTIME_FAILED) from None
+
+
 def _install(repository: Path, arguments: argparse.Namespace) -> None:
     try:
         with source_environment_lock(repository, exclusive=True):
@@ -369,6 +520,13 @@ def _install(repository: Path, arguments: argparse.Namespace) -> None:
                     arguments.ai_python_embed_zip,
                     arguments.app_root,
                 )
+            if arguments.upload_runtime:
+                _prepare_upload_runtime(
+                    repository,
+                    python,
+                    arguments.upload_python,
+                    arguments.app_root,
+                )
     except SourceEnvironmentBusy:
         raise SetupFailure(DiagnosticCode.SETUP_BUSY) from None
 
@@ -377,20 +535,41 @@ def main(argv: Sequence[str] | None = None, *, repository_root: Path) -> int:
     started = False
     try:
         arguments = _parser().parse_args(argv)
-        if arguments.app_root is not None and arguments.ai_python_embed_zip is None:
+        if arguments.upload_python is not None and not arguments.upload_runtime:
+            raise SetupFailure(DiagnosticCode.INVALID_ARGUMENTS)
+        if (
+            arguments.app_root is not None
+            and arguments.ai_python_embed_zip is None
+            and not arguments.upload_runtime
+        ):
             raise SetupFailure(DiagnosticCode.INVALID_ARGUMENTS)
         _check_prerequisites(repository_root)
-        if arguments.ai_python_embed_zip is None:
+        requested_runtimes = [
+            name
+            for enabled, name in (
+                (arguments.ai_python_embed_zip is not None, "AI"),
+                (arguments.upload_runtime, "upload"),
+            )
+            if enabled
+        ]
+        if not requested_runtimes:
             print("Open-Flame source setup: prepares .venv and pinned media tools; business data is not changed.", flush=True)
         else:
             print(
-                "Open-Flame source setup: prepares .venv and pinned media tools, then creates or verifies the rebuildable AI runtime; business databases and media are not changed.",
+                "Open-Flame source setup: prepares .venv and pinned media tools, then installs or verifies the requested "
+                + " and ".join(requested_runtimes)
+                + " runtime; business databases, accounts and media are not changed.",
                 flush=True,
             )
         print("Network: PyPI for missing/repaired dependencies unless --wheelhouse; GitHub for missing tools unless --artifact-cache.", flush=True)
         if arguments.ai_python_embed_zip is not None:
             print(
                 "AI runtime: when building, uses only the supplied verified local CPython archive; it performs no provider call.",
+                flush=True,
+            )
+        if arguments.upload_runtime:
+            print(
+                "Upload runtime: downloads only its pinned GitHub, PyPI and Chromium inputs when missing; it does not log in or publish.",
                 flush=True,
             )
         if not arguments.yes:

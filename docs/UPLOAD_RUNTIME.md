@@ -4,7 +4,32 @@
 
 ## 安装
 
-已通过 wheel 或 editable 安装 Open-Flame 时，在该 Python 环境中执行以下命令。`--python` 指向已有 **CPython 3.12 x64**，只用它创建新的 venv，不向它安装或升级依赖。`--root` 必须与应用的上传数据目录一致。
+普通 Windows 源码用户优先使用现有 Setup；它从默认或显式应用根派生唯一上传目录，再复用本模块的安装与完整性检查，不建立第二套安装器：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime
+```
+
+默认使用 Setup 已准备并核验的 `.venv` 建立隔离上传 venv；它必须是 **CPython 3.12 x64**。主 `.venv` 是 3.13 时，向同一命令提供另一份已有 3.12 x64 解释器的绝对路径；只用它创建新 venv，不向它安装或升级依赖：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime `
+  --upload-python 'C:\absolute\path\to\python312.exe'
+```
+
+普通 Start 默认使用 `%LOCALAPPDATA%\Open-Flame\video-download-control`，上传目录精确为其中的 `data-uploads`。自定义应用根时，Setup 与 Start 使用同一个值：
+
+```powershell
+.\Setup-Open-Flame.cmd --yes --upload-runtime `
+  --app-root 'D:\Open-Flame\video-download-control'
+.\Start-Open-Flame.cmd --app-root 'D:\Open-Flame\video-download-control'
+```
+
+`--upload-python` 只允许与 `--upload-runtime` 一起使用；`--app-root` 只在请求上传或 AI runtime 时有效。上传安装持有源码写锁、应用根锁和上传 runtime 独占锁；冲突返回 `setup_busy`，不会等待、关闭应用或继续改动。
+
+安装器显式下载固定归档和 hash 锁定的 wheel，建立独立 venv，下载由 Patchright 版本固定的 Chromium，运行三平台 `login/check/upload-video --help`、Bilibili `upload --help` 和纯本地页面的浏览器检查。**这些检查不会登录、上传或发布。**网页的状态检查不会隐式安装组件。
+
+已通过 wheel 或 editable 安装 Open-Flame 的高级维护者仍可直接调用模块命令。此入口不取得普通应用根锁，必须自行先停止应用；`--root` 必须与实际应用的上传数据目录一致：
 
 ```powershell
 python -m video_download_control.uploads.runtime_setup `
@@ -12,39 +37,23 @@ python -m video_download_control.uploads.runtime_setup `
   --python "C:\absolute\path\to\python312.exe"
 ```
 
-普通源码 Setup 只安装依赖，不安装项目包。因此，源码用户需在仓库根目录的 PowerShell 临时加入 `src`，使用下面的完整命令。如果该 `.venv` 不是 CPython 3.12，把 `--python` 后的路径替换为另一份已有 CPython 3.12 x64 的绝对路径；主应用环境不需要降级。
-
-```powershell
-$uploadPreviousPythonPath = $env:PYTHONPATH
-try {
-  $env:PYTHONPATH = (Resolve-Path .\src).Path
-  & .\.venv\Scripts\python.exe -m video_download_control.uploads.runtime_setup `
-    --root "$env:LOCALAPPDATA\Open-Flame\video-download-control\data-uploads" `
-    --python (Resolve-Path .\.venv\Scripts\python.exe).Path
-} finally {
-  $env:PYTHONPATH = $uploadPreviousPythonPath
-}
-```
-
-普通 Start 默认使用上述 LocalAppData 根目录；自定义应用数据路径时需使用对应的上传目录。
-
-安装器显式下载固定归档和 hash 锁定的 wheel，建立独立 venv，下载由 Patchright 版本固定的 Chromium，运行三平台 `login/check/upload-video --help`、Bilibili `upload --help` 和纯本地页面的浏览器检查。**这些检查不会登录、上传或发布。**网页的状态检查不会隐式安装组件。
-
 ```powershell
 python -m video_download_control.uploads.runtime_setup `
   --root "$env:LOCALAPPDATA\Open-Flame\video-download-control\data-uploads" --check
 ```
 
-源码用户可在上面的 `try` 块内把 `--python ...` 改为 `--check`，保留临时 `PYTHONPATH` 和 `.venv` 解释器。`--check` 只检查已有运行时；重复安装复核已有环境，不跟随 latest 更新，也不为已有未知修改重新签发通过标记。
+普通源码用户重复运行 `Setup-Open-Flame.cmd --yes --upload-runtime` 即会复核已有当前 runtime；高级维护者可用上面的 `--check`。只读检查不跟随 latest 更新，也不为已有未知修改重新签发通过标记。
 
 ## 从旧运行时升级
 
-0.28.0 继续使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。这要求重建 **runtime 子目录**，无需删除整个上传数据目录或账号。这里的运行时 manifest Schema 2 与上传数据库 Schema 3 是两套独立版本，不应混用。
+0.28.0 继续使用运行时 manifest Schema 2。旧 Schema 1 检查返回 `runtime_upgrade_required`，安装入口返回 `runtime_upgrade_requires_reinstall`；损坏或含非允许内容的不完整环境分别返回 `runtime_invalid_requires_reinstall`、`runtime_partial_requires_reinstall`。空 runtime，或只含允许且散列匹配的一个或两个固定归档的预置目录，仍按缺失状态安全续建。需要重建时只处理 **runtime 子目录**，无需删除整个上传数据目录或账号。这里的运行时 manifest Schema 2 与上传数据库 Schema 3 是两套独立版本，不应混用。
 
 1. 正常停止使用该上传数据目录的所有 Open-Flame 实例，确认没有仍在运行的扫码或投稿。已经开始且结果不明的投稿须先核对远端。
 2. 核对实际 `--root`。仅把其中的 `runtime` 目录改名为一个尚不存在的留档名称，例如 `runtime-legacy-20260905`；保留 `uploads.sqlite3`、`media`、`assets`、`private` 和其他数据原位。不要合并新旧运行时，也不要只删除 manifest。
-3. 使用上方安装命令，仍传入同一个 `--root`，创建新的 `runtime`。可重新下载固定组件；只有两份固定 SHA 已核验的 SAU/biliup 归档可预置在新 `runtime/archives`，不能复用旧源码树、venv 或浏览器树来生成新标记。
+3. 普通源码用户使用同一个 `--app-root` 再运行 `Setup-Open-Flame.cmd --yes --upload-runtime`；高级 CLI 仍传入同一个 `--root`。可重新下载固定组件；只有两份固定 SHA 已核验的 SAU/biliup 归档可预置在新 `runtime/archives`，不能复用旧源码树、venv 或浏览器树来生成新标记。
 4. `--check` 通过后启动应用。账号记录和本地登录文件保留；平台是否仍接受该登录态由本人发起“检查登录态”确认。重建运行时本身不会登录或上传。失败时保留固定错误码及旧目录，不修改旧 manifest 伪造通过。
+
+源码 Setup 与高级 CLI 都复用当前直接构建逻辑；上传 runtime 没有 AI builder 那样的原子 staging 发布。缺失目标的下载、venv 或浏览器安装中断时可能留下部分 `runtime`。下一次可续建空目录或只含允许且散列匹配的固定归档缓存；含其他部分内容时会以 `runtime_partial_requires_reinstall` 或源码 Setup 的 `setup_upload_runtime_failed` 失败关闭。只保留并改名这棵部分 runtime 后重建，不要删除上传数据库、媒体、封面、账号或私有登录状态。
 
 ## 完整性检查边界
 
@@ -75,7 +84,7 @@ manifest 是本机运维完整性记录，未做数字签名。Chromium 与 CPyt
 | `root/private/accounts/<platform>/<id>.json` | 独立上传账户状态；UI 不提供 Cookie 下载或原文 |
 | `root/private/operations/` | 单次操作参数、临时浏览器 profile、有限结果文件；结束后清理 |
 
-安装器持有 root 的 OS 独占文件锁；实际上传/登录持有共享运行锁。后台工作与安装不会并发修改同一运行时。Windows Job 同时用于安装命令和平台进程，取消、超时或应用退出会清理其所属进程树。
+安装器持有 root 的 OS 独占文件锁；实际上传/登录持有共享运行锁。普通源码 Setup 外层还持有源码写锁与应用根锁。后台工作与安装不会并发修改同一运行时。Windows Job 同时用于安装命令和平台进程，取消、超时或应用退出会清理其所属进程树。
 
 本机首次安装检测到 Chromium 145.0.7632.6 在应用存储路径下的 Windows SideBySide 错误 14001；同一组二进制在独立临时硬链接目录可启动。运行时因此建立临时的、只含固定浏览器字节的视图并显式指定 executable_path；不切换到用户日常 Chrome，不修改系统安装。浏览器 profile 仍写私有操作临时目录。硬链接不额外复制整套浏览器；不支持硬链接的文件系统回退为临时复制，结束后清理。
 

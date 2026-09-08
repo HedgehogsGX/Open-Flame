@@ -13,6 +13,7 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 
 - AI runtime 与核心 `.venv`、下载数据、编辑数据库和上传 runtime 分离。builder 只接受尚不存在的绝对输出目录，在私有 staging 内安全解压并冻结 CPython、worker、协议、provider、模型声明和全文件摘要；运行前重新核对完整集合与身份。
 - 普通源码 Setup 可选接受本地 CPython 3.13.15 embeddable ZIP，目标缺失时内部固定核验 SHA-256，并只向默认或显式 `<app-root>/data-ai-runtime` 原子构建。完整且匹配当前源码的 runtime 只读复用，复用时不读取 ZIP，也不把 runtime 自身当作原始归档来源证明；坏/旧目标不删除、不覆盖、不改 manifest。安装与普通 Start 共用 `.local-app.lock`，运行中用既有 `setup_busy` 停止，其他失败收敛为 `setup_ai_runtime_failed`；child 输出、路径和异常原文不转发。
+- 同一源码 Setup 可选接受 `--upload-runtime`，从同一默认或显式 `<app-root>` 精确派生 `data-uploads`，并在 `.venv` 不是 CPython 3.12 x64 时接受 build-only `--upload-python ABSOLUTE_EXE`。它复用既有 `uploads.runtime_setup`，不新增安装服务；锁顺序为 source→app-root→upload runtime。ready runtime 先完整复核且不校验无关的 build Python；旧 Schema 1、损坏和含非允许内容的部分 runtime 原样失败关闭，空目录或只含允许且散列匹配的固定归档缓存可续建。该上传 builder 直接构建而非原子 staging；固定失败码和 child 输出脱敏不把工程检查解释成登录或发布。
 - 远程数据外发合同集中为 `health=none`、`transcribe=audio`、`translate=text`、`synthesize=text`。建立/确认任务与每次真实执行前都会先验证 provider 声明；HTTP worker 复用同一映射，校验发生在凭据注入与网络调用之前。
 - 听写前使用固定 FFmpeg 派生 mono、24 kHz、32 kbit/s AAC M4A。自动流程只选择 recipe 的第一个分段，发送该片段并把 provider 返回时间换算回源时间轴；编辑页直接建听写任务当前仍默认完整编辑源。
 - 时间轴最多 10000 个 cue，单 cue 统一上限 4096 字符，持久化时间轴 JSON 上限 3 MiB，为隔离 runtime 的 4 MiB request envelope 留出元数据与 glossary 空间。
@@ -53,6 +54,7 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 | AI operation egress 合同 | PASS | 错误声明在任务校验和 worker 网络调用前失败；HTTP TTS 只声明 `text` 时可执行请求构造 |
 | AI runtime rebuild + `--check` | PASS | manifest `598ad64ecf005daa7ed2f9007280dc560212d98daa633f5afa1fac2703260378`；`ready=true`；应用显示 `integrity=verified / provider_health=unverified`，三能力均 `blocked / ai_provider_auth_missing` |
 | 普通源码 Setup 安装 AI runtime | PASS | ignored validator 在显式临时 app-root 禁网验证首次构建、完整当前 runtime 原样复用、坏/旧/SHA 不符拒绝、运行锁 busy、runner exception 固定诊断及路径不回显；默认 `data-ai-runtime` 的 `lexists` 实测前后均为 false |
+| 普通源码 Setup 安装上传 runtime | PASS | ignored validator 在显式临时 app-root 禁网验证精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、source/app/runtime 三层锁、固定失败码、旧/坏/不安全部分目录不变及路径不回显；默认实际 Schema 1 runtime 前后不变 |
 | 普通 Start 的 AI 密钥边界 | PASS | ignored validator 从已核对的 CPython ZIP 本地重建 runtime；sentinel 只进入 control，Worker/未声明变量仍剔除；三能力由 `blocked / ai_provider_auth_missing` 变为 `unverified / provider_health_required`；网络入口强制拒绝，输出不含 sentinel |
 | Chromium 浏览器 QA | PASS | `/workflows` 与 `/edits` 连接成功；四页导航、0.28.0、Schema 1、缺凭据提示、22% 混音说明及 `audio / text / text` 外发范围可见 |
 | HTTP route logging | PASS | 当前应用 102 个实际路由全部属于固定 allowlist；TestClient 17 个页面/API 请求与浏览器进程 263 个请求均被接受，`runtime_log.event_rejected=0` |
@@ -64,6 +66,8 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 2026-09-09 追加定向复验：`validation/local/validate_local_app_ai_secret_boundary.py` PASS；`tests/test_local_app.py`、`tests/test_desktop_launcher.py` 与 `tests/test_editing_ai_contracts.py` 合计 **113 passed**；`py_compile` PASS；`uv lock --check --offline` 与 `uv pip check` PASS。没有修改测试文件，没有远程请求。
 
 2026-09-09 Setup 追加定向复验：`validation/local/validate_source_setup_ai_runtime.py` PASS，覆盖首次构建、ready 字节与 mtime 不变复用、坏/旧目标拒绝、固定 SHA-256 负向、同 app-root 运行锁、runner exception、孤立 `--app-root`、非目标不变和输出脱敏；build/check 子解释器的常见 socket/HTTP 入口强制拒绝，没有调用 provider。14 个既有 Setup、source lock、release、local app、launcher、诊断与 AI 合同测试文件合计 **354 passed**；相关生产模块 `py_compile`、`uv lock --check --offline` 与 `uv pip check` 均通过。验证只使用 ignored 临时 app-root；默认应用 runtime 实测仍不存在。
+
+2026-09-09 上传 Setup 追加定向复验：`validation/local/validate_source_setup_upload_runtime.py` 的 16 项检查 PASS；child probe 强制拒绝 socket/HTTP，未下载第三方组件，未登录、扫码、上传或发布。AI Setup validator 同批复跑 PASS；15 个 Setup、进程树、诊断、source/app 锁、上传 runtime/后端、本地启动和发行清单相关既有测试文件合计 **462 passed**。validator 只写 ignored 临时 app-root，并对默认实际 `data-uploads` 的顶层集合、上传库和 runtime manifest 做前后摘要核对；现有 runtime 仍为 `runtime_upgrade_required`，没有移动、重建或改写。115 个生产 Python 文件 AST、251 条唯一存在且排除 `tests/` 的 release-files、`uv lock --check --offline`、`uv pip check` 与 diffcheck 均通过；源码实现复用已有上传 installer，未新增核心依赖或常驻服务。
 
 全量回归中的 12 项历史固定断言为：5 项仍要求产品版本 `0.27.0`；3 项仍要求 Editing Schema 1；3 项只允许旧的下载/编辑/上传三项导航；1 项仍要求 sdist exclude 列表中没有 `/tests/**`。当前合同分别是 0.28.0、Editing Schema 4、增加 `/workflows` 和所有发行格式排除 `tests/`。本轮遵循用户要求，没有修改测试文件，也没有为旧断言回退产品。
 

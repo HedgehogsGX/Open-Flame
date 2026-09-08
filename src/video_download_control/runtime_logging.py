@@ -349,6 +349,7 @@ LOCAL_FAILURE_DIAGNOSTIC_CONTEXT: Final[dict[str, tuple[str, str]]] = {
     "setup_dependencies_failed": ("setup_dependencies", "not_started"),
     "setup_toolchain_failed": ("setup_toolchain", "not_started"),
     "setup_ai_runtime_failed": ("setup_ai_runtime", "not_started"),
+    "setup_upload_runtime_failed": ("setup_upload_runtime", "not_started"),
     "setup_busy": ("setup_lock", "not_started"),
     "setup_interrupted": ("setup_install", "not_started"),
 }
