@@ -135,7 +135,7 @@ $('workflow-form').addEventListener('submit',event=>{event.preventDefault();muta
   const editRecipe=recipe(),aiEnabled=Boolean(editRecipe.translation&&editRecipe.translation.enabled),transcription=aiEnabled?selectedEngine('transcription-engine','transcribe'):null,translation=aiEnabled?selectedEngine('translation-engine','translate'):null,remoteAi=aiEnabled&&[transcription.authorization,translation.authorization,editRecipe.dubbing.authorization].some(authorization=>authorization.execution==='remote');
   if(remoteAi&&!$('ai-egress').checked)throw new Error('请先核对并确认精确 AI runtime、模型修订、硬预算与数据外发范围');
   const intent={source_url:$('source-url').value.trim(),name:$('workflow-name').value.trim(),profile:{download_credential_mode:$('credential-mode').value,edit_recipe:editRecipe,ai:aiEnabled?{transcription_provider:transcription.provider,transcription_model:transcription.model,transcription_authorization:transcription.authorization,transcription_authorization_sha256:transcription.authorization_sha256,translation_authorization:translation.authorization,translation_authorization_sha256:translation.authorization_sha256}:null,upload:upload(),auto_confirm_edit:$('auto-edit').checked,auto_confirm_upload:$('auto-upload').checked,ai_data_egress_accepted:remoteAi&&$('ai-egress').checked}};
-  const pending=await pendingWorkflowKey(intent),payload={...intent,idempotency_key:pending.requestKey},created=await api('',{method:'POST',body:JSON.stringify(payload)});
+  const pending=await pendingWorkflowKey(intent),payload={...intent,idempotency_key:pending.requestKey};const created=await api('',{method:'POST',body:JSON.stringify(payload)});
   clearPendingWorkflowKey(pending.storageKey);
   return created;
 },{successMessage:'自动流程已创建；响应丢失时重试会复用，成功后可再次运行相同参数。'});});
