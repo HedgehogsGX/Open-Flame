@@ -48,15 +48,6 @@ class CreatePresetRequest(BaseModel):
     profile: dict[str, Any]
 
 
-class CreatePresetWorkflowRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_url: str = Field(min_length=8, max_length=4096)
-    name: str = Field(min_length=1, max_length=160)
-    profile: dict[str, Any]
-    idempotency_key: RequestKey
-
-
 class ConfirmWorkflowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -99,6 +90,8 @@ def _safe_error(exc: WorkflowError) -> HTTPException:
         "workflow_revision_conflict",
         "workflow_state_conflict",
         "workflow_profile_changed",
+        "workflow_preset_conflict",
+        "workflow_preset_authorization_changed",
     }:
         status = 409
     elif code in {
@@ -211,7 +204,7 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
 
     @router.post("/presets/{preset_id}/workflows", status_code=201)
     async def create_from_preset(
-        preset_id: Identifier, payload: CreatePresetWorkflowRequest
+        preset_id: Identifier, payload: CreateWorkflowRequest
     ):
         profile = await preset_invoke("materialize", preset_id, payload.profile)
         result = await invoke(

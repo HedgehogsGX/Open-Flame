@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Schema 4 远端 AI 调用账本与 unknown 人工核对、非密钥复用预设已接线；下一步为完整 URL 链路本地 smoke
+> 当前迭代：Iteration 0.28.0 发布后开发 — Schema 4 远端 AI 调用账本与 unknown 人工核对、非密钥复用预设已接线；预设回填与三项 AI 摘要绑定已修复，真实域离线整链通过；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `1`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 复核更正：`b240392` 的旧整链脚本跳过了 AI，仅走一个合成 Bilibili 任务，不能证明 AI/三平台/重启。当前已用真实下载 Worker、LocalWorkflowAdapter、编辑/上传服务、隔离 AI worker 和 FFmpeg 替换验证，实际听写/翻译/配音各一次，输出音频与三平台任务均有断言；真实模型响应和平台网络仍是替身。此前“只剩运行环境”的完成结论撤回。预设还修复了未恢复 AI/音色/定时字段、配音授权摘要缺失和嵌套参数未校验问题。当前证据见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。验证覆盖不足、当前发行冻结和真实平台验收仍是后续工作，目标尚未完成。
 
 用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
@@ -24,7 +26,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭 | 下一切片为非密钥复用预设及完整 URL 链路本地 smoke；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭 | 预设已完成本地边界/API/浏览器回归；真实域整链使用合成网络/模型响应通过；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -407,7 +409,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读 [0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。Editing Schema 4 的远端调用 ledger、unknown 人工 reconciliation 及完成/重试阻断已经接线；工程下一步是可复用的非密钥自动化预设，再执行完整 URL→AI→编辑→三平台上传草稿的本地 smoke。这些完成后仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读 [0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。Editing Schema 4 的远端调用 ledger、unknown 人工 reconciliation 及完成/重试阻断已经接线；可复用预设和真实域离线整链已重新验证，详见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。下一步核对实际启动数据根/runtime 条件并准备当前冻结候选。这些完成后仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 
@@ -580,7 +582,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 4. 渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
 5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`，待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
-7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。三个 ignored ledger validator、compileall、两页内联 JS、依赖一致性和本机浏览器检查已通过；focused 既有测试仍有 3 项旧 Schema 1 精确断言失败，测试文件保持未改。下一工程切片加入不含密钥、Cookie 或账号 session 的复用预设，再跑完整 URL 链路本地 smoke。远端 alias 漂移、实际价格与平台结果仍须外部验收。
+7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。三个 ignored ledger validator、compileall、两页内联 JS、依赖一致性和本机浏览器检查已通过；focused 既有测试仍有 3 项旧 Schema 1 精确断言失败，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产页面完整恢复 AI 与平台字段，缺失账号/模型不会静默替换。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
 9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。
 

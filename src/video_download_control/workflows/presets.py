@@ -9,6 +9,7 @@ saved intent.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -19,7 +20,15 @@ from threading import RLock
 from typing import Any, Mapping
 from uuid import uuid4
 
-from ..editing.contracts import EditingError, recipe_from_mapping
+from ..editing.contracts import recipe_from_mapping
+from ..uploads.contracts import UploadError
+from ..uploads.service import (
+    UploadService,
+    _PLATFORM_OPTION_KEYS,
+    _TARGET_OVERRIDE_KEYS,
+    _text as _upload_text,
+)
+from .service import WorkflowError, _profile as _workflow_profile
 
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
@@ -28,6 +37,18 @@ _SAFE_NAME = re.compile(r"^\S(?:.*\S)?$")
 _PRESETS_FILE = "presets.json"
 _SCHEMA = 1
 _LOCK = RLock()
+_MAX_RECORDS = 50
+_MAX_PROFILE_BYTES = 128 * 1024
+_MAX_STORAGE_BYTES = 8 * 1024 * 1024
+_PROFILE_KEYS = frozenset({
+    "download_credential_mode", "edit_recipe", "ai", "upload",
+    "auto_confirm_edit", "auto_confirm_upload",
+})
+_AI_KEYS = frozenset({
+    "transcription_provider", "transcription_model",
+    "transcription_authorization_sha256", "translation_authorization_sha256",
+})
+_SYNTHESIS_DIGEST = "synthesis_authorization_sha256"
 
 
 class WorkflowPresetError(ValueError):
@@ -63,6 +84,8 @@ def _digest(value: object) -> str:
 
 
 def _name(value: object) -> str:
+    if isinstance(value, str):
+        value = value.strip()
     if not isinstance(value, str) or not 1 <= len(value) <= 100 or not _SAFE_NAME.fullmatch(value):
         raise WorkflowPresetError("workflow_preset_invalid")
     if any(ord(char) < 32 for char in value):
@@ -73,97 +96,190 @@ def _name(value: object) -> str:
 def _canonical(value: object) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise WorkflowPresetError("workflow_preset_invalid") from exc
 
 
-def _secret_free_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-    """Extract reusable fields and discard execution-only authorization data."""
+def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise WorkflowPresetError("workflow_preset_storage_unavailable")
+        result[key] = value
+    return result
 
-    if not isinstance(profile, Mapping):
-        raise WorkflowPresetError("workflow_preset_invalid")
-    recipe = profile.get("edit_recipe")
+
+def _upload_overrides(upload: dict[str, Any]) -> None:
+    """Validate metadata without opening an account or media database."""
     try:
-        normalized_recipe = recipe_from_mapping(recipe).to_dict()
-    except EditingError as exc:
-        raise WorkflowPresetError("workflow_preset_invalid") from exc
-    dubbing = normalized_recipe.get("dubbing")
-    if isinstance(dubbing, dict):
-        dubbing.pop("authorization", None)
-    raw_ai = profile.get("ai")
-    if raw_ai is None:
-        ai = None
-    elif isinstance(raw_ai, Mapping):
-        required = {
-            "transcription_provider",
-            "transcription_model",
-            "transcription_authorization_sha256",
-            "translation_authorization_sha256",
-        }
-        allowed_ai = required | {
-            "transcription_authorization",
-            "translation_authorization",
-        }
-        if set(raw_ai) not in {frozenset(required), frozenset(allowed_ai)}:
-            raise WorkflowPresetError("workflow_preset_invalid")
-        ai = {
-            key: raw_ai[key]
-            for key in (
-                "transcription_provider",
-                "transcription_model",
-                "transcription_authorization_sha256",
-                "translation_authorization_sha256",
+        upload["tags"] = UploadService._normalize_tags(upload["tags"])
+        normalized = []
+        for raw in upload["target_overrides"]:
+            if set(raw) - _TARGET_OVERRIDE_KEYS or set(raw) == {"account_id"}:
+                raise WorkflowPresetError("workflow_preset_invalid")
+            item = dict(raw)
+            for key, maximum in (("title", 100), ("description", 2000), ("source_credit", 200)):
+                if key in item:
+                    item[key] = _upload_text(item[key], maximum, required=key == "title")
+            if "tags" in item:
+                item["tags"] = UploadService._normalize_tags(item["tags"])
+            for key, maximum in (("category_id", 10000), ("copyright", 2)):
+                if key in item and (type(item[key]) is not int or not 1 <= item[key] <= maximum):
+                    raise WorkflowPresetError("workflow_preset_invalid")
+            if "mode" in item and item["mode"] not in {"draft", "publish"}:
+                raise WorkflowPresetError("workflow_preset_invalid")
+            for key in ("cover_landscape_asset_id", "cover_portrait_asset_id"):
+                if item.get(key) is not None:
+                    _id(item[key])
+            # Only generic bounds are checked here. Creation still runs normal
+            # upload preflight for current time, platform, accounts and covers.
+            UploadService._validate_schedule(
+                "bilibili", item.get("publish_at_unix"),
+                item.get("publish_timezone_offset_minutes"), now=0,
             )
-        }
-        _digest(ai["transcription_authorization_sha256"])
-        _digest(ai["translation_authorization_sha256"])
-    else:
+            options = item.get("platform_options")
+            if options is not None:
+                if not isinstance(options, dict):
+                    raise WorkflowPresetError("workflow_preset_invalid")
+                platform = next((
+                    platform for platform, keys in _PLATFORM_OPTION_KEYS.items()
+                    if set(options) <= keys
+                ), None)
+                if platform is None:
+                    raise WorkflowPresetError("workflow_preset_invalid")
+                parsed = UploadService._normalize_platform_options(platform, options)
+                item["platform_options"] = {key: parsed[key] for key in options}
+            normalized.append(item)
+        upload["target_overrides"] = normalized
+    except UploadError as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
+
+
+def _current_profile(
+    profile: Mapping[str, Any], *, template_only: bool = False,
+) -> dict[str, Any]:
+    """Use the execution contract before discarding authorization/session data."""
+    try:
+        candidate = profile
+        if template_only and isinstance(profile, Mapping):
+            if type(profile.get("ai_data_egress_accepted")) is not bool:
+                raise WorkflowPresetError("workflow_preset_invalid")
+            candidate = dict(profile)
+            raw_ai = profile.get("ai")
+            authorizations = []
+            if isinstance(raw_ai, Mapping):
+                authorizations.extend(raw_ai.get(key) for key in (
+                    "transcription_authorization", "translation_authorization",
+                ))
+            dubbing = recipe_from_mapping(profile.get("edit_recipe")).dubbing.authorization
+            if dubbing is not None:
+                authorizations.append(dubbing.to_dict())
+            # Saving is a local operation. Derive this temporary parsing flag
+            # from the full definitions; normal materialization still requires
+            # the actual current execution consent supplied by the caller.
+            candidate["ai_data_egress_accepted"] = any(
+                isinstance(item, Mapping) and item.get("execution") == "remote"
+                for item in authorizations
+            )
+        # Bound workflow profiles may be saved; session bindings never enter
+        # the preset or the next workflow request.
+        upload = profile.get("upload") if isinstance(profile, Mapping) else None
+        bound = isinstance(upload, Mapping) and "account_bindings" in upload
+        normalized, _, _ = _workflow_profile(
+            candidate, bound_accounts=bound, require_ai_authorization=True,
+        )
+        normalized["upload"].pop("account_bindings", None)
+        _upload_overrides(normalized["upload"])
+        return normalized
+    except (WorkflowError, TypeError, ValueError, RecursionError) as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
+
+
+def _secret_free_profile(
+    profile: Mapping[str, Any], *, template_only: bool = False,
+) -> dict[str, Any]:
+    """Extract fields only from a validated current execution profile."""
+    normalized = _current_profile(profile, template_only=template_only)
+    reusable = {key: normalized[key] for key in _PROFILE_KEYS}
+    dubbing = reusable["edit_recipe"]["dubbing"]
+    if reusable["ai"] is not None:
+        reusable["ai"] = {key: reusable["ai"][key] for key in _AI_KEYS}
+        authorization = recipe_from_mapping(normalized["edit_recipe"]).dubbing.authorization
+        reusable["ai"][_SYNTHESIS_DIGEST] = authorization.sha256
+    dubbing.pop("authorization", None)
+    return reusable
+
+
+def _stored_profile(profile: object) -> dict[str, Any]:
+    """Validate digest-only templates, including readable historical AI intent."""
+    if not isinstance(profile, Mapping) or set(profile) != _PROFILE_KEYS:
         raise WorkflowPresetError("workflow_preset_invalid")
-    upload = profile.get("upload")
-    if not isinstance(upload, Mapping):
+    encoded = _canonical(profile)
+    if len(encoded.encode("utf-8")) > _MAX_PROFILE_BYTES:
         raise WorkflowPresetError("workflow_preset_invalid")
-    allowed_upload = {
-        "account_ids", "title", "description", "tags", "category_id",
-        "mode", "copyright", "source_credit", "target_overrides",
-    }
-    if set(upload) not in {
-        frozenset(allowed_upload),
-        frozenset(allowed_upload | {"account_bindings"}),
-    }:
-        raise WorkflowPresetError("workflow_preset_invalid")
-    accounts = upload.get("account_ids")
-    if not isinstance(accounts, list) or len(accounts) > 3 or any(
-        not isinstance(item, str) or _ID.fullmatch(item) is None for item in accounts
+    original = json.loads(encoded)
+    candidate = json.loads(encoded)
+    raw_ai = candidate["ai"]
+    if raw_ai is not None:
+        if not isinstance(raw_ai, dict) or set(raw_ai) not in {
+            _AI_KEYS, _AI_KEYS | {_SYNTHESIS_DIGEST},
+        }:
+            raise WorkflowPresetError("workflow_preset_invalid")
+        if _SYNTHESIS_DIGEST in raw_ai:
+            _digest(raw_ai.pop(_SYNTHESIS_DIGEST))
+    raw_recipe = candidate["edit_recipe"]
+    if (
+        not isinstance(raw_recipe, dict)
+        or not isinstance(raw_recipe.get("dubbing"), dict)
+        or "authorization" in raw_recipe["dubbing"]
     ):
         raise WorkflowPresetError("workflow_preset_invalid")
+    # Digest-only historical AI profiles conservatively require egress. This
+    # temporary flag validates the template; it is never saved or executed.
+    candidate["ai_data_egress_accepted"] = raw_ai is not None
+    try:
+        normalized, _, _ = _workflow_profile(candidate)
+        _upload_overrides(normalized["upload"])
+    except (WorkflowError, TypeError, ValueError, RecursionError) as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
+    return original
+
+
+def _record(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "id", "name", "profile", "profile_sha256", "revision", "created_at", "updated_at",
+    }:
+        raise WorkflowPresetError("workflow_preset_invalid")
+    profile = _stored_profile(value["profile"])
+    digest = _digest(value.get("profile_sha256"))
+    if not hmac.compare_digest(digest, hashlib.sha256(_canonical(profile).encode("utf-8")).hexdigest()):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    if type(value["revision"]) is not int or not 1 <= value["revision"] <= 2**31 - 1:
+        raise WorkflowPresetError("workflow_preset_invalid")
+    try:
+        timestamps = []
+        for key in ("created_at", "updated_at"):
+            raw = value[key]
+            if not isinstance(raw, str) or len(raw) > 40 or not raw.endswith("Z"):
+                raise ValueError
+            timestamp = datetime.fromisoformat(raw)
+            if timestamp.tzinfo is None or timestamp.utcoffset().total_seconds() != 0:
+                raise ValueError
+            timestamps.append(timestamp)
+        if timestamps[0] > timestamps[1]:
+            raise ValueError
+    except ValueError as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
     return {
-        "download_credential_mode": profile.get("download_credential_mode"),
-        "edit_recipe": normalized_recipe,
-        "ai": ai,
-        "upload": json.loads(_canonical({key: upload[key] for key in allowed_upload})),
-        "auto_confirm_edit": profile.get("auto_confirm_edit"),
-        "auto_confirm_upload": profile.get("auto_confirm_upload"),
+        "id": _id(value.get("id")), "name": _name(value.get("name")),
+        "profile": profile, "profile_sha256": digest,
+        "revision": value["revision"], "created_at": value["created_at"],
+        "updated_at": value["updated_at"],
     }
-
-
-def _record(value: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "id": _id(value.get("id")),
-        "name": _name(value.get("name")),
-        "profile": _secret_free_profile(value["profile"]),
-        "profile_sha256": _digest(value.get("profile_sha256")),
-        "revision": value.get("revision"),
-        "created_at": value.get("created_at"),
-        "updated_at": value.get("updated_at"),
-    }
-
-
-def _profile_digest(profile: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_canonical(_secret_free_profile(profile)).encode("utf-8")).hexdigest()
 
 
 class WorkflowPresetStore:
-    """Atomic, bounded JSON storage for a small number of local presets."""
+    """Atomic, bounded JSON storage for one local control-plane process."""
 
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -173,22 +289,36 @@ class WorkflowPresetStore:
         if not self.path.exists():
             return []
         try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            with self.path.open("rb") as handle:
+                encoded = handle.read(_MAX_STORAGE_BYTES + 1)
+            if len(encoded) > _MAX_STORAGE_BYTES:
+                raise WorkflowPresetError("workflow_preset_storage_unavailable")
+            value = json.loads(encoded.decode("utf-8"), object_pairs_hook=_json_object)
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise WorkflowPresetError("workflow_preset_storage_unavailable") from exc
-        if not isinstance(value, dict) or value.get("schema") != _SCHEMA or not isinstance(value.get("presets"), list):
+        if (
+            not isinstance(value, dict) or set(value) != {"schema", "presets"}
+            or type(value["schema"]) is not int or value["schema"] != _SCHEMA
+            or not isinstance(value["presets"], list) or len(value["presets"]) > _MAX_RECORDS
+        ):
             raise WorkflowPresetError("workflow_preset_storage_unavailable")
         try:
-            return [_record(item) for item in value["presets"]]
-        except (KeyError, TypeError, WorkflowPresetError) as exc:
+            records = [_record(item) for item in value["presets"]]
+            if len({item["id"] for item in records}) != len(records):
+                raise WorkflowPresetError("workflow_preset_invalid")
+            return records
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
             raise WorkflowPresetError("workflow_preset_storage_unavailable") from exc
 
     def _write(self, records: list[Mapping[str, Any]]) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
         payload = _canonical({"schema": _SCHEMA, "presets": records})
-        descriptor, temporary_name = tempfile.mkstemp(prefix=".presets-", suffix=".tmp", dir=self.root)
-        temporary = Path(temporary_name)
+        if len(payload.encode("utf-8")) > _MAX_STORAGE_BYTES:
+            raise WorkflowPresetError("workflow_preset_conflict")
+        temporary = None
         try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".presets-", suffix=".tmp", dir=self.root)
+            temporary = Path(temporary_name)
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(payload)
                 handle.flush()
@@ -197,7 +327,11 @@ class WorkflowPresetStore:
         except (OSError, UnicodeError) as exc:
             raise WorkflowPresetError("workflow_preset_storage_unavailable") from exc
         finally:
-            temporary.unlink(missing_ok=True)
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def list(self) -> list[dict[str, Any]]:
         with _LOCK:
@@ -212,9 +346,9 @@ class WorkflowPresetStore:
         raise WorkflowPresetError("workflow_preset_not_found")
 
     def create(self, name: str, profile: Mapping[str, Any]) -> dict[str, Any]:
-        reusable = _secret_free_profile(profile)
+        reusable = _secret_free_profile(profile, template_only=True)
         now = _now()
-        record = {
+        record = _record({
             "id": uuid4().hex,
             "name": _name(name),
             "profile": reusable,
@@ -222,35 +356,35 @@ class WorkflowPresetStore:
             "revision": 1,
             "created_at": now,
             "updated_at": now,
-        }
+        })
         with _LOCK:
             records = self._read()
+            for existing in records:
+                if existing["name"] == record["name"] and existing["profile_sha256"] == record["profile_sha256"]:
+                    return existing
             records.insert(0, record)
-            if len(records) > 50:
+            if len(records) > _MAX_RECORDS:
                 raise WorkflowPresetError("workflow_preset_conflict")
             self._write(records)
-        return _record(record)
+        return record
 
     def materialize(self, preset_id: str, profile: Mapping[str, Any]) -> dict[str, Any]:
         preset = self.get(preset_id)
-        raw_recipe = profile.get("edit_recipe")
-        current_dubbing_authorization = None
-        if isinstance(raw_recipe, Mapping) and isinstance(raw_recipe.get("dubbing"), Mapping):
-            current_dubbing_authorization = raw_recipe["dubbing"].get("authorization")
+        normalized = _current_profile(profile)
         current = _secret_free_profile(profile)
         saved = preset["profile"]
         if saved["ai"] != current["ai"]:
             raise WorkflowPresetError("workflow_preset_authorization_changed")
-        materialized = dict(profile)
-        materialized["download_credential_mode"] = saved["download_credential_mode"]
+        materialized = normalized
         recipe = json.loads(_canonical(saved["edit_recipe"]))
-        if isinstance(recipe.get("dubbing"), dict) and current_dubbing_authorization is not None:
-            recipe["dubbing"]["authorization"] = current_dubbing_authorization
+        current_dubbing = normalized["edit_recipe"]["dubbing"]
+        if "authorization" in current_dubbing:
+            recipe["dubbing"]["authorization"] = current_dubbing["authorization"]
         materialized["edit_recipe"] = recipe
         materialized["upload"] = saved["upload"]
-        materialized["auto_confirm_edit"] = saved["auto_confirm_edit"]
-        materialized["auto_confirm_upload"] = saved["auto_confirm_upload"]
-        return materialized
+        # Confirmation and credential choices belong to this invocation. A
+        # saved template must never silently elevate the current request.
+        return _current_profile(materialized)
 
 
 __all__ = ["WorkflowPresetError", "WorkflowPresetStore"]
