@@ -509,9 +509,9 @@ class LocalWorkflowAdapter:
         task = self._latest_ai_task(task)
         task_id = _record_id(task)
         state = task.get("state")
+        if self._ai_task_retry_blocked(task):
+            return AiSnapshot("attention", code="ai_remote_retry_blocked")
         if state == "review":
-            if task.get("code") == "ai_remote_retry_blocked":
-                return AiSnapshot("attention", code="ai_remote_retry_blocked")
             if (
                 task.get("code") == "restart_confirmation_required"
                 and not explicit
@@ -605,6 +605,30 @@ class LocalWorkflowAdapter:
             task_id = _record_id(current)
         return current
 
+    def _ai_task_retry_blocked(self, task: Mapping[str, Any]) -> bool:
+        """Read the full project-level recursive block set, independent of paging."""
+
+        task_id = _record_id(task)
+        project_id = _hex_identifier(task.get("project_id"))
+        try:
+            ledger = self.editing_manager.invoke(
+                "ai_invocations", project_id=project_id, offset=0, limit=1
+            )
+        except EditingError as error:
+            _domain_failure(error, "ai_pipeline_failed")
+        if not isinstance(ledger, Mapping):
+            raise WorkflowError("workflow_domain_data_invalid")
+        summary = ledger.get("summary")
+        if not isinstance(summary, Mapping):
+            raise WorkflowError("workflow_domain_data_invalid")
+        blocked = summary.get("retry_blocked_ai_task_ids")
+        if not isinstance(blocked, list) or any(
+            not isinstance(value, str) or _HEX_IDENTIFIER.fullmatch(value) is None
+            for value in blocked
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        return task_id in blocked
+
     def retry_ai(
         self,
         workflow_id: str,
@@ -671,6 +695,8 @@ class LocalWorkflowAdapter:
                 expected_authorization_sha256=transcription_authorization_sha256,
             )
             current = self._latest_ai_task(transcription)
+            if self._ai_task_retry_blocked(current):
+                raise WorkflowError("ai_remote_retry_blocked")
             if current.get("state") in {"review", "queued", "running", "canceling"}:
                 return
             if current.get("state") in {"failed", "canceled"}:
@@ -711,6 +737,8 @@ class LocalWorkflowAdapter:
                 expected_authorization_sha256=translation_authorization_sha256,
             )
             current = self._latest_ai_task(translation)
+            if self._ai_task_retry_blocked(current):
+                raise WorkflowError("ai_remote_retry_blocked")
             if current.get("state") in {"review", "queued", "running", "canceling"}:
                 return
             if current.get("state") == "succeeded":
