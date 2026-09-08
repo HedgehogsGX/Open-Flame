@@ -1144,10 +1144,18 @@ def create_app(
             status_code = 404 if exc.code in {"asset_not_found", "asset_not_ready"} else 409
             raise HTTPException(status_code=status_code, detail=exc.code) from None
 
+    def upload_edited_cover(output_id: str) -> tuple[Path, str, str]:
+        try:
+            return editing_manager.resolve_cover(output_id)
+        except EditingError as exc:
+            status_code = 404 if exc.code in {"asset_not_found", "asset_not_ready"} else 409
+            raise HTTPException(status_code=status_code, detail=exc.code) from None
+
     install_upload_routes(
         app, data_root=resolved_settings.data_root,
         original_asset_resolver=upload_original_asset,
         edited_output_resolver=upload_edited_output,
+        edited_cover_resolver=upload_edited_cover,
     )
 
     @app.exception_handler(CredentialDefaultsError)

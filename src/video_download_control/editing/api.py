@@ -412,6 +412,16 @@ class EditingManager:
         finally:
             self._finish_operation()
 
+    def resolve_cover(self, output_id: str) -> tuple[Path, str, str]:
+        service = self._begin_operation()
+        try:
+            record = service.asset(output_id)
+            if record["kind"] != "cover":
+                raise EditingError("edit_output_not_cover")
+            return service.asset_path(output_id), record["sha256"], record["name"]
+        finally:
+            self._finish_operation()
+
 
 def install_editing_routes(
     app: FastAPI,

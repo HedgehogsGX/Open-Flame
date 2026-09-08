@@ -1,7 +1,9 @@
 """Lazy, loopback-only upload UI and API; no multipart or credential bodies."""
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -292,6 +294,27 @@ def _public(record: dict, fields: tuple[str, ...]) -> dict:
     return {key: record.get(key) for key in fields}
 
 
+def _managed_import_id(
+    origin_kind: str,
+    origin_id: str,
+    expected_sha256: str,
+    idempotency_key: str | None,
+) -> str:
+    request_key = idempotency_key or "implicit-origin-import-v1"
+    payload = json.dumps(
+        {
+            "origin_id": origin_id,
+            "origin_kind": origin_kind,
+            "request_key": request_key,
+            "sha256": expected_sha256,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()[:32]
+
+
 def _safe_error(exc: UploadError) -> HTTPException:
     code = exc.code if re.fullmatch(r"[a-z][a-z0-9_]{0,79}", exc.code) else "upload_failed"
     return HTTPException(status_code=404 if code.endswith("not_found") else 409, detail=code)
@@ -366,6 +389,7 @@ def install_upload_routes(
     data_root: Path,
     original_asset_resolver: Callable[[str], tuple[Path, str]] | None = None,
     edited_output_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
+    edited_cover_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
 ) -> None:
     """Install routes without touching upload directories, workers or accounts."""
     root = data_root.with_name(data_root.name + "-uploads")
@@ -561,16 +585,43 @@ def install_upload_routes(
             source.unlink(missing_ok=True)
 
     @router.post("/sources/assets/{asset_id}", status_code=201)
-    async def import_asset(asset_id: str):
+    async def import_asset(
+        asset_id: str,
+        idempotency_key: str | None = Query(
+            default=None,
+            min_length=8,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9_-]+$",
+        ),
+    ):
         if original_asset_resolver is None:
             raise HTTPException(status_code=404, detail="asset_not_found")
         path, expected_sha256 = await run_in_threadpool(original_asset_resolver, asset_id)
-        result = await invoke("import_source", path, "download-" + asset_id + path.suffix,
-                              expected_sha256=expected_sha256)
+        name = "download-" + asset_id + path.suffix
+        result = await invoke(
+            "import_source",
+            path,
+            name,
+            expected_sha256=expected_sha256,
+            managed_id=_managed_import_id(
+                "download_asset",
+                asset_id,
+                expected_sha256,
+                idempotency_key,
+            ),
+        )
         return _public(result, _SOURCE_FIELDS)
 
     @router.post("/sources/edits/{output_id}", status_code=201)
-    async def import_edited_output(output_id: str):
+    async def import_edited_output(
+        output_id: str,
+        idempotency_key: str | None = Query(
+            default=None,
+            min_length=8,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9_-]+$",
+        ),
+    ):
         """Copy one verified editing output into the isolated upload store.
 
         Resolving an editing output never creates an upload job.  The existing
@@ -587,6 +638,12 @@ def install_upload_routes(
             path,
             name,
             expected_sha256=expected_sha256,
+            managed_id=_managed_import_id(
+                "edit_video",
+                output_id,
+                expected_sha256,
+                idempotency_key,
+            ),
         )
         return _public(result, _SOURCE_FIELDS)
 
@@ -656,6 +713,40 @@ def install_upload_routes(
             return _public(result, _COVER_FIELDS)
         finally:
             cover_path.unlink(missing_ok=True)
+
+    @router.post(
+        "/covers/edits/{output_id}",
+        status_code=201,
+        response_model=UploadCoverResponse,
+    )
+    async def import_edited_cover(
+        output_id: str,
+        idempotency_key: str | None = Query(
+            default=None,
+            min_length=8,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9_-]+$",
+        ),
+    ):
+        if edited_cover_resolver is None:
+            raise HTTPException(status_code=404, detail="edit_cover_not_found")
+        path, expected_sha256, name = await run_in_threadpool(
+            edited_cover_resolver,
+            output_id,
+        )
+        result = await invoke(
+            "import_cover",
+            path,
+            name,
+            expected_sha256=expected_sha256,
+            managed_id=_managed_import_id(
+                "edit_cover",
+                output_id,
+                expected_sha256,
+                idempotency_key,
+            ),
+        )
+        return _public(result, _COVER_FIELDS)
 
     @router.get(
         "/covers/{asset_id}/content",

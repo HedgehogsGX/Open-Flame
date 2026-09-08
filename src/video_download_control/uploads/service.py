@@ -73,6 +73,7 @@ _TARGET_OVERRIDE_KEYS = frozenset({
     "publish_timezone_offset_minutes", "platform_options",
 })
 _ID = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _PAGE_CURSOR = re.compile(r"^([0-3]):([1-9][0-9]*)$")
 _JOB_PRIORITY = "CASE WHEN j.state='running' THEN 0 WHEN j.state='queued' THEN 1 WHEN j.state IN ('draft','unknown','failed','canceled') THEN 2 ELSE 3 END"
@@ -590,6 +591,87 @@ class UploadService:
             yield
         finally:
             lease.release()
+
+    @contextmanager
+    def _managed_import(self, kind: str, managed_id: str | None):
+        if managed_id is None:
+            yield
+            return
+        managed_id = _identifier(managed_id)
+        if kind not in {"source", "cover"}:
+            raise UploadError("invalid_managed_import")
+        directory = self.root / "private" / "import-locks"
+        try:
+            directory.mkdir(exist_ok=True, mode=0o700)
+            _plain(directory, directory=True)
+        except OSError:
+            raise UploadError("managed_import_lock_unavailable") from None
+        lock = _SchedulerLock(directory / f"{kind}-{managed_id}.lock")
+        try:
+            if not lock.acquire():
+                raise UploadError("managed_import_in_progress")
+            yield
+        finally:
+            lock.release()
+
+    @staticmethod
+    def _expected_sha256(value: str | None) -> str | None:
+        if value is not None and (
+            not isinstance(value, str) or not _SHA256.fullmatch(value)
+        ):
+            raise UploadError("invalid_expected_sha256")
+        return value
+
+    @staticmethod
+    def _stable_digest(
+        path: Path,
+        before: os.stat_result,
+        *,
+        maximum: int,
+        size_code: str,
+        changed_code: str,
+        unavailable_code: str,
+    ) -> tuple[int, str]:
+        digest, total = hashlib.sha256(), 0
+        try:
+            with path.open("rb") as handle:
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError(changed_code)
+                while chunk := handle.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > maximum:
+                        raise UploadError(size_code)
+                    digest.update(chunk)
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError(changed_code)
+            if total != before.st_size or _signature(_plain(path)) != _signature(before):
+                raise UploadError(changed_code)
+        except UploadError:
+            raise
+        except OSError:
+            raise UploadError(unavailable_code) from None
+        return total, digest.hexdigest()
+
+    @staticmethod
+    def _stable_cover_payload(
+        path: Path, before: os.stat_result,
+    ) -> tuple[bytes, str]:
+        try:
+            with path.open("rb") as handle:
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError("cover_changed")
+                payload = handle.read(MAX_COVER_BYTES + 1)
+                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                    raise UploadError("cover_changed")
+            if len(payload) > MAX_COVER_BYTES:
+                raise UploadError("cover_size_invalid")
+            if len(payload) != before.st_size or _signature(_plain(path)) != _signature(before):
+                raise UploadError("cover_changed")
+        except UploadError:
+            raise
+        except OSError:
+            raise UploadError("cover_unavailable") from None
+        return payload, hashlib.sha256(payload).hexdigest()
 
     def _release_lifetime_activity(self) -> None:
         with self._activity_lease_guard:
@@ -1207,56 +1289,154 @@ class UploadService:
         return payload, row["mime_type"]
 
     @_requires_activity
-    def import_cover(self, path: Path, name: str) -> dict:
+    def import_cover(
+        self,
+        path: Path,
+        name: str,
+        expected_sha256: str | None = None,
+        managed_id: str | None = None,
+    ) -> dict:
         name = _text(name, 180, required=True)
         if any(char in name for char in '/\\:\x00') or name in (".", ".."):
             raise UploadError("invalid_cover_name")
         suffix = Path(name).suffix.lower()
         if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
             raise UploadError("unsupported_cover_type")
-        try:
-            before = _plain(path)
-        except OSError:
-            raise UploadError("cover_unavailable") from None
-        if not 0 < before.st_size <= MAX_COVER_BYTES:
-            raise UploadError("cover_size_invalid")
-        if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
-            raise UploadError("upload_storage_full")
-        asset_id = uuid4().hex
-        target = self.root / "assets" / f"{asset_id}{suffix}"
-        _plain(target.parent, directory=True)
-        digest, total = hashlib.sha256(), 0
-        try:
-            with path.open("rb") as src, target.open("xb") as dst:
-                if _signature(os.fstat(src.fileno())) != _signature(before):
-                    raise UploadError("cover_changed")
-                while chunk := src.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > MAX_COVER_BYTES:
-                        raise UploadError("cover_size_invalid")
-                    dst.write(chunk)
-                    digest.update(chunk)
-                if _signature(os.fstat(src.fileno())) != _signature(before):
-                    raise UploadError("cover_changed")
-                dst.flush()
-                os.fsync(dst.fileno())
-            if total != before.st_size or _signature(_plain(path)) != _signature(before):
-                raise UploadError("cover_changed")
-            payload = target.read_bytes()
+        expected_sha256 = self._expected_sha256(expected_sha256)
+        if managed_id is not None and expected_sha256 is None:
+            raise UploadError("invalid_expected_sha256")
+        asset_id = _identifier(managed_id) if managed_id is not None else uuid4().hex
+
+        with self._managed_import("cover", managed_id):
+            try:
+                before = _plain(path)
+            except OSError:
+                raise UploadError("cover_unavailable") from None
+            if not 0 < before.st_size <= MAX_COVER_BYTES:
+                raise UploadError("cover_size_invalid")
+            payload, digest = self._stable_cover_payload(path, before)
+            if expected_sha256 is not None and digest != expected_sha256:
+                raise UploadError("cover_hash_mismatch")
             mime_type, width, height = _cover_metadata(payload, suffix)
+
             with self._db() as db:
-                db.execute("BEGIN IMMEDIATE")
-                db.execute(
-                    "INSERT INTO upload_assets(id,kind,name,suffix,mime_type,size,sha256,width,height,created_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (asset_id, "cover", name, suffix, mime_type, total, digest.hexdigest(),
-                     width, height, _now()),
-                )
-                row = db.execute(self._asset_query() + " WHERE u.id=?", (asset_id,)).fetchone()
+                row = db.execute(
+                    self._asset_query() + " WHERE u.id=?", (asset_id,)
+                ).fetchone()
+            if row is not None:
+                if managed_id is None:
+                    raise UploadError("cover_import_conflict")
+                if (
+                    row["kind"] != "cover"
+                    or row["name"] != name
+                    or row["suffix"] != suffix
+                    or row["mime_type"] != mime_type
+                    or row["size"] != len(payload)
+                    or row["sha256"] != digest
+                    or row["width"] != width
+                    or row["height"] != height
+                    or row["media_state"] != "present"
+                ):
+                    raise UploadError("cover_import_conflict")
+                try:
+                    self._verified_asset_media_path(row)
+                except UploadError:
+                    raise UploadError("cover_import_conflict") from None
                 return self._asset_public(row)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+
+            assets_root = self.root / "assets"
+            _plain(assets_root, directory=True)
+            target = assets_root / f"{asset_id}{suffix}"
+            if target.exists():
+                if managed_id is None:
+                    raise UploadError("cover_import_conflict")
+                try:
+                    target_before = _plain(target)
+                    target_payload, target_digest = self._stable_cover_payload(
+                        target, target_before
+                    )
+                    target_metadata = _cover_metadata(target_payload, suffix)
+                except (OSError, UploadError):
+                    raise UploadError("cover_import_conflict") from None
+                if (
+                    len(target_payload) != len(payload)
+                    or target_digest != digest
+                    or target_metadata != (mime_type, width, height)
+                ):
+                    raise UploadError("cover_import_conflict")
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute(
+                        "INSERT INTO upload_assets("
+                        "id,kind,name,suffix,mime_type,size,sha256,width,height,created_at"
+                        ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            asset_id,
+                            "cover",
+                            name,
+                            suffix,
+                            mime_type,
+                            len(payload),
+                            digest,
+                            width,
+                            height,
+                            _now(),
+                        ),
+                    )
+                    row = db.execute(
+                        self._asset_query() + " WHERE u.id=?", (asset_id,)
+                    ).fetchone()
+                return self._asset_public(row)
+
+            if shutil.disk_usage(self.root).free < len(payload) + UPLOAD_RESERVE_BYTES:
+                raise UploadError("upload_storage_full")
+            stage = assets_root / f".{asset_id}.{uuid4().hex}.import"
+            published: Path | None = None
+            try:
+                with stage.open("xb") as handle:
+                    if os.name != "nt":
+                        os.chmod(stage, 0o600)
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if _plain(stage).st_size != len(payload):
+                    raise UploadError("cover_unavailable")
+                try:
+                    os.link(stage, target)
+                except FileExistsError:
+                    raise UploadError("cover_import_conflict") from None
+                except OSError:
+                    raise UploadError("cover_import_failed") from None
+                published = target
+                stage.unlink()
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute(
+                        "INSERT INTO upload_assets("
+                        "id,kind,name,suffix,mime_type,size,sha256,width,height,created_at"
+                        ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            asset_id,
+                            "cover",
+                            name,
+                            suffix,
+                            mime_type,
+                            len(payload),
+                            digest,
+                            width,
+                            height,
+                            _now(),
+                        ),
+                    )
+                    row = db.execute(
+                        self._asset_query() + " WHERE u.id=?", (asset_id,)
+                    ).fetchone()
+                published = None
+                return self._asset_public(row)
+            finally:
+                stage.unlink(missing_ok=True)
+                if published is not None:
+                    published.unlink(missing_ok=True)
 
     @_requires_activity
     def delete_cover_media(self, asset_id: str) -> dict:
@@ -1455,55 +1635,157 @@ class UploadService:
         return result
 
     @_requires_activity
-    def import_source(self, path: Path, name: str, expected_sha256: str | None = None) -> dict:
+    def import_source(
+        self,
+        path: Path,
+        name: str,
+        expected_sha256: str | None = None,
+        managed_id: str | None = None,
+    ) -> dict:
         name = _text(name, 180, required=True)
         if any(char in name for char in '/\\:\x00') or name in (".", ".."):
             raise UploadError("invalid_source_name")
         suffix = Path(name).suffix.lower()
         if suffix not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
             raise UploadError("unsupported_video_type")
-        try:
-            before = _plain(path)
-        except OSError:
-            raise UploadError("source_unavailable") from None
-        if not 0 < before.st_size <= MAX_SOURCE_BYTES:
-            raise UploadError("source_size_invalid")
-        if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
-            raise UploadError("upload_storage_full")
-        source_id = uuid4().hex
-        target = self.root / "media" / f"{source_id}{suffix}"
-        _plain(target.parent, directory=True)
-        digest, total = hashlib.sha256(), 0
-        try:
-            with path.open("rb") as src, target.open("xb") as dst:
-                if _signature(os.fstat(src.fileno())) != _signature(before):
-                    raise UploadError("source_changed")
-                while chunk := src.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > MAX_SOURCE_BYTES:
-                        raise UploadError("source_size_invalid")
-                    dst.write(chunk)
-                    digest.update(chunk)
-                if _signature(os.fstat(src.fileno())) != _signature(before):
-                    raise UploadError("source_changed")
-                dst.flush()
-                os.fsync(dst.fileno())
-            if total != before.st_size or _signature(_plain(path)) != _signature(before):
-                raise UploadError("source_changed")
-            if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
-                raise UploadError("source_hash_mismatch")
+        expected_sha256 = self._expected_sha256(expected_sha256)
+        if managed_id is not None and expected_sha256 is None:
+            raise UploadError("invalid_expected_sha256")
+        source_id = _identifier(managed_id) if managed_id is not None else uuid4().hex
+
+        with self._managed_import("source", managed_id):
+            try:
+                before = _plain(path)
+            except OSError:
+                raise UploadError("source_unavailable") from None
+            if not 0 < before.st_size <= MAX_SOURCE_BYTES:
+                raise UploadError("source_size_invalid")
+
             with self._db() as db:
-                db.execute("BEGIN IMMEDIATE")
-                db.execute(
-                    "INSERT INTO sources(id,name,suffix,size,sha256,created_at) VALUES(?,?,?,?,?,?)",
-                    (source_id, name, suffix, total, digest.hexdigest(), _now()),
+                row = db.execute(
+                    self._source_query() + " WHERE s.id=?", (source_id,)
+                ).fetchone()
+            if row is not None:
+                if managed_id is None:
+                    raise UploadError("source_import_conflict")
+                total, digest = self._stable_digest(
+                    path,
+                    before,
+                    maximum=MAX_SOURCE_BYTES,
+                    size_code="source_size_invalid",
+                    changed_code="source_changed",
+                    unavailable_code="source_unavailable",
                 )
-                row = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
+                if expected_sha256 is not None and digest != expected_sha256:
+                    raise UploadError("source_hash_mismatch")
+                if (
+                    row["name"] != name
+                    or row["suffix"] != suffix
+                    or row["size"] != total
+                    or row["sha256"] != digest
+                    or row["media_state"] != "present"
+                ):
+                    raise UploadError("source_import_conflict")
+                try:
+                    self._verified_source_media_path(row)
+                except UploadError:
+                    raise UploadError("source_import_conflict") from None
                 return self._source_public(row)
-        except BaseException:
+
+            media_root = self.root / "media"
+            _plain(media_root, directory=True)
+            target = media_root / f"{source_id}{suffix}"
             if target.exists():
-                target.unlink()
-            raise
+                if managed_id is None:
+                    raise UploadError("source_import_conflict")
+                total, digest = self._stable_digest(
+                    path,
+                    before,
+                    maximum=MAX_SOURCE_BYTES,
+                    size_code="source_size_invalid",
+                    changed_code="source_changed",
+                    unavailable_code="source_unavailable",
+                )
+                if expected_sha256 is not None and digest != expected_sha256:
+                    raise UploadError("source_hash_mismatch")
+                try:
+                    target_before = _plain(target)
+                    target_total, target_digest = self._stable_digest(
+                        target,
+                        target_before,
+                        maximum=MAX_SOURCE_BYTES,
+                        size_code="source_import_conflict",
+                        changed_code="source_import_conflict",
+                        unavailable_code="source_import_conflict",
+                    )
+                except (OSError, UploadError):
+                    raise UploadError("source_import_conflict") from None
+                if target_total != total or target_digest != digest:
+                    raise UploadError("source_import_conflict")
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute(
+                        "INSERT INTO sources(id,name,suffix,size,sha256,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (source_id, name, suffix, total, digest, _now()),
+                    )
+                    row = db.execute(
+                        self._source_query() + " WHERE s.id=?", (source_id,)
+                    ).fetchone()
+                return self._source_public(row)
+
+            if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
+                raise UploadError("upload_storage_full")
+            stage = media_root / f".{source_id}.{uuid4().hex}.import"
+            digest_builder, total = hashlib.sha256(), 0
+            published: Path | None = None
+            try:
+                with path.open("rb") as src, stage.open("xb") as dst:
+                    if _signature(os.fstat(src.fileno())) != _signature(before):
+                        raise UploadError("source_changed")
+                    if os.name != "nt":
+                        os.chmod(stage, 0o600)
+                    while chunk := src.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > MAX_SOURCE_BYTES:
+                            raise UploadError("source_size_invalid")
+                        dst.write(chunk)
+                        digest_builder.update(chunk)
+                    if _signature(os.fstat(src.fileno())) != _signature(before):
+                        raise UploadError("source_changed")
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                if total != before.st_size or _signature(_plain(path)) != _signature(before):
+                    raise UploadError("source_changed")
+                digest = digest_builder.hexdigest()
+                if expected_sha256 is not None and digest != expected_sha256:
+                    raise UploadError("source_hash_mismatch")
+                if _plain(stage).st_size != total:
+                    raise UploadError("source_unavailable")
+                try:
+                    os.link(stage, target)
+                except FileExistsError:
+                    raise UploadError("source_import_conflict") from None
+                except OSError:
+                    raise UploadError("source_import_failed") from None
+                published = target
+                stage.unlink()
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute(
+                        "INSERT INTO sources(id,name,suffix,size,sha256,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (source_id, name, suffix, total, digest, _now()),
+                    )
+                    row = db.execute(
+                        self._source_query() + " WHERE s.id=?", (source_id,)
+                    ).fetchone()
+                published = None
+                return self._source_public(row)
+            finally:
+                stage.unlink(missing_ok=True)
+                if published is not None:
+                    published.unlink(missing_ok=True)
 
     @_requires_activity
     def restore_source_media(self, source_id: str, path: Path) -> dict:
