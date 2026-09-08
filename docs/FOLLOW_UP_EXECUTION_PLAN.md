@@ -8,6 +8,8 @@
 
 用户在核验后补充的最终目标：对全部前端进行 Apple 风格升级，改善布局、字体与细节，加入适量动效，并让后续开发沿用同一设计。已建立并同步 [设计规范](DESIGN_SYSTEM.md)与[交互式视觉基准](design-preview.html)；v0.25.0 已完成 **T16** 的生产下载页、上传页、共享资源、交互稳定性和本地浏览器验收。后续新增界面继续沿用同一规范。
 
+2026-09-09 实际启动路径审查发现，普通 Start 原本会在 spawn 前从 control child 环境剔除 `OPEN_FLAME_AI_OPENAI_API_KEY`，使已安装 runtime 也无法进入 AI provider 健康/执行路径。当前已收敛为精确的 control-only 密钥白名单与值校验，下载 Worker 仍剔除该密钥；合成 sentinel 和本地 runtime 验证不触发网络。普通应用目录准备当前 AI/上传 runtime、真实 OpenAI 及三平台验收仍是后续门槛。
+
 “完成”需要同时满足：本轮已确认问题有明确处置、相应真实模式回归通过、用户能确认当前运行状态、测试包可独立安装并记录身份、三平台结果分别由测试员核对。全量测试绿色、环境 ready、二维码显示或本地 draft 均不能单独替代这些条件。
 
 本文件保留完整路线及验收门槛。2026-09-05 用户要求修复八项发现后，0.24.3 已实施 T01～T06 所对应的缺陷修复，以及 T07 的“已有上传库结构校验”部分；其审查范围见 [最终源码审查](../validation/iteration-0.24.3-final-review.md)。2026-09-07 的 0.24.4 冻结源继续完成 T14、T07～T09 的本地切片，v0.25.0 完成 T16/G6，v0.26.0 完成 T17/G7，v0.27.0 完成 T18。本轮 v0.28.0 实现 T19 的隔离运行时、可审核 AI 任务和自动流程；任何历史源码身份、定向结果或包均不能作为 0.28.0 最终制品验收。
@@ -23,7 +25,7 @@
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
 | T18 / G8（0.27.0 历史阶段） | 独立 Editing Schema 1、版本化草稿、多个分段、封面、确认/取消/重试、真实本地 FFmpeg 与显式导入上传完成 | 由 0.28.0 T19 接续；该阶段证据不证明 AI 或真实平台 |
 | T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 1、重启/重试再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
-| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation | 预设边界/API/生产页面浏览器及真实域离线整链已通过；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
+| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递 | 预设边界/API/生产页面浏览器及真实域离线整链已通过；密钥边界仅用无网络 sentinel 验证；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
 | T11 / T12 | **NOT RUN** | 三平台真实上传与当前六平台下载必须绑定最终 0.28.0 receipt 后的同一构建分别执行 |
 | T15 | **NOT RUN** | Linux、Docker 与 NAS 仍需目标环境独立验收；Windows 本地 UI 结果不能替代 |
 

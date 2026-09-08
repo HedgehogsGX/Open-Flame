@@ -9,6 +9,8 @@
 
 2026-09-09 复核更正：`b240392` 的旧整链脚本跳过了 AI，仅走一个合成 Bilibili 任务，不能证明 AI/三平台/重启。当前已用真实下载 Worker、LocalWorkflowAdapter、编辑/上传服务、隔离 AI worker 和 FFmpeg 替换验证，实际听写/翻译/配音各一次，输出音频与三平台任务均有断言；真实模型响应和平台网络仍是替身。此前“只剩运行环境”的完成结论撤回。预设还修复了未恢复 AI/音色/定时字段、配音授权摘要缺失和嵌套参数未校验问题。当前证据见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。验证覆盖不足、当前发行冻结和真实平台验收仍是后续工作，目标尚未完成。
 
+2026-09-09 普通启动路径更正：以前 `Start-Open-Flame.cmd` 的 supervisor 在 spawn control child 前会剔除 `OPEN_FLAME_AI_OPENAI_API_KEY`，因此即使 runtime 完整且操作者按文档设置密钥，三项 AI 能力仍会错误地停在 `ai_provider_auth_missing`。当前环境边界仅允许这一个精确变量进入 control child，并执行与 AI executor 一致的值校验；直连下载 Worker、未声明 AI 变量和通用 token/secret 仍保持隔离。ignored 验证用本地重建 runtime 和合成 sentinel 确认三项能力转为 `unverified / provider_health_required`，并强制禁止网络、检查输出不含 sentinel。当前普通应用目录仍没有 `data-ai-runtime`，已有上传 runtime 的只读 `--check` 返回 `runtime_upgrade_required`；本次没有改动用户的 runtime、凭据、账号或媒体。
+
 用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 `0592b6f96c8eef60381b31b1e78e5ebf6d7c6a1d` 的 0.28.0 五件制品已由 ignored 的 `validation/local/release-v028-0592b6f-final/release-receipt.json` 绑定并通过独立源码/wheel 验收；这份 receipt 只证明该冻结提交。当前发布后开发进一步让 workflow 区分“平台接收投稿”“平台保存草稿”和合法的混合结果，远端结果不确定时仍优先停止核对；上传账号失效会标记账号并撤回同账号尚未执行的确认；浏览器幂等键只在响应丢失重试期间复用，成功后同参数可重新运行；后台 reconciliation 在无进展时有界退避。证据见 [自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)。
@@ -26,7 +28,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭 | 预设已完成本地边界/API/浏览器回归；真实域整链使用合成网络/模型响应通过；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；发布后已收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 预设已完成本地边界/API/浏览器回归；真实域整链使用合成网络/模型响应通过；普通应用目录还需重建 AI runtime 并升级上传 runtime；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 

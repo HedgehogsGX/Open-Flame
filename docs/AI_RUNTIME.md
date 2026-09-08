@@ -94,7 +94,7 @@ python -m video_download_control.editing.ai_runtime_cli `
 OPEN_FLAME_AI_OPENAI_API_KEY
 ```
 
-把密钥注入启动 Open-Flame 的进程环境或受控的服务/密钥管理器，并让应用子进程继承。不要把真实密钥写入命令历史、仓库、`.env`、`manifest.json`、编辑 recipe、SQLite、日志、备份或发行包。下面只展示变量名，不能把占位符当成密钥：
+把密钥注入启动 Open-Flame 的进程环境或受控的服务/密钥管理器。普通 `Start-Open-Flame.cmd` 只把这一个精确变量传给执行编辑、AI 和上传管理的 control child；直连下载 Worker 不继承它，未声明的 `OPEN_FLAME_AI_*` 及通用 token/secret 变量仍会被剔除。密钥值必须非空、不含码位低于 33 的字符，且最多 16384 个字符。不要把真实密钥写入命令历史、仓库、`.env`、`manifest.json`、编辑 recipe、SQLite、日志、备份或发行包。下面只展示变量名，不能把占位符当成密钥：
 
 ```powershell
 $env:OPEN_FLAME_AI_OPENAI_API_KEY = "<仅向当前 Open-Flame 进程树提供的 API key>"
@@ -199,3 +199,5 @@ OpenAI provider 是远程 provider。当前执行会发送：
 构建成功、`--check` 返回 `ready`、页面列出 provider/model 或本地渲染 smoke 通过，只能证明对应本机 runtime 结构、散列、协议和本地媒体路径满足当前代码合同。
 
 当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger 的三个 ignored 本地 validator、Python compileall、编辑/自动流程页内联 JavaScript 语法检查、依赖一致性检查和本机浏览器检查已经通过；focused 既有测试当前仍为 41 passed、3 failed，三项失败都仍在断言旧 Editing Schema 1，测试文件按仓库策略未修改。详见 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
+
+2026-09-09 追加的普通 Start 密钥边界验证仅使用合成 sentinel 和本地重建 runtime：它确认 sentinel 只进入 control child，不进入下载 Worker；三项能力从 `blocked / ai_provider_auth_missing` 转为 `unverified / provider_health_required`；验证期间网络入口被强制拒绝，输出中没有 sentinel。该结果不是 provider health 或真实 API 验收。

@@ -107,6 +107,10 @@ _ROLE_PHASES = {
 _CHILD_ENVIRONMENT_ALLOWLIST = frozenset(
     {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TZ"}
 )
+_CONTROL_CHILD_SECRET_ENVIRONMENT_ALLOWLIST = frozenset(
+    {"OPEN_FLAME_AI_OPENAI_API_KEY"}
+)
+_MAX_CONTROL_CHILD_SECRET_CHARACTERS = 16_384
 
 
 class LocalAppError(RuntimeError):
@@ -685,9 +689,32 @@ def _sanitized_child_environment(
     seen: set[str] = set()
     for key, value in source.items():
         normalized = key.upper()
-        if normalized in _CHILD_ENVIRONMENT_ALLOWLIST and normalized not in seen:
-            if isinstance(value, str) and "\x00" not in value and len(value) <= 4096:
-                sanitized[key] = value
+        control_secret = (
+            not enable_worker
+            and normalized in _CONTROL_CHILD_SECRET_ENVIRONMENT_ALLOWLIST
+        )
+        if (
+            normalized in _CHILD_ENVIRONMENT_ALLOWLIST or control_secret
+        ) and normalized not in seen:
+            valid = (
+                isinstance(value, str)
+                and "\x00" not in value
+                and len(value)
+                <= (
+                    _MAX_CONTROL_CHILD_SECRET_CHARACTERS
+                    if control_secret
+                    else 4096
+                )
+            )
+            if control_secret:
+                # The browser-facing control process owns AI execution.  Keep
+                # its one declared provider secret out of the download Worker,
+                # and apply the same value contract used by AiTaskExecutor.
+                valid = valid and bool(value) and not any(
+                    ord(character) < 33 for character in value
+                )
+            if valid:
+                sanitized[normalized if control_secret else key] = value
                 seen.add(normalized)
     if enable_worker:
         sanitized[FEATURE_GATE] = "1"
