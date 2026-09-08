@@ -7,6 +7,7 @@ from typing import Any, Literal, Mapping, Protocol, Sequence
 
 
 StepStatus = Literal["waiting", "ready", "failed", "attention"]
+UploadOutcome = Literal["submitted", "draft_saved", "mixed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ class UploadSnapshot:
     status: StepStatus
     code: str = ""
     job_ids: tuple[str, ...] | None = None
+    outcome: UploadOutcome | None = None
 
 
 class WorkflowDomainAdapter(Protocol):

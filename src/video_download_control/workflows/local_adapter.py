@@ -911,12 +911,51 @@ class LocalWorkflowAdapter:
                     "attention", code="upload_state_unknown", job_ids=tuple(leaf_ids)
                 )
             states.append(state)
+        job_codes = {
+            job.get("code")
+            for job in jobs
+            if isinstance(job, Mapping) and isinstance(job.get("code"), str)
+        }
+        if job_codes.intersection(
+            {
+                "account_invalid",
+                "account_missing",
+                "account_invalid_confirmation_revoked",
+            }
+        ):
+            return UploadSnapshot(
+                "attention",
+                code="upload_account_invalid",
+                job_ids=current_ids,
+            )
         if any(state in {"failed", "canceled"} for state in states):
             return UploadSnapshot(
                 "failed", code="upload_job_failed", job_ids=current_ids
             )
         if all(state in _UPLOAD_SUCCESS_STATES for state in states):
-            return UploadSnapshot("ready", job_ids=current_ids)
+            outcomes: set[str] = set()
+            for job in jobs:
+                state = job.get("state")
+                mode = job.get("mode")
+                if state == "submitted" and mode == "publish":
+                    outcomes.add("submitted")
+                elif state == "draft_saved" and mode == "draft":
+                    outcomes.add("draft_saved")
+                else:
+                    return UploadSnapshot(
+                        "attention",
+                        code="upload_outcome_invalid",
+                        job_ids=current_ids,
+                    )
+            if len(outcomes) != 1:
+                return UploadSnapshot("ready", job_ids=current_ids, outcome="mixed")
+            if "submitted" in outcomes:
+                return UploadSnapshot(
+                    "ready", job_ids=current_ids, outcome="submitted"
+                )
+            return UploadSnapshot(
+                "ready", job_ids=current_ids, outcome="draft_saved"
+            )
         if any(state == "draft" for state in states):
             codes = {
                 job.get("code")

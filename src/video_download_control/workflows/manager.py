@@ -11,6 +11,10 @@ from .contracts import WorkflowDomainAdapter
 from .service import WorkflowError, WorkflowService
 
 
+_MIN_RECONCILE_SECONDS = 0.75
+_MAX_RECONCILE_SECONDS = 6.0
+
+
 class WorkflowManager:
     def __init__(self, root: Path, adapter: WorkflowDomainAdapter) -> None:
         self.root = Path(root)
@@ -69,8 +73,10 @@ class WorkflowManager:
     def _worker(self) -> None:
         try:
             service = self.get()
+            wait_seconds = _MIN_RECONCILE_SECONDS
             while not self._stop.is_set():
                 active = service.active_page(self._scan_cursor, limit=100)
+                changed = False
                 if active:
                     tail = active[-1]
                     self._scan_cursor = (tail["created_at"], tail["id"])
@@ -80,7 +86,10 @@ class WorkflowManager:
                     if self._stop.is_set():
                         break
                     try:
-                        service.advance(item["id"])
+                        result = service.advance(item["id"])
+                        changed = changed or result.get("revision") != item.get(
+                            "revision"
+                        )
                     except WorkflowError as exc:
                         if exc.code in {
                             "workflow_database_unavailable",
@@ -93,6 +102,7 @@ class WorkflowManager:
                                 exc.code,
                                 expected_revision=item["revision"],
                             )
+                            changed = True
                         except (WorkflowError, sqlite3.Error):
                             pass
                     except sqlite3.Error:
@@ -104,9 +114,23 @@ class WorkflowManager:
                                 "workflow_domain_failed",
                                 expected_revision=item["revision"],
                             )
+                            changed = True
                         except (WorkflowError, sqlite3.Error):
                             pass
-                self._wake.wait(0.75)
+                if changed:
+                    wait_seconds = _MIN_RECONCILE_SECONDS
+                elif not active:
+                    wait_seconds = _MAX_RECONCILE_SECONDS
+                else:
+                    wait_seconds = min(
+                        _MAX_RECONCILE_SECONDS,
+                        max(
+                            _MIN_RECONCILE_SECONDS,
+                            wait_seconds * 1.6,
+                        ),
+                    )
+                if self._wake.wait(wait_seconds):
+                    wait_seconds = _MIN_RECONCILE_SECONDS
                 self._wake.clear()
         finally:
             with self._changed:

@@ -76,6 +76,7 @@ _TARGET_OVERRIDE_KEYS = frozenset({
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_UPLOAD_AUTH_INVALID_CODES = frozenset({"account_invalid", "account_missing"})
 _PAGE_CURSOR = re.compile(r"^([0-3]):([1-9][0-9]*)$")
 _JOB_PRIORITY = "CASE WHEN j.state='running' THEN 0 WHEN j.state='queued' THEN 1 WHEN j.state IN ('draft','unknown','failed','canceled') THEN 2 ELSE 3 END"
 _SOURCE_PRIORITY = ("CASE WHEN EXISTS(SELECT 1 FROM jobs active WHERE active.source_id=s.id "
@@ -2908,4 +2909,16 @@ class UploadService:
                     state = "unknown"
                 if state == "submitted" and row["mode"] != "publish":
                     state = "unknown"
+                if result.code in _UPLOAD_AUTH_INVALID_CODES:
+                    db.execute(
+                        "UPDATE accounts SET auth_state='invalid',code=? "
+                        "WHERE id=? AND lifecycle_state='active'",
+                        (result.code, row["account_id"]),
+                    )
+                    db.execute(
+                        "UPDATE jobs SET state='draft',"
+                        "code='account_invalid_confirmation_revoked',updated_at=? "
+                        "WHERE account_id=? AND state='queued'",
+                        (now, row["account_id"]),
+                    )
                 db.execute("UPDATE jobs SET state=?,code=?,updated_at=? WHERE id=? AND state='running'", (state, result.code, now, row["id"]))

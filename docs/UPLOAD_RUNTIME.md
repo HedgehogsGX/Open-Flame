@@ -94,6 +94,7 @@ Bilibili 使用已有 Segno 生成官方 TV 登录二维码，保存的真实 ap
 - `ready/account_ready`：账户检查或登录流程通过，不代表所有投稿权限均已验证。
 - `submitted/upstream_submitted`：上游工具报告提交完成，不等于审核通过或已经公开。
 - `draft_saved/upstream_draft_saved`：视频号保存草稿后进入明确同源列表路由。
+- `account_invalid/account_missing`：投稿后端确认账号登录态不可用时，账号立即标记 invalid，同账号尚未执行的 queued 投稿退回本地草稿并撤销旧确认；重新登录后必须再次核对。若远端调用已经开始但最终结果不确定，`unknown` 仍优先，先到平台后台核对，不能据账号错误自动重发。
 - `unknown`：执行中断、平台返回缺少明确确认、取消或超时；先检查平台后台，再决定是否创建新任务。不会自动重发。
 - `runtime_missing`、`runtime_invalid`、`runtime_busy`：未安装、完整性检查失败或安装正在占用该环境。
 - `runtime_upgrade_required`：旧 Schema 1 环境需要按上节重建；保留账号及上传数据。

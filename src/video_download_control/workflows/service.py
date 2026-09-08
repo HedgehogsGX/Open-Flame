@@ -485,8 +485,8 @@ class WorkflowService:
                     snapshot = self.adapter.inspect_upload(record["upload_job_ids"])
                     self._sync_upload_job_ids(record, snapshot)
                     if snapshot.status == "ready":
-                        self._transition(workflow_id, "completed", "")
-                        continue
+                        self._record_upload_outcome(workflow_id, snapshot)
+                        return self.get(workflow_id)
                     if snapshot.status == "waiting":
                         confirmation_codes = {
                             "upload_restart_confirmation_required",
@@ -796,8 +796,7 @@ class WorkflowService:
                 self._attention(workflow_id, snapshot.code or "upload_attention_required")
                 return False
             if snapshot.status == "ready":
-                self._transition(workflow_id, "completed", "")
-                return True
+                return self._record_upload_outcome(workflow_id, snapshot)
             if snapshot.code and snapshot.code != record["code"]:
                 self._transition(workflow_id, state, snapshot.code)
             if (
@@ -837,9 +836,25 @@ class WorkflowService:
             if snapshot.status != "ready":
                 self._attention(workflow_id, snapshot.code or "upload_attention_required")
                 return False
-            self._transition(workflow_id, "completed", "")
-            return True
+            return self._record_upload_outcome(workflow_id, snapshot)
         return False
+
+    def _record_upload_outcome(
+        self, workflow_id: str, snapshot: UploadSnapshot
+    ) -> bool:
+        """Finish with the exact acknowledgement observed by the upload domain."""
+
+        codes = {
+            "submitted": "submission_acknowledged",
+            "draft_saved": "platform_draft_saved",
+            "mixed": "submission_and_draft_acknowledged",
+        }
+        code = codes.get(snapshot.outcome or "")
+        if code is None:
+            self._attention(workflow_id, "upload_outcome_missing")
+            return False
+        self._transition(workflow_id, "completed", code)
+        return True
 
     def _sync_upload_job_ids(
         self, record: dict[str, Any], snapshot: UploadSnapshot

@@ -2,12 +2,14 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-08
-> 当前迭代：Iteration 0.28.0 — T19 隔离 AI runtime、时间轴配音与 URL 自动流程（本地工程验收进行中；真实 API、最终冻结与真实平台待验收）
+> 当前迭代：Iteration 0.28.0 发布后开发 — 自动流程结果、幂等与账号失效收敛；下一步为 AI 同意绑定、费用上限与复用预设
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `3`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `1`；上传备份格式：`2`
 
 ## 本次交接入口
 
 用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。0.28.0 在 T18 本地编辑基础上加入可离线构建的 CPython AI runtime、标准库 OpenAI provider、持久化听写/翻译任务、审核时间轴、标准音色配音和独立 Workflow Schema 1。`/workflows` 已把下载、编辑、AI 与所选 Bilibili/抖音/视频号上传草稿串接起来，支持预先授权或逐节点确认、重启恢复、AI 后继重试和上传批次原子确认。包内文件不能嵌入自身最终提交和制品摘要；0.28.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
+
+`0592b6f96c8eef60381b31b1e78e5ebf6d7c6a1d` 的 0.28.0 五件制品已由 ignored 的 `validation/local/release-v028-0592b6f-final/release-receipt.json` 绑定并通过独立源码/wheel 验收；这份 receipt 只证明该冻结提交。当前发布后开发进一步让 workflow 区分“平台接收投稿”“平台保存草稿”和合法的混合结果，远端结果不确定时仍优先停止核对；上传账号失效会标记账号并撤回同账号尚未执行的确认；浏览器幂等键只在响应丢失重试期间复用，成功后同参数可重新运行；后台 reconciliation 在无进展时有界退避。证据见 [自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)。
 
 | 工作包 | 2026-09-08 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
@@ -18,7 +20,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 3；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 AI 与自动流程 | `data-ai-runtime` 离线 builder、CPython 3.12/3.13 identity、OpenAI `whisper-1`/`gpt-5.6-luna`/`gpt-4o-mini-tts`、时间轴审核、segment-local 字幕/配音及 `data-workflows` 可恢复状态机已接线；runtime 不含 SDK/模型权重，声音克隆禁用 | 当前只验证 runtime 完整性和 synthetic/fake 链路；真实 OpenAI 调用、费用、质量/真人试听以及三平台真实发布均未执行 |
+| T19 AI 与自动流程 | `data-ai-runtime` 离线 builder、CPython 3.12/3.13 identity、OpenAI `whisper-1`/`gpt-5.6-luna`/`gpt-4o-mini-tts`、时间轴审核、segment-local 字幕/配音及 `data-workflows` 可恢复状态机已接线；发布后已收敛幂等键、账号失效、真实 upload outcome 与轮询退避 | 下一切片为逐操作 runtime/model 同意绑定、执行前硬费用上限、非密钥复用预设及平台 receipt/reconciliation；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
