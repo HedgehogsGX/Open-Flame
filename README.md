@@ -451,3 +451,5 @@ CSV v3 的样本和结果都强制包含 `job_kind`，结果还必须包含由 `
 - Windows 一体化入口已接短链受控直连，但不是隔离；通用控制面 gate 仍默认关闭，POSIX 短链 egress 尚未集成到 Compose/supervisor。Linux AF_UNIX/owner/mode、真实 TLS/DNS/redirect、平台登录态和整批最坏延迟未验收。Replay blocking I/O 只是有界卸载而非可强制取消；injected resolver 仍须遵守 timeout contract。
 - Schema 8 X graph-v2 编排已经实现并由 `ScriptedGraphFakeAdapter` 离线验证，但真实 `YtDlpAdapter` 仍不支持 exact selector；`VDC_ENABLE_X_GRAPH_V2` 默认 `0`，真实 X graph 继续 `candidate/disabled`，不能标记为 `verified`。旧 flat-v1 数据仍可读。
 - Caption 当前只记录 `origin=platform`，尚未可靠区分平台人工字幕与自动字幕；缩略图/字幕内容也尚无真实样本验证。
+
+push test capy
