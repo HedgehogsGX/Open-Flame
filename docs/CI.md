@@ -6,7 +6,11 @@
 
 三个外部 action 与 uv 版本都固定在工作流中；`scripts/verify_ci_contract.py` 检查精确 action commit、矩阵、只读权限、无 credential trigger、locked install、完整测试和 whitespace gate，并把换行规范化后的完整 workflow 字节绑定到已审 SHA-256。完整字节绑定会拒绝 flow mapping、YAML 续行、anchor/alias 等未逐项建模的改写，避免文本规则与 YAML 解释结果分歧。工作树用 `git diff --check` 检查测试期间产生的变化；固定拉取两层历史后，再用 `git diff-tree --check --root -r -m --no-commit-id HEAD` 检查当前提交，包括 pull request merge commit 相对各父提交的差异，避免 clean checkout 上的空 diff 被误当成源码检查。`tests/test_ci_contract.py` 会在内存中分别破坏 action pin、权限、secret、trigger、提交检查和失败传播，证明 validator 会拒绝这些弱化。该检查不能代替维护者审阅 action 上游源码或 runner image 漂移。
 
+`tests/` 中已有回归保留给本地与 CI 运行，但不进入发行包。后续功能提交不得新增或修改自动化测试文件；提交 hook 会拒绝这类 staged 变更，清理提交仍可删除历史测试。临时 smoke 与诊断脚本写入已忽略的 `validation/local/`。
+
 本地复验：
+
+以下命令须在完整 Git checkout 中执行；源码 ZIP 与 sdist 不包含历史测试目录。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\verify_ci_contract.py

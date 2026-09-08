@@ -30,7 +30,7 @@ py -3 -I .\scripts\release.py build --output 'C:\OpenFlameBuild\candidate-02' --
 - `release-manifest.json`：文件清单、每文件大小/摘要、精确包身份和四个根入口摘要。
 - `SHA256SUMS`：上述三个制品与 manifest 的 SHA-256。
 
-生成器先按 [release-files.txt](../release-files.txt) 的明确清单冻结工作树字节，再构建；不使用 Git index/archive 字节代替当前文件。新增源文件、文档、测试或脚本需要人工复核后更新清单。包树中存在未列出的可导入文件会拒绝构建；清单之外的日志、下载内容、缓存、凭据和历史制品不打包。历史许可迁移证据含自引用摘要，因此不打包，其余选择以清单为准。
+生成器先按 [release-files.txt](../release-files.txt) 的明确清单冻结工作树字节，再构建；不使用 Git index/archive 字节代替当前文件。新增源文件、文档或脚本需要人工复核后更新清单。`tests/` 中的历史回归只在仓库/CI 使用，不进入源码 ZIP、sdist 或 wheel；临时验证材料只放在已忽略的 `validation/local/`。包树中存在未列出的可导入文件会拒绝构建；清单之外的日志、下载内容、缓存、凭据和历史制品不打包。历史许可迁移证据含自引用摘要，因此不打包，其余选择以清单为准。
 
 ## 核对已有制品（只读）
 

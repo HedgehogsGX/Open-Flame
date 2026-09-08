@@ -74,6 +74,8 @@ Python packaging is also fail-closed:
 
 Refresh the locks only in a reviewed dependency-change branch, inspect the diff and provenance, then run the static audit:
 
+The pytest command below requires a complete Git checkout. Source ZIP and sdist releases intentionally omit the historical `tests/` tree.
+
 ```bash
 uv lock
 uv export --frozen --no-dev --no-emit-project --no-annotate \

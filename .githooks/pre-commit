@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+if [ -x .venv/Scripts/python.exe ]; then
+  exec .venv/Scripts/python.exe scripts/verify_commit_scope.py --staged
+fi
+
+if command -v py >/dev/null 2>&1; then
+  exec py -3.12 scripts/verify_commit_scope.py --staged
+fi
+
+exec python scripts/verify_commit_scope.py --staged

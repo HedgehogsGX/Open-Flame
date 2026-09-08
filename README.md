@@ -87,6 +87,8 @@ uv run video-download-tools smoke --tool-root $ToolRoot
 uv run video-download-local-app --allow-direct-network
 ```
 
+其中 `pytest` 命令只适用于包含历史回归的完整 Git checkout；源码 ZIP 与 sdist 不携带 `tests/`。普通源码包安装和启动不需要开发测试依赖。
+
 上述位置就是一体化应用的默认工具目录，以后启动只需最后一条命令。如果仓库外或被 Git 忽略的其他工具目录已经通过 `verify` 与 `smoke`，也可以把 `$ToolRoot` 指向该绝对路径，并在启动时显式传入 `--tool-root $ToolRoot`，无需重复安装。
 
 一体化入口在三次身份/健康检查通过后自动打开 `http://127.0.0.1:8000/`；页面可提交 URL、重新打开最近批次、查看每个 Job 的中文阶段与估算进度条、对符合条件的 failed flat Job 发起新代重试、查看 cooldown/half-open/manual-reset 状态、下载 ready 原件及其缩略图/字幕，并查看能力与运行日志。首次启动会创建或 forward-only 迁移数据库到 Schema 11。默认应用根为 `%LOCALAPPDATA%\Open-Flame\video-download-control`，数据库位于其 `data\control.sqlite3`，结构化日志位于 `data\logs`，不依赖启动时的当前目录。用 `Ctrl+C` 时 supervisor 先在 SQLite 中关闭本次 run 的 claim gate，再按 Worker-first 顺序停止子进程；已在线性化点之前领取的 Attempt 仍按既有 lease/恢复契约完成或恢复，但关闭点之后不会再领取新 Job。端口 8000 已占用时应用会在创建数据库或启动子进程前拒绝，不会连接或复用旧服务。

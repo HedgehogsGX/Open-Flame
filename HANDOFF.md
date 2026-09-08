@@ -7,7 +7,7 @@
 
 ## 本次交接入口
 
-用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音。当前 `codex/editing-workspace` 以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，在 0.26.0 T17 上传参数之上开发 0.27.0 T18。T18 已交付可用的本地分段与封面工作台，并为 AI 建立 provider、capability 和字幕时间轴合同；AI runtime、模型和试听尚未完成，因此页面保持 blocked。包内文件不能嵌入自身最终提交和制品摘要；0.27.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
+用户要求继续中间编辑部分的开发，首批需求为分段、封面制作、自动 AI 翻译和自动 AI 配音，并以轻量架构继续到“输入一个网址后自动完成处理并上传发布”。`43d39a667b8ed91f6bbbcb48defc04564118fbd9` 已交付 0.27.0 T18 本地分段、封面工作台及 AI provider/capability/字幕时间轴合同；当前 `codex/lightweight-ai-runtime` 从该提交继续 T19。AI runtime、模型和试听尚未完成，因此页面保持 blocked；下载、编辑、上传目前也仍是三个显式确认域，尚未建立可恢复的自动编排。包内文件不能嵌入自身最终提交和制品摘要；0.27.0 是否完成最终冻结，必须查看同批包外 release receipt 是否绑定新的 clean commit、product identity、五件制品和独立验收结果：
 
 | 工作包 | 2026-09-08 本地状态 | 仍未完成的边界 |
 | --- | --- | --- |
@@ -19,6 +19,7 @@
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits`/Schema 1；下载来源复核复制；版本化草稿与不可变计划；多个 H.264/AAC MP4 分段；PNG 封面抽帧、比例裁切、缩放与标题；确认、取消、重试；编辑视频显式复制到上传域 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
 | T19 AI | 严格 SRT/VTT 时间轴与 transcription/translation/speech provider 合同、能力状态已完成 | 自动听写、翻译、配音、逐段试听、模型安装/许可/隐私/性能验收均未完成；声音克隆首批禁用 |
+| 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.27.0 最终 receipt 后的同一构建分别执行 |
 
 当前树的最终全量结果：`2450 passed, 8 skipped in 358.21s`。编辑定向、真实媒体 smoke 与浏览器证据见本轮记录；8 个 skip 分别对应 POSIX directory-fd、root/getfacl、Unix domain socket、POSIX replacement 与 permission-bit 环境门槛。以上均是本地 synthetic/offline 工程证据，不改变 AI、真实平台与最终发行状态。
