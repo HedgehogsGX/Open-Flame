@@ -2,7 +2,7 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
@@ -10,6 +10,8 @@
 2026-09-09 多分段自动流程切片：Workflow Schema 2 以 `outputs_json` 保存最多 10 个按 recipe ordinal 排列的视频输出；每个输出分别绑定上传 source，并按冻结账号顺序保存 account/platform/current job slot。最多 3 个账号形成不超过 30 个草稿，逐段准备通过稳定幂等键和 durable prefix checkpoint 恢复，但所有草稿仍要一起交给一次 `confirm_many`，任一校验失败时整批不会进入队列。retry 只原位替换当前 leaf job ID，并重新要求确认；Schema 1 只在精确结构、canonical profile/digest、单输出基数和状态/引用一致时事务迁移，矛盾数据库保持 Schema 1。自动 AI 多段只允许首尾连续，避免用 bounding clip 外发未选择的音频。证据见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)。
 
 2026-09-09 多分段生产界面：`/workflows` 已从单段表单改为 1–10 个有序分段，可添加、删除和完整恢复多段预设；提交前核对 100 ms 下限、七天范围、输入顺序、无重叠及 AI 首尾连续。每次分段变化都会撤销旧的 AI 外发同意。页面内限制最多 3 个账号，并显示计划成品、已准备 source、`segment × account` 投稿任务数与批量确认总数；无变化轮询不重建记录，重绘时恢复相同操作的键盘焦点。实现仅复用当前共享组件，未提前采用待选液态玻璃视觉。ignored Chromium 验证覆盖三段 body、10 段上限、预设、焦点和 320 px，无真实网络；证据见[多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)。
+
+2026-09-09 自动执行就绪度：`/workflows` 在创建前分别显示本次托管下载 Worker 心跳、AI runtime/三项精确 authorization、上传 runtime/当前 scheduler，以及 `active + ready` 的所选账号。页面按当前是否启用 AI 汇总必需条件；单个探针失败只标记对应项未知，下载状态的两秒轮询不重建表单，并保留输入、账号选区和焦点。实现只复用现有同源 GET 和共享组件，没有新增 API、数据库、线程或服务；前端即时状态不替代服务端创建/领取/执行校验，也不证明远端接受。ignored Chromium 验证覆盖 ready、未选账号、暂停、503、live region 和 320 px；证据见[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)。
 
 2026-09-09 前端视觉准备：已按本地 `huashu-design`、`apple-design` 与 `emil-design-eng` 生成三套可运行液态玻璃候选，分别侧重雾面工具台、极光工作区和编辑式玻璃排版；生产 CSS/页面尚未采用新方向。候选位于 ignored 的 `validation/local/liquid-glass-directions-20260909/`，本机比较页为 `http://127.0.0.1:18832/validation/local/liquid-glass-directions-20260909/compare.html`。建议采用 A 的工作区结构和 C 的字体层级；用户选定后再实施四页统一视觉、窄屏、键盘、减少动态/透明度与浏览器 QA。
 
@@ -46,7 +48,7 @@
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.28.0 本地范围见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
+当前 0.28.0 本地范围见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[生产多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -594,7 +596,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 4. 渲染按每个分段裁出并归零字幕/配音时间轴；边界切入 cue 时拒绝，纯 B-roll 分段使用空字幕与本地静音。保留原声时固定压到 22% 后再混入配音。
 5. AI task、配音计划与上传 retry leaf 都不会在重启或重试后静默继续：必须重新确认，已经完成的远程批次/cue 可能重复计费。Workflow 冻结账号 `session_revision`；每个 segment/source/account/platform slot 独立持久化，逐段创建失败从 durable prefix 幂等恢复，最多 30 个草稿只经一次完整批量确认。待确认任务若经历重新登录会以 `account_session_changed` 停止；上传 retry lineage 只接受账号、来源和平台不变的唯一后继链。
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
-7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、内联 JS、依赖一致性和本机浏览器检查已通过；当前相关既有回归 263 passed，文档/发行回归 102 passed，测试文件保持未改。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产自动流程页现可完整恢复 0–10 段，并显示最多 30 个投稿任务的 fan-out。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
+7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、当前内联 JS、依赖一致性和本机浏览器检查已通过；当前相关既有回归 263 passed，文档/发行回归 102 passed，测试文件保持未改。`tests/test_api.py` 当前另为 19 passed、1 failed：既有版本断言仍期待 `0.27.0`，而项目已是 `0.28.0`；按仓库策略不修改测试，因此完整 CI 尚不能标绿。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产自动流程页现可完整恢复 0–10 段，并显示最多 30 个投稿任务的 fan-out。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
 9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。液态玻璃三套 ignored 本地候选已经生成，生产四页必须在用户选定方向后实施。
 
