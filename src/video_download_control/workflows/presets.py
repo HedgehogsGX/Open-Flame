@@ -22,11 +22,13 @@ from uuid import uuid4
 
 from ..editing.contracts import recipe_from_mapping
 from ..uploads.contracts import UploadError
-from ..uploads.service import (
-    UploadService,
-    _PLATFORM_OPTION_KEYS,
-    _TARGET_OVERRIDE_KEYS,
-    _text as _upload_text,
+from ..uploads.metadata import (
+    PLATFORM_OPTION_KEYS,
+    TARGET_OVERRIDE_KEYS,
+    normalize_platform_options,
+    normalize_upload_tags,
+    normalize_upload_text,
+    validate_publish_schedule,
 )
 from .service import WorkflowError, _profile as _workflow_profile
 
@@ -112,17 +114,19 @@ def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _upload_overrides(upload: dict[str, Any]) -> None:
     """Validate metadata without opening an account or media database."""
     try:
-        upload["tags"] = UploadService._normalize_tags(upload["tags"])
+        upload["tags"] = normalize_upload_tags(upload["tags"])
         normalized = []
         for raw in upload["target_overrides"]:
-            if set(raw) - _TARGET_OVERRIDE_KEYS or set(raw) == {"account_id"}:
+            if set(raw) - TARGET_OVERRIDE_KEYS or set(raw) == {"account_id"}:
                 raise WorkflowPresetError("workflow_preset_invalid")
             item = dict(raw)
             for key, maximum in (("title", 100), ("description", 2000), ("source_credit", 200)):
                 if key in item:
-                    item[key] = _upload_text(item[key], maximum, required=key == "title")
+                    item[key] = normalize_upload_text(
+                        item[key], maximum, required=key == "title"
+                    )
             if "tags" in item:
-                item["tags"] = UploadService._normalize_tags(item["tags"])
+                item["tags"] = normalize_upload_tags(item["tags"])
             for key, maximum in (("category_id", 10000), ("copyright", 2)):
                 if key in item and (type(item[key]) is not int or not 1 <= item[key] <= maximum):
                     raise WorkflowPresetError("workflow_preset_invalid")
@@ -133,21 +137,22 @@ def _upload_overrides(upload: dict[str, Any]) -> None:
                     _id(item[key])
             # Only generic bounds are checked here. Creation still runs normal
             # upload preflight for current time, platform, accounts and covers.
-            UploadService._validate_schedule(
+            validate_publish_schedule(
                 "bilibili", item.get("publish_at_unix"),
                 item.get("publish_timezone_offset_minutes"), now=0,
+                enforce_tencent_horizon=False,
             )
             options = item.get("platform_options")
             if options is not None:
                 if not isinstance(options, dict):
                     raise WorkflowPresetError("workflow_preset_invalid")
                 platform = next((
-                    platform for platform, keys in _PLATFORM_OPTION_KEYS.items()
+                    platform for platform, keys in PLATFORM_OPTION_KEYS.items()
                     if set(options) <= keys
                 ), None)
                 if platform is None:
                     raise WorkflowPresetError("workflow_preset_invalid")
-                parsed = UploadService._normalize_platform_options(platform, options)
+                parsed = normalize_platform_options(platform, options)
                 item["platform_options"] = {key: parsed[key] for key in options}
             normalized.append(item)
         upload["target_overrides"] = normalized

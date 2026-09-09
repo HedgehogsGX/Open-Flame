@@ -35,11 +35,13 @@ from .contracts import (
     is_tencent_short_title_output,
     normalize_tencent_short_title,
 )
-from .service import (
+from .metadata import (
     DOUYIN_DECLARATIONS,
-    MAX_COVER_BYTES,
     TENCENT_CONTENT_LABELS,
     TITLE_LIMITS,
+)
+from .service import (
+    MAX_COVER_BYTES,
     _SAFE_CODE,
     _cover_metadata,
 )

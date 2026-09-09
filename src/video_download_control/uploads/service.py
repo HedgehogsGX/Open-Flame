@@ -43,6 +43,18 @@ from .contracts import (
     normalize_tencent_short_title,
 )
 from .login_progress import validate_update
+from .metadata import (
+    DOUYIN_DECLARATIONS,
+    SCHEDULE_LEAD_SECONDS,
+    TARGET_OVERRIDE_KEYS,
+    TENCENT_CONTENT_LABELS,
+    TENCENT_SCHEDULE_MAX_SECONDS,
+    TITLE_LIMITS,
+    normalize_platform_options,
+    normalize_upload_tags,
+    normalize_upload_text,
+    validate_publish_schedule,
+)
 from .schema import UploadSchemaError, ensure_upload_schema
 
 MAX_SOURCE_BYTES = 2 * 1024**3
@@ -50,31 +62,6 @@ MAX_COVER_BYTES = 20 * 1024**2
 MAX_COVER_DECODED_BYTES = 64 * 1024**2
 MAX_COVER_PIXELS = 40_000_000
 UPLOAD_RESERVE_BYTES = 64 * 1024**2
-TITLE_LIMITS = {"bilibili": 80, "douyin": 30, "tencent": 100}
-# Reserve the platform's minimum lead plus the real backend's two-hour upload
-# timeout and five minutes for process/form overhead.  Browser adapters perform
-# a separate final-action check against the platform minimum itself.
-SCHEDULE_LEAD_SECONDS = {
-    "bilibili": 6 * 60 * 60 + 5 * 60,
-    "douyin": 4 * 60 * 60 + 5 * 60,
-    "tencent": 4 * 60 * 60 + 5 * 60,
-}
-DOUYIN_DECLARATIONS = frozenset({
-    "内容由AI生成", "内容为转载信息", "内容为个人观点或见解",
-})
-TENCENT_CONTENT_LABELS = frozenset({"含AI生成内容"})
-TENCENT_SCHEDULE_MAX_SECONDS = 28 * 24 * 60 * 60
-_PLATFORM_OPTION_KEYS = {
-    "bilibili": frozenset({"dynamic", "no_reprint", "close_comments", "close_danmu"}),
-    "douyin": frozenset({"declaration"}),
-    "tencent": frozenset({"short_title", "content_label"}),
-}
-_TARGET_OVERRIDE_KEYS = frozenset({
-    "account_id", "title", "description", "tags", "category_id", "mode",
-    "copyright", "source_credit", "cover_landscape_asset_id",
-    "cover_portrait_asset_id", "publish_at_unix",
-    "publish_timezone_offset_minutes", "platform_options",
-})
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
@@ -138,15 +125,6 @@ def _identifier(value: str) -> str:
     if not isinstance(value, str) or not _ID.fullmatch(value):
         raise UploadError("invalid_identifier")
     return value
-
-
-def _text(value: str, maximum: int, *, required: bool = False) -> str:
-    if (not isinstance(value, str) or len(value) > maximum
-        or any(ord(c) < 32 and c not in "\n\t\r" for c in value)):
-        raise UploadError("invalid_metadata")
-    if required and not value.strip():
-        raise UploadError("invalid_metadata")
-    return value.strip()
 
 
 def _png_dimensions(payload: bytes) -> tuple[int, int] | None:
@@ -934,7 +912,7 @@ class UploadService:
     def add_account(self, platform: str, name: str) -> dict:
         if platform not in PLATFORMS:
             raise UploadError("unsupported_upload_platform")
-        name = _text(name, 60, required=True)
+        name = normalize_upload_text(name, 60, required=True)
         account_id = uuid4().hex
         try:
             with self._db() as db:
@@ -1346,7 +1324,7 @@ class UploadService:
         expected_sha256: str | None = None,
         managed_id: str | None = None,
     ) -> dict:
-        name = _text(name, 180, required=True)
+        name = normalize_upload_text(name, 180, required=True)
         if any(char in name for char in '/\\:\x00') or name in (".", ".."):
             raise UploadError("invalid_cover_name")
         suffix = Path(name).suffix.lower()
@@ -1692,7 +1670,7 @@ class UploadService:
         expected_sha256: str | None = None,
         managed_id: str | None = None,
     ) -> dict:
-        name = _text(name, 180, required=True)
+        name = normalize_upload_text(name, 180, required=True)
         if any(char in name for char in '/\\:\x00') or name in (".", ".."):
             raise UploadError("invalid_source_name")
         suffix = Path(name).suffix.lower()
@@ -2230,13 +2208,13 @@ class UploadService:
         normalized_account_ids = [_identifier(item) for item in account_ids]
         if len(set(normalized_account_ids)) != len(normalized_account_ids):
             raise UploadError("upload_request_invalid")
-        title = _text(expected["title"], 100, required=True)
-        description = _text(expected["description"], 2000)
-        tags = self._normalize_tags(expected["tags"])
+        title = normalize_upload_text(expected["title"], 100, required=True)
+        description = normalize_upload_text(expected["description"], 2000)
+        tags = normalize_upload_tags(expected["tags"])
         category_id = expected["category_id"]
         mode = expected["mode"]
         copyright_value = expected["copyright"]
-        source_credit = _text(expected["source_credit"], 200)
+        source_credit = normalize_upload_text(expected["source_credit"], 200)
         if (
             mode not in {"publish", "draft"}
             or category_id is not None
@@ -2256,7 +2234,7 @@ class UploadService:
         for raw in raw_overrides:
             if (
                 not isinstance(raw, Mapping)
-                or set(raw) - _TARGET_OVERRIDE_KEYS
+                or set(raw) - TARGET_OVERRIDE_KEYS
                 or set(raw) == {"account_id"}
             ):
                 raise UploadError("upload_request_invalid")
@@ -2304,21 +2282,11 @@ class UploadService:
         return self._job_public(row)
 
     @staticmethod
-    def _normalize_tags(tags) -> list[str]:
-        if not isinstance(tags, list) or len(tags) > 10:
-            raise UploadError("invalid_tags")
-        normalized = [_text(tag, 20, required=True) for tag in tags]
-        if (len(set(normalized)) != len(normalized)
-                or any(any(c in tag for c in ",，#＃\n\r\t") for tag in normalized)):
-            raise UploadError("invalid_tags")
-        return normalized
-
-    @staticmethod
     def _normalize_v2_replay_tags(tags) -> list[str]:
         """Map only a pre-Schema-3 request onto its migrated stored tags."""
         if not isinstance(tags, list) or len(tags) > 10:
             raise UploadError("invalid_tags")
-        legacy = [_text(tag, 20, required=True) for tag in tags]
+        legacy = [normalize_upload_text(tag, 20, required=True) for tag in tags]
         if (len(set(legacy)) != len(legacy)
                 or any(any(c in tag for c in ",\n\r\t") for tag in legacy)):
             raise UploadError("invalid_tags")
@@ -2330,67 +2298,6 @@ class UploadService:
             if tag not in normalized:
                 normalized.append(tag)
         return normalized
-
-    @staticmethod
-    def _normalize_platform_options(platform: str, value) -> dict:
-        if value is None:
-            value = {}
-        if not isinstance(value, dict) or set(value) - _PLATFORM_OPTION_KEYS[platform]:
-            raise UploadError("unsupported_platform_option")
-        if platform == "bilibili":
-            dynamic_value = value.get("dynamic", "")
-            dynamic = "" if dynamic_value is None else _text(dynamic_value, 250)
-            options = {"dynamic": dynamic}
-            for key in ("no_reprint", "close_comments", "close_danmu"):
-                option = value.get(key, False)
-                if type(option) is not bool:
-                    raise UploadError("invalid_platform_option")
-                options[key] = option
-        elif platform == "douyin":
-            declaration = value.get("declaration")
-            if declaration is not None:
-                declaration = _text(declaration, 30, required=True)
-                if declaration not in DOUYIN_DECLARATIONS:
-                    raise UploadError("unsupported_declaration")
-            options = {"declaration": declaration}
-        else:
-            short_title = value.get("short_title")
-            if short_title is not None:
-                short_title = _text(short_title, 15, required=True)
-                if len(short_title) < 7:
-                    raise UploadError("tencent_short_title_length")
-            content_label = value.get("content_label")
-            if content_label is not None:
-                content_label = _text(content_label, 30, required=True)
-                if content_label not in TENCENT_CONTENT_LABELS:
-                    raise UploadError("unsupported_content_label")
-            options = {"short_title": short_title, "content_label": content_label}
-        if len(json.dumps(options, ensure_ascii=False, separators=(",", ":"),
-                          sort_keys=True).encode("utf-8")) > 4096:
-            raise UploadError("platform_options_too_large")
-        return options
-
-    @staticmethod
-    def _validate_schedule(platform: str, publish_at_unix, offset_minutes,
-                           *, now: int | None = None) -> tuple[int | None, int | None]:
-        if publish_at_unix is None:
-            if offset_minutes is not None:
-                raise UploadError("publish_timezone_without_time")
-            return None, None
-        if (type(publish_at_unix) is not int or not 1_700_000_000 <= publish_at_unix <= 4_102_444_800
-                or type(offset_minutes) is not int or not -840 <= offset_minutes <= 840):
-            raise UploadError("invalid_publish_time")
-        current = int(time.time()) if now is None else now
-        if publish_at_unix <= current + SCHEDULE_LEAD_SECONDS[platform]:
-            raise UploadError("publish_time_too_soon")
-        if publish_at_unix % 60:
-            raise UploadError("publish_time_precision_unsupported")
-        if platform == "tencent":
-            if (publish_at_unix + offset_minutes * 60) % 3600:
-                raise UploadError("tencent_schedule_requires_whole_hour")
-            if now is None and publish_at_unix > current + TENCENT_SCHEDULE_MAX_SECONDS:
-                raise UploadError("tencent_schedule_too_far")
-        return publish_at_unix, offset_minutes
 
     def _verified_cover_row(self, db, asset_id: str | None):
         if asset_id is None:
@@ -2441,11 +2348,11 @@ class UploadService:
         ):
             raise UploadError("unsupported_platform_field")
         raw = {**base, **{key: value for key, value in override.items() if key != "account_id"}}
-        title = _text(raw["title"], 100, required=True)
+        title = normalize_upload_text(raw["title"], 100, required=True)
         if len(title) > TITLE_LIMITS[platform]:
             raise UploadError("title_too_long")
-        description = _text(raw.get("description", ""), 2000)
-        tags = self._normalize_tags(raw.get("tags", []))
+        description = normalize_upload_text(raw.get("description", ""), 2000)
+        tags = normalize_upload_tags(raw.get("tags", []))
         mode = raw.get("mode", "publish")
         if mode not in {"publish", "draft"}:
             raise UploadError("invalid_metadata")
@@ -2454,7 +2361,7 @@ class UploadService:
 
         category_id = raw.get("category_id")
         copyright = raw.get("copyright")
-        source_credit = _text(raw.get("source_credit", ""), 200)
+        source_credit = normalize_upload_text(raw.get("source_credit", ""), 200)
         if category_id is not None and (
             type(category_id) is not int or not 1 <= category_id <= 10000
         ):
@@ -2489,13 +2396,14 @@ class UploadService:
             if platform == "douyin" and landscape_id is not None and portrait_id is not None:
                 raise UploadError("multiple_covers_unsupported")
 
-        publish_at, offset = self._validate_schedule(
+        publish_at, offset = validate_publish_schedule(
             platform, raw.get("publish_at_unix"), raw.get("publish_timezone_offset_minutes"),
-            now=None if enforce_schedule else 0,
+            now=int(time.time()) if enforce_schedule else 0,
+            enforce_tencent_horizon=enforce_schedule,
         )
         if mode == "draft" and publish_at is not None:
             raise UploadError("draft_schedule_unsupported")
-        options = self._normalize_platform_options(platform, raw.get("platform_options"))
+        options = normalize_platform_options(platform, raw.get("platform_options"))
         if platform == "tencent":
             short_title = options["short_title"]
             options["short_title"] = (
@@ -2613,13 +2521,13 @@ class UploadService:
         for account_id in account_ids:
             _identifier(account_id)
         base = {
-            "title": _text(title, 100, required=True),
-            "description": _text(description, 2000),
-            "tags": self._normalize_tags(tags),
+            "title": normalize_upload_text(title, 100, required=True),
+            "description": normalize_upload_text(description, 2000),
+            "tags": normalize_upload_tags(tags),
             "category_id": category_id,
             "mode": mode,
             "copyright": copyright,
-            "source_credit": _text(source_credit, 200),
+            "source_credit": normalize_upload_text(source_credit, 200),
             "cover_landscape_asset_id": None,
             "cover_portrait_asset_id": None,
             "publish_at_unix": None,
@@ -2645,7 +2553,7 @@ class UploadService:
         for override in target_overrides:
             if (
                 not isinstance(override, dict)
-                or set(override) - _TARGET_OVERRIDE_KEYS
+                or set(override) - TARGET_OVERRIDE_KEYS
                 or set(override) == {"account_id"}
             ):
                 raise UploadError("invalid_target_override")
@@ -2707,12 +2615,12 @@ class UploadService:
             raise UploadError("invalid_accounts")
         for account_id in account_ids:
             _identifier(account_id)
-        title = _text(title, 100, required=True)
-        description = _text(description, 2000)
-        source_credit = _text(source_credit, 200)
+        title = normalize_upload_text(title, 100, required=True)
+        description = normalize_upload_text(description, 2000)
+        source_credit = normalize_upload_text(source_credit, 200)
         raw_tags = tags
         try:
-            tags = self._normalize_tags(tags)
+            tags = normalize_upload_tags(tags)
             tags_error = None
         except UploadError as exc:
             tags = None
@@ -2737,7 +2645,7 @@ class UploadService:
             raise UploadError("invalid_target_overrides")
         override_map: dict[str, dict] = {}
         for override in target_overrides:
-            if (not isinstance(override, dict) or set(override) - _TARGET_OVERRIDE_KEYS
+            if (not isinstance(override, dict) or set(override) - TARGET_OVERRIDE_KEYS
                     or set(override) == {"account_id"}):
                 raise UploadError("invalid_target_override")
             account_id = _identifier(override.get("account_id"))
@@ -2962,7 +2870,7 @@ class UploadService:
             "account_id": job["account_id"],
             **{
                 key: job[key]
-                for key in _TARGET_OVERRIDE_KEYS
+                for key in TARGET_OVERRIDE_KEYS
                 if key != "account_id"
             },
         }
@@ -2980,10 +2888,11 @@ class UploadService:
             **persisted_target,
         }:
             raise UploadError("invalid_metadata")
-        self._validate_schedule(
+        validate_publish_schedule(
             job["platform"],
             job["publish_at_unix"],
             job["publish_timezone_offset_minutes"],
+            now=int(time.time()),
         )
         source = db.execute(
             "SELECT * FROM sources WHERE id=?", (job["source_id"],)
@@ -3204,9 +3113,10 @@ class UploadService:
             successor = db.execute("SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid LIMIT 1", (job_id,)).fetchone()
             if successor:
                 return self._get_job(db, successor["id"])
-            self._validate_schedule(
+            validate_publish_schedule(
                 job["platform"], job["publish_at_unix"],
                 job["publish_timezone_offset_minutes"],
+                now=int(time.time()),
             )
             account = db.execute("SELECT lifecycle_state FROM accounts WHERE id=?",
                                  (job["account_id"],)).fetchone()
@@ -3384,9 +3294,10 @@ class UploadService:
                 if (account is None or account["lifecycle_state"] != "active"
                         or account["auth_state"] != "ready"):
                     raise UploadError("account_not_ready")
-                self._validate_schedule(
+                validate_publish_schedule(
                     row["platform"], row["publish_at_unix"],
                     row["publish_timezone_offset_minutes"],
+                    now=int(time.time()),
                 )
                 path = self._source_path(row["source_id"])
                 with self._db() as db:

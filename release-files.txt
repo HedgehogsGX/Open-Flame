@@ -182,6 +182,7 @@ src/video_download_control/uploads/bridge.py
 src/video_download_control/uploads/browser_login.py
 src/video_download_control/uploads/contracts.py
 src/video_download_control/uploads/login_progress.py
+src/video_download_control/uploads/metadata.py
 src/video_download_control/uploads/runtime-lock.json
 src/video_download_control/uploads/runtime_setup.py
 src/video_download_control/uploads/schema.py
