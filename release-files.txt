@@ -147,6 +147,7 @@ src/video_download_control/local_app_storage.py
 src/video_download_control/local_http_guard.py
 src/video_download_control/local_short_links.py
 src/video_download_control/local_worker_cli.py
+src/video_download_control/managed_files.py
 src/video_download_control/normalization.py
 src/video_download_control/observability.py
 src/video_download_control/relay_cli.py

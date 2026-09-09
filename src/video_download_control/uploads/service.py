@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import sqlite3
-import stat
 import struct
 import threading
 import time
@@ -26,6 +25,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
+
+from ..managed_files import UnsafeManagedPath, file_signature, lstat_plain
 
 from .activity_lock import (
     UploadActivityBusy,
@@ -108,18 +109,10 @@ def _now() -> str:
 
 
 def _plain(path: Path, *, directory: bool = False) -> os.stat_result:
-    info = path.lstat()
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    if (stat.S_ISLNK(info.st_mode)
-        or getattr(info, "st_file_attributes", 0) & reparse
-        or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
-        or (not directory and info.st_nlink != 1)):
-        raise UploadError("unsafe_upload_file")
-    return info
-
-
-def _signature(info: os.stat_result) -> tuple:
-    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+    try:
+        return lstat_plain(path, directory=directory)
+    except UnsafeManagedPath:
+        raise UploadError("unsafe_upload_file") from None
 
 
 def _identifier(value: str) -> str:
@@ -618,16 +611,16 @@ class UploadService:
         digest, total = hashlib.sha256(), 0
         try:
             with path.open("rb") as handle:
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError(changed_code)
                 while chunk := handle.read(1024 * 1024):
                     total += len(chunk)
                     if total > maximum:
                         raise UploadError(size_code)
                     digest.update(chunk)
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError(changed_code)
-            if total != before.st_size or _signature(_plain(path)) != _signature(before):
+            if total != before.st_size or file_signature(_plain(path)) != file_signature(before):
                 raise UploadError(changed_code)
         except UploadError:
             raise
@@ -641,14 +634,14 @@ class UploadService:
     ) -> tuple[bytes, str]:
         try:
             with path.open("rb") as handle:
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("cover_changed")
                 payload = handle.read(MAX_COVER_BYTES + 1)
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("cover_changed")
             if len(payload) > MAX_COVER_BYTES:
                 raise UploadError("cover_size_invalid")
-            if len(payload) != before.st_size or _signature(_plain(path)) != _signature(before):
+            if len(payload) != before.st_size or file_signature(_plain(path)) != file_signature(before):
                 raise UploadError("cover_changed")
         except UploadError:
             raise
@@ -1106,7 +1099,7 @@ class UploadService:
         if info.st_size != row["size"]:
             return "changed", info.st_size
         cached = self._source_integrity_cache.get(row["id"])
-        if cached is not None and cached[0] == _signature(info) and not cached[1]:
+        if cached is not None and cached[0] == file_signature(info) and not cached[1]:
             return "changed", info.st_size
         return "present", info.st_size
 
@@ -1123,14 +1116,14 @@ class UploadService:
             if before.st_size != row["size"]:
                 raise UploadError("source_changed")
             with path.open("rb") as handle:
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("source_changed")
                 digest = hashlib.file_digest(handle, "sha256").hexdigest()
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("source_changed")
             after = _plain(path)
-            valid = digest == row["sha256"] and _signature(after) == _signature(before)
-            self._source_integrity_cache[row["id"]] = (_signature(after), valid)
+            valid = digest == row["sha256"] and file_signature(after) == file_signature(before)
+            self._source_integrity_cache[row["id"]] = (file_signature(after), valid)
             if not valid:
                 raise UploadError("source_changed")
         except OSError:
@@ -1175,7 +1168,7 @@ class UploadService:
         if info.st_size != row["size"]:
             return "changed", info.st_size
         cached = self._asset_integrity_cache.get(row["id"])
-        if cached is not None and cached[0] == _signature(info) and not cached[1]:
+        if cached is not None and cached[0] == file_signature(info) and not cached[1]:
             return "changed", info.st_size
         return "present", info.st_size
 
@@ -1191,10 +1184,10 @@ class UploadService:
             if before.st_size != row["size"]:
                 raise UploadError("cover_changed")
             with path.open("rb") as handle:
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("cover_changed")
                 payload = handle.read(MAX_COVER_BYTES + 1)
-                if _signature(os.fstat(handle.fileno())) != _signature(before):
+                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
                     raise UploadError("cover_changed")
             try:
                 mime_type, width, height = _cover_metadata(payload, row["suffix"])
@@ -1208,9 +1201,9 @@ class UploadService:
                 and mime_type == row["mime_type"]
                 and width == row["width"]
                 and height == row["height"]
-                and _signature(after) == _signature(before)
+                and file_signature(after) == file_signature(before)
             )
-            self._asset_integrity_cache[row["id"]] = (_signature(after), valid)
+            self._asset_integrity_cache[row["id"]] = (file_signature(after), valid)
             if not valid:
                 raise UploadError("cover_changed")
         except FileNotFoundError:
@@ -1632,7 +1625,7 @@ class UploadService:
                             f".{source_id}.{uuid4().hex}.delete"
                         )
                         try:
-                            if _signature(_plain(target)) != _signature(before):
+                            if file_signature(_plain(target)) != file_signature(before):
                                 raise UploadError("source_changed")
                             target.rename(quarantine)
                         except FileNotFoundError:
@@ -1770,7 +1763,7 @@ class UploadService:
             published: Path | None = None
             try:
                 with path.open("rb") as src, stage.open("xb") as dst:
-                    if _signature(os.fstat(src.fileno())) != _signature(before):
+                    if file_signature(os.fstat(src.fileno())) != file_signature(before):
                         raise UploadError("source_changed")
                     if os.name != "nt":
                         os.chmod(stage, 0o600)
@@ -1780,11 +1773,11 @@ class UploadService:
                             raise UploadError("source_size_invalid")
                         dst.write(chunk)
                         digest_builder.update(chunk)
-                    if _signature(os.fstat(src.fileno())) != _signature(before):
+                    if file_signature(os.fstat(src.fileno())) != file_signature(before):
                         raise UploadError("source_changed")
                     dst.flush()
                     os.fsync(dst.fileno())
-                if total != before.st_size or _signature(_plain(path)) != _signature(before):
+                if total != before.st_size or file_signature(_plain(path)) != file_signature(before):
                     raise UploadError("source_changed")
                 digest = digest_builder.hexdigest()
                 if expected_sha256 is not None and digest != expected_sha256:
@@ -1845,18 +1838,18 @@ class UploadService:
         published: Path | None = None
         try:
             with path.open("rb") as src, stage.open("xb") as dst:
-                if _signature(os.fstat(src.fileno())) != _signature(before):
+                if file_signature(os.fstat(src.fileno())) != file_signature(before):
                     raise UploadError("source_changed")
                 while chunk := src.read(1024 * 1024):
                     total += len(chunk)
                     digest.update(chunk)
                     dst.write(chunk)
-                if _signature(os.fstat(src.fileno())) != _signature(before):
+                if file_signature(os.fstat(src.fileno())) != file_signature(before):
                     raise UploadError("source_changed")
                 dst.flush()
                 os.fsync(dst.fileno())
             if (total != row["size"] or digest.hexdigest() != row["sha256"]
-                    or _signature(_plain(path)) != _signature(before)):
+                    or file_signature(_plain(path)) != file_signature(before)):
                 raise UploadError("source_restore_mismatch")
             with self._active_guard, self._db() as db:
                 db.execute("BEGIN IMMEDIATE")

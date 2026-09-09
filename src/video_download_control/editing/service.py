@@ -8,13 +8,14 @@ import os
 import re
 import shutil
 import sqlite3
-import stat
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 from uuid import UUID, uuid4
+
+from ..managed_files import UnsafeManagedPath, file_signature, lstat_plain
 
 from .contracts import (
     EditRecipe,
@@ -164,20 +165,11 @@ def _digest(operation: str, payload: Mapping[str, Any]) -> str:
 
 def _plain(path: Path, *, directory: bool = False) -> os.stat_result:
     try:
-        info = path.lstat()
+        return lstat_plain(path, directory=directory)
+    except UnsafeManagedPath:
+        raise EditingError("unsafe_editing_file") from None
     except OSError as exc:
         raise EditingError("editing_media_unavailable") from exc
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    expected = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
-    if (not expected or stat.S_ISLNK(info.st_mode)
-            or getattr(info, "st_file_attributes", 0) & reparse
-            or (not directory and info.st_nlink != 1)):
-        raise EditingError("unsafe_editing_file")
-    return info
-
-
-def _file_signature(info: os.stat_result) -> tuple[int, int, int, int]:
-    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
 def _hash_plain_file(path: Path, *, maximum: int) -> tuple[int, str]:
@@ -188,7 +180,7 @@ def _hash_plain_file(path: Path, *, maximum: int) -> tuple[int, str]:
     try:
         with path.open("rb") as handle:
             opened = os.fstat(handle.fileno())
-            if _file_signature(opened) != _file_signature(before):
+            if file_signature(opened) != file_signature(before):
                 raise EditingError("editing_media_changed")
             while chunk := handle.read(1024 * 1024):
                 digest.update(chunk)
@@ -196,8 +188,8 @@ def _hash_plain_file(path: Path, *, maximum: int) -> tuple[int, str]:
     except OSError as exc:
         raise EditingError("editing_media_unavailable") from exc
     after = _plain(path)
-    if (_file_signature(after_handle) != _file_signature(before)
-            or _file_signature(after) != _file_signature(before)):
+    if (file_signature(after_handle) != file_signature(before)
+            or file_signature(after) != file_signature(before)):
         raise EditingError("editing_media_changed")
     return before.st_size, digest.hexdigest()
 
@@ -219,7 +211,7 @@ def _open_verified_file(
             raise EditingError(error_code)
         handle = path.open("rb")
         opened = os.fstat(handle.fileno())
-        if _file_signature(opened) != _file_signature(before):
+        if file_signature(opened) != file_signature(before):
             raise EditingError(error_code)
         digest = hashlib.sha256()
         chunk_digests: list[bytes] = []
@@ -235,9 +227,9 @@ def _open_verified_file(
         if (
             total != expected_size
             or digest.hexdigest() != expected_sha256
-            or _file_signature(opened) != _file_signature(before)
-            or _file_signature(finished) != _file_signature(before)
-            or _file_signature(after) != _file_signature(before)
+            or file_signature(opened) != file_signature(before)
+            or file_signature(finished) != file_signature(before)
+            or file_signature(after) != file_signature(before)
         ):
             raise EditingError(error_code)
         handle.seek(0)
@@ -2852,7 +2844,7 @@ class EditingService:
         try:
             with source.open("rb") as reader, destination.open("xb") as writer:
                 opened = os.fstat(reader.fileno())
-                if _file_signature(opened) != _file_signature(before):
+                if file_signature(opened) != file_signature(before):
                     raise EditingError("editing_media_changed")
                 while chunk := reader.read(1024 * 1024):
                     digest.update(chunk)
@@ -2865,8 +2857,8 @@ class EditingService:
         except Exception:
             self._discard_unregistered_file(destination)
             raise
-        if (_file_signature(after_handle) != _file_signature(before)
-                or _file_signature(after) != _file_signature(before)
+        if (file_signature(after_handle) != file_signature(before)
+                or file_signature(after) != file_signature(before)
                 or copied.st_size != before.st_size):
             self._discard_unregistered_file(destination)
             raise EditingError("editing_media_changed")
