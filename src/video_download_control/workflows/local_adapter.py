@@ -29,7 +29,7 @@ from .contracts import (
     UploadPrepared,
     UploadSnapshot,
 )
-from .service import WorkflowError
+from .contracts import WorkflowError
 
 if TYPE_CHECKING:
     from ..editing.api import EditingManager

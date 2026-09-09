@@ -30,7 +30,8 @@ from ..uploads.metadata import (
     normalize_upload_text,
     validate_publish_schedule,
 )
-from .service import WorkflowError, _profile as _workflow_profile
+from .contracts import WorkflowError
+from .profile import normalize_workflow_profile
 
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
@@ -190,7 +191,7 @@ def _current_profile(
         # the preset or the next workflow request.
         upload = profile.get("upload") if isinstance(profile, Mapping) else None
         bound = isinstance(upload, Mapping) and "account_bindings" in upload
-        normalized, _, _ = _workflow_profile(
+        normalized, _, _ = normalize_workflow_profile(
             candidate, bound_accounts=bound, require_ai_authorization=True,
         )
         normalized["upload"].pop("account_bindings", None)
@@ -243,7 +244,7 @@ def _stored_profile(profile: object) -> dict[str, Any]:
     # temporary flag validates the template; it is never saved or executed.
     candidate["ai_data_egress_accepted"] = raw_ai is not None
     try:
-        normalized, _, _ = _workflow_profile(candidate)
+        normalized, _, _ = normalize_workflow_profile(candidate)
         _upload_overrides(normalized["upload"])
     except (WorkflowError, TypeError, ValueError, RecursionError) as exc:
         raise WorkflowPresetError("workflow_preset_invalid") from exc

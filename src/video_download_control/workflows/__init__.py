@@ -9,7 +9,8 @@ from .contracts import (
     UploadSnapshot,
     WorkflowDomainAdapter,
 )
-from .service import WorkflowError, WorkflowService, default_workflow_root
+from .contracts import WorkflowError
+from .service import WorkflowService, default_workflow_root
 
 __all__ = [
     "AiSnapshot",

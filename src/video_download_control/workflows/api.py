@@ -15,7 +15,7 @@ from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
 from .manager import WorkflowManager
 from .presets import WorkflowPresetError, WorkflowPresetStore
-from .service import WorkflowError
+from .contracts import WorkflowError
 from .web import WORKFLOW_HTML
 
 

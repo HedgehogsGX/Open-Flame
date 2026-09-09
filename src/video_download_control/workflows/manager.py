@@ -8,7 +8,8 @@ from threading import Condition, Event, RLock, Thread, current_thread
 from time import monotonic
 
 from .contracts import WorkflowDomainAdapter
-from .service import WorkflowError, WorkflowService
+from .contracts import WorkflowError
+from .service import WorkflowService
 
 
 _MIN_RECONCILE_SECONDS = 0.75

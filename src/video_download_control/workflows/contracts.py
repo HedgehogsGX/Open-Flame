@@ -16,6 +16,14 @@ MAX_WORKFLOW_ACCOUNTS = 3
 MAX_WORKFLOW_UPLOAD_JOBS = MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
 
 
+class WorkflowError(ValueError):
+    """A stable workflow-domain error code shared across public boundaries."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 def workflow_outputs_match_state(
     state: object,
     outputs: Sequence[Mapping[str, Any]],

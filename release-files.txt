@@ -207,6 +207,7 @@ src/video_download_control/workflows/contracts.py
 src/video_download_control/workflows/local_adapter.py
 src/video_download_control/workflows/manager.py
 src/video_download_control/workflows/presets.py
+src/video_download_control/workflows/profile.py
 src/video_download_control/workflows/schema.py
 src/video_download_control/workflows/service.py
 src/video_download_control/workflows/web.py
