@@ -18,6 +18,12 @@ from ..domain import ErrorCode
 from ..editing.contracts import EditingError, recipe_from_mapping
 from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
+from ..uploads.identity import (
+    bind_current_upload_target,
+    normalize_account_bindings,
+    normalize_upload_job_batch,
+    normalize_upload_targets,
+)
 from .contracts import (
     AiSnapshot,
     CancellationSnapshot,
@@ -1834,12 +1840,19 @@ class LocalWorkflowAdapter:
             if not isinstance(job, Mapping):
                 raise WorkflowError("workflow_domain_data_invalid")
             job_id = _record_id(job)
-            if (
-                job_id in job_ids
-                or job.get("source_id") != source_id
-                or job.get("account_id") != account_id
-                or job.get("platform") != platforms[account_id]
-            ):
+            try:
+                bind_current_upload_target(
+                    job,
+                    {
+                        "job_id": job_id,
+                        "source_id": source_id,
+                        "account_id": account_id,
+                        "platform": platforms[account_id],
+                    },
+                )
+            except UploadError:
+                raise WorkflowError("workflow_domain_data_invalid") from None
+            if job_id in job_ids:
                 raise WorkflowError("workflow_domain_data_invalid")
             job_ids.append(job_id)
         return UploadPrepared(
@@ -1903,24 +1916,14 @@ class LocalWorkflowAdapter:
                 or len(set(normalized_account_ids)) != len(normalized_account_ids)
             ):
                 raise WorkflowError(_SOURCE_METADATA_ERROR)
-            for binding in bindings:
-                if not isinstance(binding, Mapping) or set(binding) != {
-                    "account_id", "platform", "session_revision",
-                }:
-                    raise WorkflowError(_SOURCE_METADATA_ERROR)
-                account_id = _hex_identifier(binding.get("account_id"))
-                _hex_identifier(binding.get("session_revision"))
-                platform = binding.get("platform")
-                if (
-                    account_id not in account_ids
-                    or account_id in platforms
-                    or platform not in {"bilibili", "douyin", "tencent"}
-                ):
-                    raise WorkflowError(_SOURCE_METADATA_ERROR)
-                platforms[account_id] = platform
-        except WorkflowError:
+            normalized_bindings = normalize_account_bindings(bindings)
+            platforms = {
+                binding["account_id"]: binding["platform"]
+                for binding in normalized_bindings
+            }
+        except (UploadError, WorkflowError):
             raise WorkflowError(_SOURCE_METADATA_ERROR) from None
-        if set(platforms) != set(account_ids):
+        if set(platforms) != set(normalized_account_ids):
             raise WorkflowError(_SOURCE_METADATA_ERROR)
 
         title_limits = self._upload_title_limits(set(platforms.values()))
@@ -2038,44 +2041,18 @@ class LocalWorkflowAdapter:
         normalized_ids = [_hex_identifier(job_id) for job_id in job_ids]
         normalized_targets: list[dict[str, str]] | None = None
         if expected_targets is not None:
-            if (
-                not isinstance(expected_targets, Sequence)
-                or isinstance(expected_targets, (str, bytes))
-                or len(expected_targets) != len(normalized_ids)
-                or len(expected_targets)
-                > MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
-            ):
-                return UploadSnapshot("attention", code="upload_job_set_invalid")
-            normalized_targets = []
-            for index, target in enumerate(expected_targets):
-                if not isinstance(target, Mapping) or set(target) != {
-                    "job_id",
-                    "source_id",
-                    "account_id",
-                    "platform",
-                }:
-                    return UploadSnapshot("attention", code="upload_job_set_invalid")
-                try:
-                    job_id = _hex_identifier(target.get("job_id"))
-                    source_id = _hex_identifier(target.get("source_id"))
-                    account_id = _hex_identifier(target.get("account_id"))
-                except WorkflowError:
-                    return UploadSnapshot("attention", code="upload_job_set_invalid")
-                platform = target.get("platform")
-                if (
-                    job_id != normalized_ids[index]
-                    or not isinstance(platform, str)
-                    or platform not in {"bilibili", "douyin", "tencent"}
-                ):
-                    return UploadSnapshot("attention", code="upload_job_set_invalid")
-                normalized_targets.append(
-                    {
-                        "job_id": job_id,
-                        "source_id": source_id,
-                        "account_id": account_id,
-                        "platform": platform,
-                    }
+            try:
+                normalized_targets = list(
+                    normalize_upload_targets(
+                        normalized_ids,
+                        expected_targets,
+                        maximum_jobs=(
+                            MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
+                        ),
+                    )
                 )
+            except UploadError:
+                return UploadSnapshot("attention", code="upload_job_set_invalid")
         try:
             jobs = self.upload_manager.get().latest_jobs_by_ids(normalized_ids)
         except UploadError as error:
@@ -2092,11 +2069,9 @@ class LocalWorkflowAdapter:
             if job_id in seen:
                 return UploadSnapshot("attention", code="upload_job_set_invalid")
             if normalized_targets is not None:
-                expected = normalized_targets[index]
-                if any(
-                    job.get(field) != expected[field]
-                    for field in ("source_id", "account_id", "platform")
-                ):
+                try:
+                    bind_current_upload_target(job, normalized_targets[index])
+                except UploadError:
                     return UploadSnapshot(
                         "attention", code="upload_job_set_invalid"
                     )
@@ -2257,45 +2232,21 @@ class LocalWorkflowAdapter:
         """Cancel a workflow fan-out only while every persisted identity matches."""
 
         if (
-            not isinstance(job_ids, Sequence)
-            or isinstance(job_ids, (str, bytes))
-            or not 1 <= len(job_ids) <= MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
-            or not isinstance(expected_targets, Sequence)
-            or isinstance(expected_targets, (str, bytes))
-            or len(expected_targets) != len(job_ids)
-            or not isinstance(expected_account_bindings, Sequence)
+            not isinstance(expected_account_bindings, Sequence)
             or isinstance(expected_account_bindings, (str, bytes))
             or not 1 <= len(expected_account_bindings) <= MAX_WORKFLOW_ACCOUNTS
         ):
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
         try:
-            normalized_ids = [_hex_identifier(job_id) for job_id in job_ids]
-        except WorkflowError:
+            normalized_ids, normalized_targets = normalize_upload_job_batch(
+                job_ids,
+                expected_targets,
+                maximum_jobs=MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS,
+            )
+        except UploadError:
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
-        if len(set(normalized_ids)) != len(normalized_ids):
+        if normalized_targets is None:
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
-
-        normalized_targets: list[dict[str, str]] = []
-        for index, target in enumerate(expected_targets):
-            if not isinstance(target, Mapping) or set(target) != {
-                "job_id", "source_id", "account_id", "platform",
-            }:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            try:
-                normalized = {
-                    "job_id": _hex_identifier(target.get("job_id")),
-                    "source_id": _hex_identifier(target.get("source_id")),
-                    "account_id": _hex_identifier(target.get("account_id")),
-                    "platform": target.get("platform"),
-                }
-            except WorkflowError:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            if (
-                normalized["job_id"] != normalized_ids[index]
-                or normalized["platform"] not in {"bilibili", "douyin", "tencent"}
-            ):
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            normalized_targets.append(normalized)
 
         target_accounts: dict[str, str] = {}
         for target in normalized_targets:
@@ -2308,39 +2259,24 @@ class LocalWorkflowAdapter:
                 )
         if len(target_accounts) > MAX_WORKFLOW_ACCOUNTS:
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
-        normalized_bindings: list[dict[str, str]] = []
-        seen_accounts: set[str] = set()
-        for binding in expected_account_bindings:
-            if not isinstance(binding, Mapping) or set(binding) != {
-                "account_id", "platform", "session_revision",
-            }:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            try:
-                account_id = _hex_identifier(binding.get("account_id"))
-                session_revision = _hex_identifier(binding.get("session_revision"))
-            except WorkflowError:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            platform = binding.get("platform")
-            if (
-                account_id in seen_accounts
-                or platform not in {"bilibili", "douyin", "tencent"}
-                or target_accounts.get(account_id) != platform
-            ):
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            seen_accounts.add(account_id)
-            normalized_bindings.append(
-                {
-                    "account_id": account_id,
-                    "platform": platform,
-                    "session_revision": session_revision,
-                }
+        try:
+            normalized_bindings = list(
+                normalize_account_bindings(expected_account_bindings)
             )
+        except UploadError:
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        seen_accounts = {binding["account_id"] for binding in normalized_bindings}
+        if any(
+            target_accounts.get(binding["account_id"]) != binding["platform"]
+            for binding in normalized_bindings
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
         if seen_accounts != set(target_accounts):
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
 
         try:
             service = self.upload_manager.get()
-            jobs = service.latest_jobs_by_ids(normalized_ids)
+            jobs = service.latest_jobs_by_ids(list(normalized_ids))
         except UploadError as error:
             if error.code in {"job_not_found", "invalid_job_ids"}:
                 return CancellationSnapshot("attention", code="upload_job_not_found")
@@ -2350,19 +2286,15 @@ class LocalWorkflowAdapter:
         leaf_targets: list[dict[str, str]] = []
         leaf_ids: set[str] = set()
         for job, expected in zip(jobs, normalized_targets, strict=True):
-            if not isinstance(job, Mapping):
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
             try:
-                leaf_id = _record_id(job)
-            except WorkflowError:
+                leaf_target = bind_current_upload_target(job, expected)
+            except UploadError:
                 return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            if leaf_id in leaf_ids or any(
-                job.get(field) != expected[field]
-                for field in ("source_id", "account_id", "platform")
-            ):
+            leaf_id = leaf_target["job_id"]
+            if leaf_id in leaf_ids:
                 return CancellationSnapshot("attention", code="upload_job_set_invalid")
             leaf_ids.add(leaf_id)
-            leaf_targets.append({**expected, "job_id": leaf_id})
+            leaf_targets.append(leaf_target)
 
         try:
             canceled = service.cancel_many(
@@ -2445,33 +2377,21 @@ class LocalWorkflowAdapter:
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
         if len(set(account_ids)) != len(account_ids):
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
-        binding_platforms: dict[str, str] = {}
-        binding_records: dict[str, dict[str, str]] = {}
-        for binding in expected_account_bindings:
-            if not isinstance(binding, Mapping) or set(binding) != {
-                "account_id", "platform", "session_revision",
-            }:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            try:
-                account_id = _hex_identifier(binding.get("account_id"))
-                session_revision = _hex_identifier(binding.get("session_revision"))
-            except WorkflowError:
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            platform = binding.get("platform")
-            if (
-                account_id not in account_ids
-                or account_id in binding_platforms
-                or platform not in {"bilibili", "douyin", "tencent"}
-            ):
-                return CancellationSnapshot("attention", code="upload_job_set_invalid")
-            binding_platforms[account_id] = platform
-            binding_records[account_id] = {
-                "account_id": account_id,
-                "platform": platform,
-                "session_revision": session_revision,
-            }
-        if set(binding_platforms) != set(account_ids):
+        try:
+            normalized_bindings = normalize_account_bindings(
+                expected_account_bindings
+            )
+        except UploadError:
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        binding_records = {
+            binding["account_id"]: binding for binding in normalized_bindings
+        }
+        if set(binding_records) != set(account_ids):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        binding_platforms = {
+            account_id: binding["platform"]
+            for account_id, binding in binding_records.items()
+        }
         profile_bindings = expected_upload.get("account_bindings")
         if not isinstance(profile_bindings, Sequence) or isinstance(
             profile_bindings, (str, bytes)
@@ -2479,11 +2399,10 @@ class LocalWorkflowAdapter:
             return CancellationSnapshot("attention", code="upload_request_mismatch")
         try:
             profile_binding_records = {
-                _hex_identifier(binding.get("account_id")): dict(binding)
-                for binding in profile_bindings
-                if isinstance(binding, Mapping)
+                binding["account_id"]: binding
+                for binding in normalize_account_bindings(profile_bindings)
             }
-        except WorkflowError:
+        except UploadError:
             return CancellationSnapshot("attention", code="upload_request_mismatch")
         if (
             expected_upload.get("account_ids") != account_ids
@@ -2599,24 +2518,25 @@ class LocalWorkflowAdapter:
                     job_id = _record_id(job)
                 except WorkflowError:
                     return CancellationSnapshot("attention", code="upload_request_invalid")
-                if (
-                    job_id in discovered_ids
-                    or job_id in combined_ids
-                    or job.get("source_id") != source_id
-                    or job.get("account_id") != account_id
-                    or job.get("platform") != binding_platforms[account_id]
-                ):
+                if job_id in discovered_ids or job_id in combined_ids:
                     return CancellationSnapshot("attention", code="upload_request_mismatch")
+                try:
+                    discovered_target = bind_current_upload_target(
+                        job,
+                        {
+                            "job_id": job_id,
+                            "source_id": source_id,
+                            "account_id": account_id,
+                            "platform": binding_platforms[account_id],
+                        },
+                    )
+                except UploadError:
+                    return CancellationSnapshot(
+                        "attention", code="upload_request_mismatch"
+                    )
                 discovered_ids.add(job_id)
                 combined_ids.append(job_id)
-                combined_targets.append(
-                    {
-                        "job_id": job_id,
-                        "source_id": source_id,
-                        "account_id": account_id,
-                        "platform": binding_platforms[account_id],
-                    }
-                )
+                combined_targets.append(discovered_target)
         if not combined_ids:
             return CancellationSnapshot("stopped")
         return self.cancel_uploads(

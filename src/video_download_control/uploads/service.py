@@ -42,6 +42,7 @@ from .contracts import (
     is_tencent_short_title_output,
     normalize_tencent_short_title,
 )
+from .identity import normalize_account_bindings, normalize_upload_job_batch
 from .login_progress import validate_update
 from .metadata import (
     DOUYIN_DECLARATIONS,
@@ -2458,27 +2459,14 @@ class UploadService:
             or len(expected) != len(accounts_by_id)
             or any(
                 not isinstance(item, dict)
-                or set(item) != {"account_id", "platform", "session_revision"}
                 for item in expected
             )
         ):
             raise UploadError("invalid_account_bindings")
-        by_id: dict[str, dict] = {}
-        for item in expected:
-            account_id = _identifier(item.get("account_id"))
-            session_revision = _identifier(item.get("session_revision"))
-            platform = item.get("platform")
-            if (
-                account_id not in accounts_by_id
-                or account_id in by_id
-                or platform not in PLATFORMS
-            ):
-                raise UploadError("invalid_account_bindings")
-            by_id[account_id] = {
-                "account_id": account_id,
-                "platform": platform,
-                "session_revision": session_revision,
-            }
+        normalized = normalize_account_bindings(expected)
+        by_id = {binding["account_id"]: binding for binding in normalized}
+        if any(account_id not in accounts_by_id for account_id in by_id):
+            raise UploadError("invalid_account_bindings")
         account_ids = set(accounts_by_id)
         if verify_account_ids is None:
             verify_account_ids = account_ids
@@ -2907,64 +2895,6 @@ class UploadService:
             job["cover_portrait_asset_id"],
         )
 
-    @staticmethod
-    def _cancel_batch(
-        job_ids: Sequence[str],
-        expected_targets: Sequence[Mapping[str, str]] | None,
-    ) -> tuple[tuple[str, ...], tuple[dict[str, str], ...] | None]:
-        if (
-            not isinstance(job_ids, Sequence)
-            or isinstance(job_ids, (str, bytes))
-            or not 1 <= len(job_ids) <= 30
-        ):
-            raise UploadError("invalid_job_batch")
-        normalized_ids: list[str] = []
-        seen: set[str] = set()
-        for job_id in job_ids:
-            try:
-                normalized_id = _identifier(job_id)
-            except UploadError:
-                raise UploadError("invalid_job_batch") from None
-            if normalized_id in seen:
-                raise UploadError("invalid_job_batch")
-            seen.add(normalized_id)
-            normalized_ids.append(normalized_id)
-
-        if expected_targets is None:
-            return tuple(normalized_ids), None
-        if (
-            not isinstance(expected_targets, Sequence)
-            or isinstance(expected_targets, (str, bytes))
-            or len(expected_targets) != len(normalized_ids)
-        ):
-            raise UploadError("invalid_job_batch")
-        normalized_targets: list[dict[str, str]] = []
-        for index, target in enumerate(expected_targets):
-            if not isinstance(target, Mapping) or set(target) != {
-                "job_id", "source_id", "account_id", "platform",
-            }:
-                raise UploadError("invalid_job_batch")
-            try:
-                target_job_id = _identifier(target.get("job_id"))
-                source_id = _identifier(target.get("source_id"))
-                account_id = _identifier(target.get("account_id"))
-            except UploadError:
-                raise UploadError("invalid_job_batch") from None
-            platform = target.get("platform")
-            if (
-                target_job_id != normalized_ids[index]
-                or not isinstance(platform, str)
-                or platform not in PLATFORMS
-            ):
-                raise UploadError("invalid_job_batch")
-            normalized_targets.append({
-                "job_id": target_job_id,
-                "source_id": source_id,
-                "account_id": account_id,
-                "platform": platform,
-            })
-        return tuple(normalized_ids), tuple(normalized_targets)
-
     def _cancel_current_jobs(
         self,
         db: sqlite3.Connection,
@@ -3067,7 +2997,7 @@ class UploadService:
     ) -> list[dict]:
         """Cancel current upload jobs together without following retry lineage."""
 
-        normalized_ids, normalized_targets = self._cancel_batch(
+        normalized_ids, normalized_targets = normalize_upload_job_batch(
             job_ids, expected_targets
         )
         if expected_account_bindings is None:

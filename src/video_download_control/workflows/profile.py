@@ -15,6 +15,8 @@ from ..editing.ai_authorization import (
     parse_operation_authorization,
 )
 from ..editing.contracts import EditingError, recipe_from_mapping
+from ..uploads.contracts import UploadError
+from ..uploads.identity import normalize_account_bindings
 from .contracts import (
     MAX_WORKFLOW_ACCOUNTS,
     MAX_WORKFLOW_SEGMENTS,
@@ -345,34 +347,14 @@ def normalize_workflow_profile(
             or len(raw_bindings) != len(account_ids)
         ):
             raise WorkflowError("invalid_workflow_profile")
-        seen_bindings: set[str] = set()
-        for item in raw_bindings:
-            if not isinstance(item, Mapping) or set(item) != {
-                "account_id",
-                "platform",
-                "session_revision",
-            }:
-                raise WorkflowError("invalid_workflow_profile")
-            account_id = item.get("account_id")
-            platform = item.get("platform")
-            session_revision = item.get("session_revision")
-            if (
-                not isinstance(account_id, str)
-                or account_id not in account_ids
-                or account_id in seen_bindings
-                or platform not in {"bilibili", "douyin", "tencent"}
-                or not isinstance(session_revision, str)
-                or not _HEX_IDENTIFIER.fullmatch(session_revision)
-            ):
-                raise WorkflowError("invalid_workflow_profile")
-            seen_bindings.add(account_id)
-            normalized_bindings.append(
-                {
-                    "account_id": account_id,
-                    "platform": platform,
-                    "session_revision": session_revision,
-                }
-            )
+        try:
+            normalized_bindings = list(normalize_account_bindings(raw_bindings))
+        except UploadError:
+            raise WorkflowError("invalid_workflow_profile") from None
+        if {binding["account_id"] for binding in normalized_bindings} != set(
+            account_ids
+        ):
+            raise WorkflowError("invalid_workflow_profile")
     normalized: dict[str, Any] = {
         "download_credential_mode": credential_mode,
         "edit_recipe": recipe,
