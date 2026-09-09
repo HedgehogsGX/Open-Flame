@@ -9,11 +9,10 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 from uuid import UUID
 
 from ..credential_defaults import CredentialDefaultsError
-from ..editing.api import EditingManager
 from ..editing.contracts import EditingError, recipe_from_mapping
 from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
@@ -28,6 +27,9 @@ from .contracts import (
     UploadSnapshot,
 )
 from .service import WorkflowError
+
+if TYPE_CHECKING:
+    from ..editing.api import EditingManager
 
 
 _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")

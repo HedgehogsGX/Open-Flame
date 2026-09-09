@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检与三账号上传 fan-out 已通过本地浏览器/故障恢复验证；原始预授权 queued 工作安全重启续跑已通过本地策略、Manager 启动扫描和真实域离线恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、完整视频默认/生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检与三账号上传 fan-out 已通过本地浏览器/故障恢复验证；原始预授权 queued 工作安全重启续跑已通过本地策略、Manager 启动扫描和真实域离线恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 自动流程完整视频默认：`/workflows` 不再默认启用隐藏风险较高的 `0–60 秒` 分段；首次进入显示“完整视频 · 0 段”，AI 流程提交 `segments: []` 并复用既有完整源输出语义。操作者主动开启分段时仍取得一个可编辑的 60 秒起始模板，带分段预设继续精确恢复。真实 Chrome 已验证完整视频请求 body 与既有多分段/窄屏行为；真实下载 Worker、隔离合成 AI runtime、FFmpeg、编辑/上传服务的禁网整链对 2 秒完整源完成听写、翻译、两段配音并向三个合成平台提交同一完整成品。`LocalWorkflowAdapter` 同时把仅用于类型标注的 `EditingManager` 改为 `TYPE_CHECKING` 导入，避免工作流适配器运行时连带载入 FastAPI/Pydantic。没有新增服务、线程、队列、数据库、Schema 或依赖；证据见[完整视频默认记录](validation/iteration-0.28.0-workflow-full-video-default.md)。真实网络、模型质量与平台发布仍未运行。
 
 2026-09-09 已预授权流程安全重启续跑：编辑与上传域仍先把旧进程的 queued 行降回 `review/draft + restart_confirmation_required`，而 WorkflowManager 下一轮只会为 canonical profile 中保存了对应 auto-confirm、当前 leaf 没有 `retry_of`、且当前授权/runtime/source/账号 session/完整平台参数重新校验通过的原始任务重新排队。自动确认只接受正常首次原因和精确 restart 原因；legacy migration、混合或未知 review reason 均保持人工确认。域 claim 都会在 provider、FFmpeg 或上传 backend 前事务性地把 queued 改为 running，因此该 restart code 是“上次未 dispatch”的持久化证据。AI/render/upload retry 的谱系优先于通用 restart code；running、canceling、账本 dispatched/unknown 和上传 unknown 均继续停下。10 段 × 3 账号策略矩阵、混合 review reason、无效或非 canonical 平台参数拒绝、auto flag/profile digest 篡改拒绝、真实 WorkflowManager 启动扫描及真实上传域离线整链均通过，整链没有重放 AI 或渲染；AI/render 的底层恢复另由既有定向回归与 ledger validator 证明。本次不是 abrupt power-loss、浏览器重启链或三域真实 E2E。上传库没有为 otherwise-valid metadata 另存不可变摘要，因此本次不声称能检测 canonical-to-canonical 的直接数据库改写。证据见[预授权重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)。
 
