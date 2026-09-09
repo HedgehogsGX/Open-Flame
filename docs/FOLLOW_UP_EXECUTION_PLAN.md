@@ -19,7 +19,7 @@
 | T14 | 必要生命周期切片在本地完成 | 去重、总配额、自动孤儿清理仍为后续优化 |
 | T07 | 上传备份格式 2 / Upload Schema 3 可保存受管封面、定时和平台参数；旧格式 1 / Schema 2 只读迁移已有本地回归 | 真实容量、异机/offsite、NAS 与人工值班演练未做 |
 | T08 | 三平台串行、300 轮本地轮询和复制中断清理的有界切片完成 | 更广故障矩阵按剩余风险继续补充，不把本切片扩写为长期生产压测 |
-| T09 | 无凭据工作流与本地合同检查完成 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
+| T09 | 托管 Windows/Linux × CPython 3.12.10/3.13.14 四格已运行，测试前环境和门禁均通过 | 完整 pytest 仍红；required checks / branch protection **NOT CONFIGURED** |
 | T10（0.24.4 历史阶段） | 版本号、第 14 个 wheel 命令入口及源码侧发行门禁已接线 | 只保留为 0.24.4 源码准备记录，不能证明 0.25.0 制品 |
 | T16 / G6（0.25.0 历史阶段） | T16.1～T16.7 本地开发与禁止远端调用的 G6 验收完成 | 保留为前端基线，不能证明当前制品或平台能力 |
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
@@ -31,7 +31,7 @@
 
 以下是 0.24.4 冻结准备阶段的历史定向结果，不能单独替代 T10，也不能借给 0.25.0：上传相关精确集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份/发行/CI/验证/部署/API 组合为 **287 passed、4 skipped in 44.13s**，其中 4 个 skip 是 Windows 上的 root/POSIX/getfacl 环境合同。0.25.0 冻结 commit 的全量结果和源码/制品身份只记录在本轮新生成的包外 release receipt。
 
-0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12、T15 与 GitHub hosted CI 当前均未运行；外部开发者和测试员先按[完整测试手册](../TESTING.md)固定身份与执行边界，再按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项决定真实动作，并用[回传模板](EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)留下后续开发入口。
+0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12 与 T15 当前均未运行；GitHub hosted CI 已实际进入四格完整 pytest，但测试仍红，不能称为门禁通过。外部开发者和测试员先按[完整测试手册](../TESTING.md)固定身份与执行边界，再按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项决定真实动作，并用[回传模板](EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)留下后续开发入口。
 
 ## 2. 执行顺序与阶段门槛
 
@@ -92,7 +92,7 @@ T06 文档、T09 CI 设计可与阶段 A 并行；真实上传测试须先过 G1
 
 T14 先确定账号/媒体生命周期，再冻结 T07 的备份格式。T15 是 Linux/Docker/NAS 的独立环境验收支线，不据此阻断已经明确仅支持 Windows 的源码测试版，也不能省略后宣称跨平台通过。工作包编号用于跟踪，执行先后以本节依赖为准。
 
-T19 延续 T16 设计规范和 T17 逐任务确认；自动流程按预授权或逐节点确认推进，未知远端结果仍停止。T11/T12/T15 与 GitHub hosted CI 保持 **NOT RUN**。不能用 G6～G9 的本地页面、合成媒体或截图替代外部能力证据。必须以 0.28.0 的 clean commit 构建并独立安装五件制品，再由包外 receipt 绑定，才可交给 T11/T12 或称为最终交付包。
+T19 延续 T16 设计规范和 T17 逐任务确认；自动流程按预授权或逐节点确认推进，未知远端结果仍停止。T11/T12/T15 保持 **NOT RUN**；GitHub hosted CI 的执行链已经恢复，但当前完整 pytest 为 **FAIL**。不能用 G6～G9 的本地页面、合成媒体或截图替代外部能力证据。必须以 0.28.0 的 clean commit 构建并独立安装五件制品，再由包外 receipt 绑定，才可交给 T11/T12 或称为最终交付包。
 
 ## 3. 工作包与验收条件
 
@@ -198,17 +198,17 @@ T19 延续 T16 设计规范和 T17 逐任务确认；自动流程按预授权或
 
 ### T09 / P2：无凭据持续集成与发布门禁
 
-- Windows CPython 3.12/3.13 覆盖普通入口、上传 UI/服务、运行时契约和发行安装的适用子集；Node 用于当前 JS harness。
+- Windows CPython 3.12/3.13 覆盖普通入口、上传 UI/服务、运行时契约和发行安装的适用子集；当前 workflow 只输出 Node runtime identity，不另行声称存在独立 Node UI harness。
 - Linux runner 执行 Linux/POSIX 相关测试，root/getfacl/network namespace 要求单独命名，不把普通容器里的 skip 当通过。
 - 核对 Python lock、静态文件/许可/隐私规则、Markdown 当前口径及发行清单；只缓存按 hash 固定的依赖/工具。
 - CI 不存真实平台 Cookie，不扫码，不发布视频；日志和报告按现有脱敏规范输出。
-- CI 配置通过后，再按仓库维护流程设置 required checks；分支保护属于另一个需要实际配置并核验的动作。
+- 四格完整通过后，再按仓库维护流程设置 required checks；分支保护属于另一个需要实际配置并核验的动作。
 
 **验收：** 新分支或 PR 自动触发；人为引入一项断言/清单错误会阻断；Windows 与 Linux 结果明确分开；发布候选可定位到单个固定 commit。
 
 **依赖：** 可并行搭建，纳入 T01～T08 的回归。**交付：** 工作流、失败演练、门禁说明与托管配置记录。
 
-**2026-09-07 状态：工作流及本地合同完成，托管状态未完成。** `.github/workflows/ci.yml` 配置 push、pull request 与手动触发的 Windows/Linux × CPython 3.12.13/3.13.14 四格矩阵，权限为 `contents: read`，不保留 checkout 凭据；action commit 与 `uv 0.11.25` 精确固定。validator 及内存破坏测试覆盖 pin、权限、trigger 和失败传播。工作流尚未推送触发，GitHub hosted checks 为 **NOT RUN**；仓库 required checks / branch protection 为 **NOT CONFIGURED**。普通 hosted Linux 的环境 skip 也不能替代 T15。
+**2026-09-10 状态：托管执行链恢复，完整测试仍失败。** `.github/workflows/ci.yml` 配置 push、pull request 与手动触发的 Windows/Linux × CPython 3.12.10/3.13.14 四格矩阵，权限为 `contents: read`，不保留 checkout 凭据；action commit 与 `uv 0.11.25` 精确固定。完整 checkout 允许 `verify_commit_scope.py --github-event` 从事件 base/head 求 merge-base 并在依赖安装前检查提交范围；locked dev environment 绑定矩阵 Python，测试前再核对实际 Python patch 与 pytest 身份。[run 34393235622](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34393235622) 绑定 `bdd88ce184b2f86f957f7df9129baa21863227dd`，四格均已通过完整测试之前的全部环境与门禁，随后四格都在 `Run the offline test suite` 失败，run 总结论为 `failure`。本机同源码全量为 **173 failed, 2277 passed, 8 skipped in 327.39s**，主要暴露冻结测试仍用 `testserver`/无下载 session-CSRF 及既有 Schema、release、UI、validation identity 漂移。测试文件未改，产品没有测试绕过；required checks / branch protection 仍为 **NOT CONFIGURED**。详见[托管 CI 恢复证据](../validation/iteration-0.28.0-hosted-ci-recovery.md)。普通 hosted Linux 不能替代 T15。
 
 ### T10 / P1 交付门槛：冻结并交付 0.24.4 外部测试包（历史阶段，保留）
 
@@ -397,7 +397,7 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 
 T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的工作量中。
 
-当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation、预设、真实域离线 smoke、Workflow Schema 2 多输出 fan-out、Workflow Schema 3 来源标题冻结与安全预设恢复、服务端执行预检、预授权重启续跑、重复下载 owner 恢复、配音语速、方向 C“编辑式玻璃”四页生产视觉、译文精确修订绑定及上传 attention 精确确认恢复已分别按对应验证记录复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。K5 当前生产字节的 Chromium 矩阵为 44/44 PASS；上传恢复 7/7 及相关整链/回归均 PASS，译文绑定的服务 17/17、严格浏览器检查、4 个既有浏览器回归及四条既有整链均 PASS。当前实际 app-root 已保留旧上传 runtime 和私有 SQLite 备份，构建并验证两个 runtime，把 Upload Schema 1 数据库迁移到 Schema 3 并保留原记录；实际 Start、下载 runtime、上传 scheduler/worker、四页 HTTP 及正常停机通过。AI provider 因无密钥按预期仍为 `provider_health_required`。下一步先从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品；随后在单独明确授权下，用同一冻结构建执行真实 OpenAI、真人试听和三平台验收，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
+当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation、预设、真实域离线 smoke、Workflow Schema 2 多输出 fan-out、Workflow Schema 3 来源标题冻结与安全预设恢复、服务端执行预检、预授权重启续跑、重复下载 owner 恢复、配音语速、方向 C“编辑式玻璃”四页生产视觉、译文精确修订绑定及上传 attention 精确确认恢复已分别按对应验证记录复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。K5 当前生产字节的 Chromium 矩阵为 44/44 PASS；上传恢复 7/7 及相关整链/回归均 PASS，译文绑定的服务 17/17、严格浏览器检查、4 个既有浏览器回归及四条既有整链均 PASS。当前实际 app-root 已保留旧上传 runtime 和私有 SQLite 备份，构建并验证两个 runtime，把 Upload Schema 1 数据库迁移到 Schema 3 并保留原记录；实际 Start、下载 runtime、上传 scheduler/worker、四页 HTTP 及正常停机通过。AI provider 因无密钥按预期仍为 `provider_health_required`。GitHub hosted CI 已在 `bdd88ce` 上执行四格并通过测试前环境与门禁，但完整 pytest 仍红，不能借此关闭发行门禁。下一步先从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品；随后在单独明确授权下，用同一冻结构建执行真实 OpenAI、真人试听和三平台验收，才交给 T11/T12。T11、T12 与 T15 均仍为 **NOT RUN**。
 
 上传 Setup 的独立 ignored validator 已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变和输出脱敏；当前实际 app-root 的后续刷新又验证了真实目录上的安全留档、两个 runtime 安装、Upload Schema 1→3 数据保留迁移与本地 Start。Workflow Schema 2 阶段已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账、原始 queued 预授权续跑、一次完整批量确认、重复下载 owner 恢复、语速冻结/恢复及 attention 后精确确认恢复。当前 Workflow Schema 3 又把来源标题、逐账号最终标题与 ready asset 一次冻结，并让上次成功预设在依赖读取成功且用户未编辑时恢复。方向 C“编辑式玻璃”也已实施于生产四页并完成当前 Chromium 44/44 QA；translation revision 精确绑定已经完成并按独立证据复验。其余工作是冻结当前候选，并在明确授权与测试账号/素材具备后执行真实 OpenAI、真人试听及三平台外部验收。
 

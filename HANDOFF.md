@@ -7,6 +7,8 @@
 
 ## 本次交接入口
 
+2026-09-10 托管 CI 执行链恢复：提交 `bdd88ce184b2f86f957f7df9129baa21863227dd` 已修正 Windows 可取得的 CPython 3.12.10 矩阵、完整 Git 历史、事件推导的提交范围检查、locked dev environment 与矩阵解释器身份绑定。[GitHub Actions run 34393235622](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34393235622) 的 Windows/Linux × 3.12.10/3.13.14 四格均已通过 checkout、解释器选择、commit scope、固定 uv、CI definition、runtime identities、locked install、`uv pip check` 和 Python/pytest 身份检查，随后四格都在完整 pytest 失败，run 总结论为 `failure`。本机完整结果为 **173 failed, 2277 passed, 8 skipped in 327.39s**，主要是冻结历史测试仍用 `testserver`/无下载 session-CSRF，以及 Editing Schema 1、旧 release metadata/version、旧 UI/validation identity 断言。测试文件未改，产品没有测试绕过；结论是托管执行基础已恢复、CI 仍红，required checks / branch protection 仍为 **NOT CONFIGURED**。逐格链接和边界见[托管 CI 恢复证据](validation/iteration-0.28.0-hosted-ci-recovery.md)。
+
 2026-09-10 下载 HTTP 边界：顶层下载首页和非 Editing / Upload / Workflow 的 `/api/v1/*` 现校验唯一 loopback Host、同源 Origin/Fetch-Site，并要求 8 个写路由携带当前 `GET /api/v1/session` 取得的进程内 `X-Download-CSRF`。页面在令牌成功且通过非空 ASCII 校验前保持提交禁用；上传、编辑、自动流程仍使用独立令牌，Upload QR GET 和 Workflow 精确根路径特例保持。ignored 合同探针和当前生产页 Chrome 验证均 **PASS**，8 个写路由的拒绝路径下游调用数为 0，外网尝试为 0，见[下载 HTTP 边界验证](validation/iteration-0.28.0-download-http-boundary.md)。历史 TestClient 回归仍使用 `testserver` 且无新 CSRF 会话，本切片未写入产品绕过也未修改已跟踪测试。架构报告使用的旧快照及其 ignored 本地链接不作为当前发布证据。
 
 2026-09-10 Workflow 扫描恢复：架构复核确认旧实现会在 `active_page()` 抛出 `WorkflowError` 或 `sqlite3.Error` 时结束唯一的后台 reconciliation 线程，后续 `get()`/`wake()` 不能恢复。当前实现把这两类已知读取错误收敛为未派发工作的失败轮次，保留游标、复用原有最多 6 秒退避并由同一 worker 重试；没有增加线程重建或未知远端操作重放。故障探针 **4/4 PASS**、重启续跑验证 **PASS**、既有 local-app 回归 **93 passed**，且没有新增或修改测试文件，见[Workflow 扫描恢复验证](validation/iteration-0.28.0-workflow-manager-recovery.md)。该记录只绑定其自身源码与本地故障注入结果。
@@ -59,12 +61,12 @@
 
 当前源码已把编辑库迁移到 Schema 4，并为远程听写、翻译和逐 cue 配音加入不保存正文、密钥、本机路径、endpoint 或 provider 响应的 `ai_invocations` 账本。每项调用在远程边界前先 `reserved`，真正交给隔离 provider 前变为 `dispatched`；只有已验证响应才成为 `responded`，发送前失败为 `released`，发送后无法确认结果则成为 `unknown`。`unknown` 只能带 revision CAS 和明确确认，在 `not_accepted`、`accepted_without_result`、`abandoned` 三个固定结论中人工 reconciliation。`reserved`、`dispatched`、`unknown` 阻止 owner 完成和整条 retry lineage 重试；已核对为 `accepted_without_result` 或 `abandoned` 仍阻止重试，只有 `responded`、`released` 或 `reconciled/not_accepted` 可在原有 owner 状态与再次确认规则下进入重试。编辑页和自动流程页会把祖先阻断传播到现有后继；核对为 `not_accepted` 后显式推进才恢复原有重试入口。翻译 `request_units=ceil(cues/50)` 只是本地 runtime envelope 与硬预算估算，不能当作精确 HTTP 请求数、token/价格或计费收据；`health` 能力检查不写入该账本，也不能证明真实模型可用。证据与当前验证边界见 [Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)。
 
-| 工作包 | 2026-09-09 本地状态 | 仍未完成的边界 |
+| 工作包 | 截至 2026-09-10 状态 | 仍未完成的边界 |
 | --- | --- | --- |
 | T14 必要切片 | 已实现本地账号断开与墓碑、排队确认撤回、迟到登录/重启凭据 fencing、媒体占用与状态、活动引用删除保护、两步删除及同大小/同 SHA-256 恢复 | hash 去重、总配额、自动孤儿清理仍是后续；没有修改用户现有账号、媒体或 runtime |
 | T07 停机备份/恢复 | 上传备份格式 2 / Upload Schema 3 保存受管封面、定时值和平台参数；格式 1 / Schema 2 只读输入经 staging 迁移，并撤回需要复核的旧确认 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
-| T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
+| T09 无凭据 CI | Windows/Linux × CPython 3.12.10/3.13.14 托管四格已运行；四格的 checkout、解释器、commit scope、固定 uv、CI definition、locked dev env、依赖与 Python/pytest 身份门禁均通过 | 四格完整 pytest 均失败，run 总结论为 `failure`；本机对照为 173 failed、2277 passed、8 skipped；required checks / branch protection **NOT CONFIGURED** |
 | T10、T16 与当前方向 C | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；当前“编辑式玻璃”共享主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面，并完成当前四页 Chromium 44/44 复验 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史；当前 `/uploads` 与 `/workflows` 均可设置 Bilibili/抖音/视频号的标题、简介、标签、受管/生成封面、发布时间和平台字段；Workflow 同平台多账号可保留 preset 差异或明确统一面板 | Workflow 同一平台仍以一个可显式统一的面板编辑，不提供每个账号并排表单；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
@@ -525,7 +527,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 21. v0.17.0 progress 是保守阶段估算，不是全任务精确 byte accounting。字幕/sidecar 不推动进度，未知总量不显示伪百分比，顺序双流最多按两个 slot 聚合，单流可能在后处理前停留于较低估算；浏览器约 2 秒轮询也可能错过很短阶段。为保持隐私，普通排障不得打开原始 stdout/stderr、argv、URL、source ID、标题、文件名或路径日志。
 22. 0.24.4 T10 只保留为中间冻结源历史，不能用其定向测试、commit 或制品关闭 0.25.0 最终冻结。0.25.0 包内文档同样有意不嵌入自身最终 commit、build identity 或五件发行文件 hash；只有同批包外 release receipt 同时绑定新的 clean commit、冻结全量、完整 identity、五件发行文件和源码/wheel 独立验收时，才可把最终交付包记为通过。
 23. 上传 activity lock 只协调采用当前 shared/exclusive 合同的应用、active/standby 服务与备份工具。旧版本、手工 SQLite 连接、自写文件 writer 或绕过锁的进程不在完整保证内；停机备份仍要求操作者确认它们全部停止。下载和上传备份必须分别创建与演练。
-24. T09 工作流目前只完成本地静态合同和负向测试。GitHub hosted 四格结果为 **NOT RUN**，required checks 与 branch protection 为 **NOT CONFIGURED**；Windows 上跳过的 root/POSIX/getfacl 合同仍归 T15。
+24. T09 已在 GitHub hosted 执行 Windows/Linux × CPython 3.12.10/3.13.14 四格；`bdd88ce` 对应 run `34393235622` 的四格均通过测试前环境与门禁，完整 pytest 仍红，因此只能确认执行链恢复，不能确认 CI 通过。required checks 与 branch protection 为 **NOT CONFIGURED**；Windows 上跳过的 root/POSIX/getfacl 合同仍归 T15。
 25. 0.25.0 T16 本地 G6 没有执行真实登录、扫码、下载或上传，也没有运行 GitHub hosted CI 或目标 Linux/Docker T15。T11/T12 仍须绑定最终 0.25.0 构建分别记录 PASS/FAIL/BLOCKED/NOT RUN；T13 与 T15 不因本地前端完成而关闭。
 26. AI authorization 固定的是本地 runtime manifest、provider/model 声明、operation、外发范围和输入/调用上限。远端模型 ID 仍可能是供应商可更新的 alias；供应商在相同 ID 下改变模型行为、价格或可用性时，本地摘要不会自动发现。Editing Schema 4 已有脱敏调用状态账本，但本次没有真实 provider 调用，因此没有供应商 request ID、实际 usage、价格或账单证据；本地硬上限不能证明账单金额，unknown outcome 后仍须停止并核对。runtime 在 provider 启动前后重复散列，听写输入使用私有稳定副本，但跨平台按路径启动不构成抵抗同系统账号并发改写者的密码学 attestation；维护 runtime 前须停止应用，跨进程 lease/不可变 snapshot 仍是发布前加固项。
 
