@@ -193,6 +193,7 @@ src/video_download_control/uploads/web.py
 src/video_download_control/ui_assets.py
 src/video_download_control/validation.py
 src/video_download_control/validation_cli.py
+src/video_download_control/verified_media_response.py
 src/video_download_control/verifiers/__init__.py
 src/video_download_control/verifiers/ffprobe.py
 src/video_download_control/web.py

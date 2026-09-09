@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
 from ..uploads.activity_lock import UploadActivityBusy, UploadActivityLease
+from ..verified_media_response import VerifiedOpenFileResponse
 from .ai import default_capabilities
 from .ai_authorization import (
     AiAuthorizationError,
@@ -287,10 +288,7 @@ def _verified_media_response(
 ) -> Response:
     """Serve the exact handle and recheck its verified chunks while streaming."""
 
-    # Imported lazily to avoid the top-level API/editing route import cycle.
-    from ..api import _VerifiedOriginalFileResponse
-
-    return _VerifiedOriginalFileResponse(
+    return VerifiedOpenFileResponse(
         handle,
         file_info=file_info,
         verified_chunk_sha256=chunk_digests,
