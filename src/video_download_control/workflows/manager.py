@@ -75,13 +75,24 @@ class WorkflowManager:
             service = self.get()
             wait_seconds = _MIN_RECONCILE_SECONDS
             while not self._stop.is_set():
-                active = service.active_page(self._scan_cursor, limit=100)
+                scan_failed = False
+                try:
+                    active = service.active_page(self._scan_cursor, limit=100)
+                except (WorkflowError, sqlite3.Error):
+                    # A failed read has not dispatched any domain work, so the
+                    # same worker can safely retry the scan.  Keeping the
+                    # thread alive also avoids restarting it after an unknown
+                    # exception, which could replay work whose remote outcome
+                    # is not known.
+                    active = []
+                    scan_failed = True
                 changed = False
-                if active:
-                    tail = active[-1]
-                    self._scan_cursor = (tail["created_at"], tail["id"])
-                else:
-                    self._scan_cursor = None
+                if not scan_failed:
+                    if active:
+                        tail = active[-1]
+                        self._scan_cursor = (tail["created_at"], tail["id"])
+                    else:
+                        self._scan_cursor = None
                 for item in active:
                     if self._stop.is_set():
                         break
@@ -119,7 +130,7 @@ class WorkflowManager:
                             pass
                 if changed:
                     wait_seconds = _MIN_RECONCILE_SECONDS
-                elif not active:
+                elif not active and not scan_failed:
                     wait_seconds = _MAX_RECONCILE_SECONDS
                 else:
                     wait_seconds = min(

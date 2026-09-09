@@ -168,6 +168,7 @@ created → downloading → preparing_edit → awaiting_ai_review
 - 完整视频使用 `segments=[]` 并期待一个输出；分段使用 1–10 个有序、不重叠区间；AI 多段必须首尾连续。
 - `workflow_cancellation_requested` 是持久取消意图。manager 重启后应继续取消最远的已创建下游；全部安全停止才成为 `canceled/workflow_canceled`。任何已提交/草稿保存、running 后未知或身份不符都要进入精确的 attention code。
 - `workflow_revision_conflict` 表示页面使用了旧 revision；刷新后重新判断，不能自动重放操作。
+- 若数据库短暂故障后所有 workflow 停止推进，但各域接口仍可读取，先检查 Workflow 数据库和 control 日志。当前 `WorkflowManager` 会保留扫描游标，并对 `WorkflowError`/`sqlite3.Error` 按最多 6 秒退避后由同一 worker 重试；不要通过反复重启 control 绕过持续数据库错误。未知线程异常仍需先核对最远下游和远端结果，确认没有 running/unknown 后再重启。
 
 若 Workflow 卡住，按最远非空引用进入对应域检查，而不是直接改 Workflow state。修复 runtime/账号后使用页面“立即对账”或重建流程；只有产品明确提供 retry 时才重试。
 
