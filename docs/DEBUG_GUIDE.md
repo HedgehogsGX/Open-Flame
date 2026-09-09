@@ -74,10 +74,26 @@ Invoke-RestMethod "$debugBase/api/v1/uploads/status"
 | Start 立即退出 | 启动 stderr 的固定 JSON、独立 diagnostics JSONL、`data/logs/runtime-local-app.jsonl`（若业务日志已启动） | 使用同一 app root 重跑 Setup 检查；不要复制异常路径到 issue。 |
 | 端口占用 | `Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue` | 找到本次用户拥有的进程并正常关闭；不要杀未知服务。 |
 | `setup_busy` / worker busy | 是否已有 Start/Setup、app-root/runtime 锁 | 正常退出已有进程，确认已结束后重试；不要删活跃锁。 |
+| packaged 开发宿主内 `setup_ai_runtime_failed`，但同一归档在普通临时目录可构建 | 比较 app root 的词法路径与 Python `Path.resolve(strict=True)`；Windows package filesystem virtualization 可能让两者不同 | 停止应用，只在已确认仍属于当前用户本地应用数据时取得 canonical path，并把同一个显式 `--app-root` 同时传给 Setup 与 Start；不要放宽 builder 的 alias/reparse 检查。 |
 | `/health/ready` 503 | 返回 detail、队列 paused、数据库结构 | 按具体 code 修复；health 不是平台探测。 |
 | 页面能开但 Worker unknown/stale | `/api/v1/operations/runtime` 心跳、同一 `run_id` | 用一体化 Start 重启同一构建；独立 control 不会伪装托管 Worker。 |
 
 默认日志位于 `data\logs`：`runtime-local-app.jsonl`、`runtime-control.jsonl`、`runtime-local-worker-*.jsonl`。同一启动共享 `run_id`。日志是有界、轮转、best-effort 线索；业务事实以 SQLite、attempt/ledger、资产 manifest 和远端后台为准。
+
+仅在上述 packaged 开发宿主条件已被证实时，可用当前项目 Python 取得 canonical path。先人工核对它仍位于当前用户的本地应用数据范围；不要把解析后的私有路径贴入 issue：
+
+```powershell
+$canonicalAppRoot = (& .\.venv\Scripts\python.exe -I -c `
+  "import os,pathlib; print(pathlib.Path(os.environ['LOCALAPPDATA'],'Open-Flame','video-download-control').resolve(strict=True))").Trim()
+
+.\Setup-Open-Flame.cmd --yes --app-root "$canonicalAppRoot" `
+  --ai-python-embed-zip "<ABSOLUTE_VERIFIED_ZIP>"
+.\Start-Open-Flame.cmd --app-root "$canonicalAppRoot" --check --no-open-browser
+```
+
+上面的 `--check` 只检查核心启动，不领取 Job，也不证明 AI provider、上传 runtime 或 scheduler ready。若上传 runtime 也需要准备，先按[上传运行时升级说明](UPLOAD_RUNTIME.md#从旧运行时升级)保留旧 runtime，并单独给 Setup 加 `--upload-runtime`。完整 Start 会启动下载 Worker、WorkflowManager 和上传 scheduler；启动前必须先核对该应用根是否存在 queued、预授权或可恢复工作，并按本次运行授权决定是否继续。
+
+普通非虚拟化命令行继续使用默认 app root。一次运行中不得混用词法 alias 与 canonical root；否则完整性检查可能把同一目录视为路径漂移并安全拒绝。
 
 ## 5. 下载域
 

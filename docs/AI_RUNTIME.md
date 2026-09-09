@@ -71,7 +71,7 @@ python -m video_download_control.editing.ai_runtime_builder `
 
 实际字段以命令输出为准。请把整行输出和 CPython ZIP 的来源、版本、官方预期 SHA-256 一起保存到 runtime 目录之外的发行或运维记录中；不要修改 `manifest.json` 补写这些记录。
 
-本轮使用上面的 CPython 3.13.15 ZIP 按当前 worker/protocol/provider 源码重建，runtime manifest SHA-256 为 `598ad64ecf005daa7ed2f9007280dc560212d98daa633f5afa1fac2703260378`。`--check` 返回 `ready=true`，应用将这个结果标记为 `integrity=verified / provider_health=unverified`；因为本机没有 `OPEN_FLAME_AI_OPENAI_API_KEY`，三项能力都保持 `blocked / ai_provider_auth_missing`。该摘要只绑定本轮对应源码字节；若相关源码再变化，必须重建并记录新摘要。
+0.28.0 冻结提交 `0592b6f` 使用上面的 CPython 3.13.15 ZIP 重建时，runtime manifest SHA-256 为 `598ad64ecf005daa7ed2f9007280dc560212d98daa633f5afa1fac2703260378`。当前源码里程碑 `97929f6` 的 worker/protocol/provider 字节已经重新构建到实际应用根，manifest SHA-256 为 `82a228e3d59800f7e0d11d360e34c928f4c25733b13e47fb62528932e6cd4503`，`--check` 返回 `ready=true`。应用将当前结果标记为 `integrity=verified / provider_health=unverified`；因为本机没有 `OPEN_FLAME_AI_OPENAI_API_KEY`，能力保持 `ready=false / provider_health_required`，且未发起 provider 请求。见[当前应用根运行时刷新记录](../validation/iteration-0.28.0-local-runtime-refresh.md)。每个摘要只绑定对应源码字节；相关源码变化后必须重建并记录新摘要。
 
 ## 2. Manifest 与完整性复核
 
