@@ -156,63 +156,76 @@ function scheduleFor(platform,raw,control){if(!raw)return {publish_at_unix:null,
 function uploadFieldChanged(...ids){return ids.some(id=>changedUploadFields.has(id));}
 function setTargetField(target,saved,key,value,changed){if(!saved||changed)target[key]=value;}
 function platformContent(platform,common){const ids=platformContentIds[platform];return $(platform+'-use-overrides').checked?{title:$(ids[0]).value.trim(),description:$(ids[1]).value,tags:splitTags($(ids[2]).value)}:common;}
-function upload(){
-  clearUploadError();
+function readUploadFormState(){
   const ids=selectedAccounts();
   if(!ids.length)throw new Error('请选择至少一个 ready 上传账号');
   if(ids.length>3)throw new Error('自动流程最多支持 3 个上传账号');
   const selected=ids.map(id=>accounts.find(item=>item.id===id));
   if(selected.some(item=>!item||item.lifecycle_state==='disconnected'||item.auth_state!=='ready'))throw new Error('所选账号状态已变化，请刷新后重新选择');
   if(presetParameters&&!changedUploadFields.has('accounts')&&presetParameters.profile.upload.account_ids.some(id=>!ids.includes(id)))throw new Error('预设账号不可用，请重新登录或明确修改账号选择');
-  const titleMode=sourceTitleMode()?'source':'explicit',title=titleMode==='source'?'':$('title').value.trim(),description=$('description').value.trim(),tags=splitTags($('tags').value),common={title,description,tags},sourceCredit=$('source-credit').value.trim(),category=$('category-id').value?Number($('category-id').value):null,copyright=Number($('copyright').value),target_overrides=[];
+  const titleMode=sourceTitleMode()?'source':'explicit',title=titleMode==='source'?'':$('title').value.trim(),description=$('description').value.trim(),tags=splitTags($('tags').value),common={title,description,tags},sourceCredit=$('source-credit').value.trim(),category=$('category-id').value?Number($('category-id').value):null,copyright=Number($('copyright').value);
   if(titleMode==='explicit'&&!title)failUpload('请填写标题',$('title'));
-  for(const account of selected){
-    const platform=account.platform,platformName=platformNames[platform],saved=presetParameters?.profile.upload.target_overrides?.find(item=>item.account_id===account.id),override=saved?JSON.parse(JSON.stringify(saved)):{account_id:account.id},content=platformContent(platform,common),contentIds=platformContentIds[platform],independent=$(platform+'-use-overrides').checked,titleControl=independent?$(contentIds[0]):$('title'),tagsControl=independent?$(contentIds[2]):$('tags');
-    for(const [index,field] of ['title','description','tags'].entries())setTargetField(override,saved,field,content[field],uploadFieldChanged(platform+'-use-overrides',contentIds[index],...(!independent?[field==='title'?'title':field==='description'?'description':'tags']:[])));
-    if(titleMode==='source'&&(!independent||!content.title&&(!saved||uploadFieldChanged(platform+'-use-overrides',contentIds[0]))))delete override.title;
-    if(platform==='bilibili'){
-      setTargetField(override,saved,'category_id',category,uploadFieldChanged('category-id'));
-      setTargetField(override,saved,'copyright',copyright,uploadFieldChanged('copyright'));
-      setTargetField(override,saved,'source_credit',sourceCredit,uploadFieldChanged('source-credit'));
-    }
-    const mode=platform==='tencent'?$('tencent-mode').value:'publish';
-    setTargetField(override,saved,'mode',mode,platform==='tencent'&&uploadFieldChanged('tencent-mode'));
-    const scheduleId=platform+'-publish-at';
-    if(!saved||uploadFieldChanged(scheduleId))Object.assign(override,scheduleFor(platform,$(scheduleId).value,$(scheduleId)));
-    const savedOptions=saved?.platform_options,options=savedOptions?{...savedOptions}:{};
-    if(platform==='bilibili'){
-      for(const [key,id,value] of [['dynamic','bilibili-dynamic',$('bilibili-dynamic').value.trim()],['no_reprint','bilibili-no-reprint',$('bilibili-no-reprint').checked],['close_comments','bilibili-close-comments',$('bilibili-close-comments').checked],['close_danmu','bilibili-close-danmu',$('bilibili-close-danmu').checked]])if(!savedOptions||uploadFieldChanged(id))options[key]=value;
-    }else if(platform==='douyin'){
-      if(uploadFieldChanged('douyin-declaration'))options.declaration=$('douyin-declaration').value||null;
-      else if(!savedOptions||!Object.hasOwn(savedOptions,'declaration'))options.declaration=$('translation-enabled').checked?'内容由AI生成':null;
-    }else{
-      if(!savedOptions||uploadFieldChanged('tencent-short-title'))options.short_title=$('tencent-short-title').value.trim()||null;
-      if(uploadFieldChanged('tencent-content-label'))options.content_label=$('tencent-content-label').value||null;
-      else if(!savedOptions||!Object.hasOwn(savedOptions,'content_label'))options.content_label=$('translation-enabled').checked?'含AI生成内容':null;
-    }
-    override.platform_options=options;
-    const effective={title,description,tags,category_id:category,mode:'publish',copyright,source_credit:sourceCredit,...override};
-    if((titleMode==='explicit'&&!effective.title)||effective.title&&textLength(effective.title)>platformTitleLimit(platform))failUpload(platformName+' 标题为空或超过平台长度限制',titleControl);
-    if(effective.tags.length>10||new Set(effective.tags).size!==effective.tags.length||effective.tags.some(tag=>!tag||textLength(tag)>20||/[#＃\n\r\t]/.test(tag)))failUpload(platformName+' 最多填写 10 个不重复标签，每个最多 20 字，且不要填写 #',tagsControl);
-    if(effective.mode==='draft'&&platform!=='tencent')failUpload('只有视频号支持保存平台草稿；Bilibili 与抖音需选择投稿发布',titleControl);
-    if(platform==='bilibili'){
-      if(!effective.category_id||!Number.isSafeInteger(effective.category_id))failUpload('Bilibili 投稿必须填写分区 ID',$('category-id'));
-      if(!effective.tags.length)failUpload('Bilibili 投稿至少需要一个标签',tagsControl);
-      if(effective.copyright===2&&!effective.source_credit)failUpload('Bilibili 转载投稿必须填写来源',$('source-credit'));
-      if(effective.copyright===1&&effective.source_credit)failUpload('Bilibili 原创投稿请清空转载来源',$('source-credit'));
-    }
-    const scheduled=override.publish_at_unix;
-    if(effective.mode==='draft'&&scheduled)failUpload('保存平台草稿时不能设置定时发布',$(scheduleId));
-    if(scheduled){
-      const lead=platformScheduleLead(platform)*1000;
-      if(scheduled*1000<=Date.now()+lead)failUpload(platformName+' 预设的发布时间已过期或提前量不足，请更新发布时间',$(scheduleId));
-      if(platform==='tencent'&&scheduled*1000>Date.now()+28*24*3600000)failUpload('视频号定时发布最多可提前 28 天',$(scheduleId));
-    }
-    if(platform==='bilibili'&&textLength(options.dynamic||'')>250)failUpload('Bilibili 动态文案不能超过 250 字',$('bilibili-dynamic'));
-    if(platform==='tencent'&&options.short_title&&(textLength(options.short_title)<7||textLength(options.short_title)>15))failUpload('视频号短标题需为 7–15 字',$('tencent-short-title'));
-    target_overrides.push(override);
+  return {ids,selected,titleMode,title,description,tags,common,sourceCredit,category,copyright};
+}
+function mergeUploadTarget(account,state){
+  const {titleMode,title,description,tags,common,sourceCredit,category,copyright}=state;
+  const platform=account.platform,platformName=platformNames[platform],saved=presetParameters?.profile.upload.target_overrides?.find(item=>item.account_id===account.id),override=saved?JSON.parse(JSON.stringify(saved)):{account_id:account.id},content=platformContent(platform,common),contentIds=platformContentIds[platform],independent=$(platform+'-use-overrides').checked,titleControl=independent?$(contentIds[0]):$('title'),tagsControl=independent?$(contentIds[2]):$('tags');
+  for(const [index,field] of ['title','description','tags'].entries())setTargetField(override,saved,field,content[field],uploadFieldChanged(platform+'-use-overrides',contentIds[index],...(!independent?[field==='title'?'title':field==='description'?'description':'tags']:[])));
+  if(titleMode==='source'&&(!independent||!content.title&&(!saved||uploadFieldChanged(platform+'-use-overrides',contentIds[0]))))delete override.title;
+  if(platform==='bilibili'){
+    setTargetField(override,saved,'category_id',category,uploadFieldChanged('category-id'));
+    setTargetField(override,saved,'copyright',copyright,uploadFieldChanged('copyright'));
+    setTargetField(override,saved,'source_credit',sourceCredit,uploadFieldChanged('source-credit'));
   }
-  return {account_ids:ids,title,description,tags,category_id:selected.some(item=>item.platform==='bilibili')?category:null,mode:'publish',copyright:selected.some(item=>item.platform==='bilibili')?copyright:null,source_credit:selected.some(item=>item.platform==='bilibili')?sourceCredit:'',target_overrides,...(titleMode==='source'?{title_mode:'source'}:{})};
+  const mode=platform==='tencent'?$('tencent-mode').value:'publish';
+  setTargetField(override,saved,'mode',mode,platform==='tencent'&&uploadFieldChanged('tencent-mode'));
+  const scheduleId=platform+'-publish-at',scheduleControl=$(scheduleId);
+  if(!saved||uploadFieldChanged(scheduleId))Object.assign(override,scheduleFor(platform,scheduleControl.value,scheduleControl));
+  const savedOptions=saved?.platform_options,options=savedOptions?{...savedOptions}:{};
+  if(platform==='bilibili'){
+    for(const [key,id,value] of [['dynamic','bilibili-dynamic',$('bilibili-dynamic').value.trim()],['no_reprint','bilibili-no-reprint',$('bilibili-no-reprint').checked],['close_comments','bilibili-close-comments',$('bilibili-close-comments').checked],['close_danmu','bilibili-close-danmu',$('bilibili-close-danmu').checked]])if(!savedOptions||uploadFieldChanged(id))options[key]=value;
+  }else if(platform==='douyin'){
+    if(uploadFieldChanged('douyin-declaration'))options.declaration=$('douyin-declaration').value||null;
+    else if(!savedOptions||!Object.hasOwn(savedOptions,'declaration'))options.declaration=$('translation-enabled').checked?'内容由AI生成':null;
+  }else{
+    if(!savedOptions||uploadFieldChanged('tencent-short-title'))options.short_title=$('tencent-short-title').value.trim()||null;
+    if(uploadFieldChanged('tencent-content-label'))options.content_label=$('tencent-content-label').value||null;
+    else if(!savedOptions||!Object.hasOwn(savedOptions,'content_label'))options.content_label=$('translation-enabled').checked?'含AI生成内容':null;
+  }
+  override.platform_options=options;
+  const effective={title,description,tags,category_id:category,mode:'publish',copyright,source_credit:sourceCredit,...override};
+  return {override,effective,options,platform,platformName,titleMode,titleControl,tagsControl,scheduleControl};
+}
+function validateUploadTarget(target){
+  const {override,effective,options,platform,platformName,titleMode,titleControl,tagsControl,scheduleControl}=target;
+  if((titleMode==='explicit'&&!effective.title)||effective.title&&textLength(effective.title)>platformTitleLimit(platform))failUpload(platformName+' 标题为空或超过平台长度限制',titleControl);
+  if(effective.tags.length>10||new Set(effective.tags).size!==effective.tags.length||effective.tags.some(tag=>!tag||textLength(tag)>20||/[#＃\n\r\t]/.test(tag)))failUpload(platformName+' 最多填写 10 个不重复标签，每个最多 20 字，且不要填写 #',tagsControl);
+  if(effective.mode==='draft'&&platform!=='tencent')failUpload('只有视频号支持保存平台草稿；Bilibili 与抖音需选择投稿发布',titleControl);
+  if(platform==='bilibili'){
+    if(!effective.category_id||!Number.isSafeInteger(effective.category_id))failUpload('Bilibili 投稿必须填写分区 ID',$('category-id'));
+    if(!effective.tags.length)failUpload('Bilibili 投稿至少需要一个标签',tagsControl);
+    if(effective.copyright===2&&!effective.source_credit)failUpload('Bilibili 转载投稿必须填写来源',$('source-credit'));
+    if(effective.copyright===1&&effective.source_credit)failUpload('Bilibili 原创投稿请清空转载来源',$('source-credit'));
+  }
+  const scheduled=override.publish_at_unix;
+  if(effective.mode==='draft'&&scheduled)failUpload('保存平台草稿时不能设置定时发布',scheduleControl);
+  if(scheduled){
+    const lead=platformScheduleLead(platform)*1000;
+    if(scheduled*1000<=Date.now()+lead)failUpload(platformName+' 预设的发布时间已过期或提前量不足，请更新发布时间',scheduleControl);
+    if(platform==='tencent'&&scheduled*1000>Date.now()+28*24*3600000)failUpload('视频号定时发布最多可提前 28 天',scheduleControl);
+  }
+  if(platform==='bilibili'&&textLength(options.dynamic||'')>250)failUpload('Bilibili 动态文案不能超过 250 字',$('bilibili-dynamic'));
+  if(platform==='tencent'&&options.short_title&&(textLength(options.short_title)<7||textLength(options.short_title)>15))failUpload('视频号短标题需为 7–15 字',$('tencent-short-title'));
+}
+function upload(){
+  clearUploadError();
+  const state=readUploadFormState(),target_overrides=[];
+  for(const account of state.selected){
+    const target=mergeUploadTarget(account,state);
+    validateUploadTarget(target);
+    target_overrides.push(target.override);
+  }
+  return {account_ids:state.ids,title:state.title,description:state.description,tags:state.tags,category_id:state.selected.some(item=>item.platform==='bilibili')?state.category:null,mode:'publish',copyright:state.selected.some(item=>item.platform==='bilibili')?state.copyright:null,source_credit:state.selected.some(item=>item.platform==='bilibili')?state.sourceCredit:'',target_overrides,...(state.titleMode==='source'?{title_mode:'source'}:{})};
 }
 function workflowCapability(operation,provider,model,authorizationSha256,authorization){const row=aiCapabilities.find(item=>item.operation===operation&&item.provider_id===provider&&item.model_id===model&&item.authorization_sha256===authorizationSha256&&authorizationReady(item)&&['ready','unverified'].includes(item.status))||null;return row&&authorization&&typeof authorization==='object'&&JSON.stringify(canonical(row.authorization))===JSON.stringify(canonical(authorization))?row:null;}
 function workflowAiAuthorization(item){const profile=item?.profile,ai=profile?.ai;if(!ai)return {enabled:false,bound:true,current:true,summary:'本流程未启用 AI。'};const editRecipe=profile?.edit_recipe||{},translation=editRecipe.translation||{},dubbing=editRecipe.dubbing||{},transcriptionAuthorization=ai.transcription_authorization,translationAuthorization=ai.translation_authorization,speechAuthorization=dubbing.authorization;const hasProfileDigest=sha256Pattern.test(item?.profile_sha256||''),hasDigests=sha256Pattern.test(ai.transcription_authorization_sha256||'')&&sha256Pattern.test(ai.translation_authorization_sha256||''),hasAuthorizations=transcriptionAuthorization&&typeof transcriptionAuthorization==='object'&&translationAuthorization&&typeof translationAuthorization==='object',hasSpeech=speechAuthorization&&typeof speechAuthorization==='object'&&speechAuthorization.operation==='synthesize'&&speechAuthorization.provider_id===dubbing.provider&&speechAuthorization.model_id===dubbing.model&&sha256Pattern.test(speechAuthorization.manifest_sha256||'')&&typeof speechAuthorization.model_revision==='string'&&speechAuthorization.model_revision&&speechAuthorization.limits&&typeof speechAuthorization.limits==='object';if(!hasProfileDigest||!hasDigests||!hasAuthorizations||!hasSpeech)return {enabled:true,bound:false,current:false,summary:'此旧流程未绑定三项完整 AI runtime、模型修订与硬预算，不能继续确认；请按当前能力重建流程。'};const transcribe=workflowCapability('transcribe',ai.transcription_provider,ai.transcription_model,ai.transcription_authorization_sha256,transcriptionAuthorization),translate=workflowCapability('translate',translation.provider,translation.model,ai.translation_authorization_sha256,translationAuthorization),speech=aiCapabilities.find(row=>row.operation==='dub'&&row.provider_id===dubbing.provider&&row.model_id===dubbing.model&&authorizationReady(row)&&['ready','unverified'].includes(row.status)&&JSON.stringify(canonical(row.authorization))===JSON.stringify(canonical(speechAuthorization)))||null;if(!transcribe||!translate||!speech)return {enabled:true,bound:true,current:false,summary:'此流程绑定的 AI runtime、模型修订或硬预算已不再可用，不能继续确认；请刷新能力或重建流程。'};return {enabled:true,bound:true,current:true,summary:'参数快照 '+item.profile_sha256.slice(0,12)+'…。配音 '+dubbing.voice+' · '+String(Number(dubbing.rate??1))+'×。'+[authorizationSummary('听写',transcribe),authorizationSummary('翻译',translate),authorizationSummary('配音',speech)].join(' ')};}
