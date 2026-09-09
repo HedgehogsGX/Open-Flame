@@ -38,7 +38,7 @@ from .contracts import (
 from .contracts import WorkflowError
 
 if TYPE_CHECKING:
-    from ..editing.api import EditingManager
+    from ..editing.manager import EditingManager
 
 
 _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")

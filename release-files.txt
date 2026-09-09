@@ -131,6 +131,7 @@ src/video_download_control/editing/ai_runtime_cli.py
 src/video_download_control/editing/ai_worker.py
 src/video_download_control/editing/api.py
 src/video_download_control/editing/contracts.py
+src/video_download_control/editing/manager.py
 src/video_download_control/editing/media.py
 src/video_download_control/editing/openai_provider.py
 src/video_download_control/editing/schema.py
