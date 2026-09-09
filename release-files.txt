@@ -211,6 +211,7 @@ src/video_download_control/workflows/presets.py
 src/video_download_control/workflows/profile.py
 src/video_download_control/workflows/schema.py
 src/video_download_control/workflows/service.py
+src/video_download_control/workflows/snapshots.py
 src/video_download_control/workflows/web.py
 start_open_flame.py
 uv.lock

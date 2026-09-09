@@ -12,11 +12,12 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
 from .contracts import (
+    AiSnapshot,
     CancellationSnapshot,
     MAX_WORKFLOW_ACCOUNTS,
     MAX_WORKFLOW_SEGMENTS,
@@ -34,6 +35,7 @@ from .profile import (
     normalize_workflow_text,
 )
 from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
+from .snapshots import AiSnapshotDisposition, classify_ai_snapshot
 
 
 _REQUEST_KEY = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -547,43 +549,11 @@ class WorkflowService:
                         authorize=False,
                         explicit=False,
                     )
-                    if snapshot.status in {"failed", "attention"}:
-                        code = snapshot.code or "ai_review_required"
-                        if code != record["code"]:
-                            return self._attention(
-                                workflow_id, code, expected=record
-                            )
-                        return record
-                    if snapshot.status in {"waiting", "review"}:
-                        self._transition(
-                            workflow_id,
-                            "awaiting_ai_review",
-                            snapshot.code or "",
-                            expected=record,
-                        )
-                        continue
-                    if (
-                        snapshot.status != "ready"
-                        or not snapshot.plan_id
-                        or snapshot.draft_version is None
-                    ):
-                        return self._attention(
-                            workflow_id,
-                            "workflow_domain_data_invalid",
-                            expected=record,
-                        )
-                    record = self._set_refs(
-                        workflow_id,
-                        expected=record,
-                        edit_draft_version=snapshot.draft_version,
-                        edit_plan_id=snapshot.plan_id,
+                    disposition = self._apply_ai_snapshot(
+                        record, snapshot, context="reconcile"
                     )
-                    self._transition(
-                        workflow_id,
-                        "awaiting_edit_confirmation",
-                        "",
-                        expected=record,
-                    )
+                    if disposition == "attention":
+                        return self.get(workflow_id)
                     continue
                 if state not in _ACTIVE_STATES:
                     return record
@@ -711,36 +681,11 @@ class WorkflowService:
                         workflow_id, error.code, expected=record
                     )
                 raise
-            if snapshot.status in {"failed", "attention"}:
-                return self._attention(
-                    workflow_id,
-                    snapshot.code or "ai_review_required",
-                    expected=record,
-                )
-            if snapshot.status == "ready":
-                if not snapshot.plan_id or snapshot.draft_version is None:
-                    return self._attention(
-                        workflow_id, "workflow_data_invalid", expected=record
-                    )
-                record = self._set_refs(
-                    workflow_id,
-                    expected=record,
-                    edit_draft_version=snapshot.draft_version,
-                    edit_plan_id=snapshot.plan_id,
-                )
-                self._transition(
-                    workflow_id,
-                    "awaiting_edit_confirmation",
-                    "",
-                    expected=record,
-                )
-            else:
-                self._transition(
-                    workflow_id,
-                    "awaiting_ai_review",
-                    snapshot.code,
-                    expected=record,
-                )
+            disposition = self._apply_ai_snapshot(
+                record, snapshot, context="explicit"
+            )
+            if disposition == "attention":
+                return self.get(workflow_id)
             return self.advance(workflow_id)
 
     def confirm_upload(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
@@ -1056,40 +1001,10 @@ class WorkflowService:
                 authorize=record["auto_confirm_edit"],
                 explicit=False,
             )
-            if snapshot.status in {"waiting", "review"}:
-                if snapshot.code != record["code"]:
-                    self._transition(
-                        workflow_id,
-                        "awaiting_ai_review",
-                        snapshot.code,
-                        expected=record,
-                    )
-                return False
-            if snapshot.status != "ready":
-                self._attention(
-                    workflow_id,
-                    snapshot.code or "ai_review_required",
-                    expected=record,
-                )
-                return False
-            if not snapshot.plan_id or snapshot.draft_version is None:
-                self._attention(
-                    workflow_id, "workflow_data_invalid", expected=record
-                )
-                return False
-            record = self._set_refs(
-                workflow_id,
-                expected=record,
-                edit_draft_version=snapshot.draft_version,
-                edit_plan_id=snapshot.plan_id,
+            disposition = self._apply_ai_snapshot(
+                record, snapshot, context="automatic"
             )
-            self._transition(
-                workflow_id,
-                "awaiting_edit_confirmation",
-                "",
-                expected=record,
-            )
-            return True
+            return disposition == "ready"
         if state == "awaiting_edit_confirmation":
             if not record["edit_plan_id"]:
                 self._attention(
@@ -1417,6 +1332,68 @@ class WorkflowService:
         if not callable(method):
             return CancellationSnapshot("attention", code=unavailable_code)
         return method(*args, **kwargs)
+
+    def _apply_ai_snapshot(
+        self,
+        record: dict[str, Any],
+        snapshot: AiSnapshot,
+        *,
+        context: Literal["automatic", "explicit", "reconcile"],
+    ) -> AiSnapshotDisposition:
+        """Apply observed AI facts while the caller retains action authority."""
+
+        classification = classify_ai_snapshot(snapshot)
+        if classification.disposition == "invalid":
+            code = (
+                snapshot.code or "ai_review_required"
+                if context == "automatic"
+                else "workflow_domain_data_invalid"
+            )
+            self._attention(record["id"], code, expected=record)
+            return "attention"
+        if classification.disposition == "attention":
+            if (
+                record["state"] != "attention_required"
+                or record["code"] != classification.code
+            ):
+                self._attention(
+                    record["id"], classification.code, expected=record
+                )
+            return "attention"
+        if classification.disposition == "waiting":
+            if (
+                context != "automatic"
+                or record["state"] != "awaiting_ai_review"
+                or record["code"] != classification.code
+            ):
+                self._transition(
+                    record["id"],
+                    "awaiting_ai_review",
+                    classification.code,
+                    expected=record,
+                )
+            return "waiting"
+        if not snapshot.plan_id or snapshot.draft_version is None:
+            code = (
+                "workflow_domain_data_invalid"
+                if context == "reconcile"
+                else "workflow_data_invalid"
+            )
+            self._attention(record["id"], code, expected=record)
+            return "attention"
+        updated = self._set_refs(
+            record["id"],
+            expected=record,
+            edit_draft_version=snapshot.draft_version,
+            edit_plan_id=snapshot.plan_id,
+        )
+        self._transition(
+            record["id"],
+            "awaiting_edit_confirmation",
+            "",
+            expected=updated,
+        )
+        return "ready"
 
     def _record_upload_outcome(
         self, record: Mapping[str, Any], snapshot: UploadSnapshot
