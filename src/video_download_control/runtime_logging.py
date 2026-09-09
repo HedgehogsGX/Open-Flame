@@ -62,6 +62,7 @@ _ROUTES = frozenset(
         "/edits",
         "/uploads",
         "/workflows",
+        "/api/v1/session",
         "/api/v1/edits/ai-tasks",
         "/api/v1/edits/ai-tasks/{task_id}",
         "/api/v1/edits/ai-tasks/{task_id}/cancel",

@@ -188,7 +188,7 @@ created → downloading → preparing_edit → awaiting_ai_review
 ## 9. Web/UI Debug
 
 1. 先看浏览器 Console 的首个异常和 Network 中首个失败请求；记录 route、method、status 和安全 detail，不保存请求中的敏感正文。
-2. 检查页面是否从同一个 loopback origin 打开。写请求需要当前页面 session 的 CSRF header；旧页面刷新后可能需要重新加载。
+2. 检查页面是否从同一个 loopback origin 打开。下载页先请求 `GET /api/v1/session`，再为所有写操作附加唯一 `X-Download-CSRF`；上传、编辑、自动流程使用各自 session/header，不能交换。`403 download_request_forbidden` 先核对唯一 loopback `Host`、可选同源 `Origin`、`Sec-Fetch-Site` 和当前进程令牌；应用重启、旧页面或直接 API 客户端需重新取得 session。令牌不放 URL/query 且不写入日志或回传材料。会话建立失败时“创建批次”应继续禁用；如果被启用，记录页面和首个失败请求作为前端故障。
 3. 轮询问题要复现：保持输入/选区/焦点/details 10 秒以上；判断是 DOM 被重建、迟到响应覆盖，还是记录确实变化。
 4. 预设自动恢复问题先检查 `localStorage` 中的 `open-flame-workflow-last-preset-v1` 是否只是 32 位预设 ID。页面必须等账号、AI capability 和预设列表都完成初始读取后才应用；初始化期间已经发生用户输入时不得覆盖表单。不存在的 ID 应自动清除。
 5. 视觉问题同时记录 viewport、DPI、theme、系统 reduce-motion/透明度设置和截图。320 px、200% 文字缩放、键盘焦点和深色主题都要复查。

@@ -289,6 +289,7 @@ uv run video-download-capabilities --database-path $Database revoke `
 | `GET` | `/health` | 数据库、Schema 与队列运行状态；降级时仍返回状态体 |
 | `GET` | `/health/live` | 进程存活检查 |
 | `GET` | `/health/ready` | 就绪检查；数据库异常或队列暂停时返回 503 |
+| `GET` | `/api/v1/session` | 在合法 loopback Host/Origin/Fetch-Site 上取得当前进程的下载域 CSRF 令牌 |
 | `POST` | `/api/v1/batches` | 提交 1–50 条 URL 或分享文本 |
 | `POST` | `/api/v1/batches/import?filename=...&name=...` | 导入 UTF-8 `.txt` / `.csv` 请求体，最大 256 KiB |
 | `GET` | `/api/v1/batches?limit=50` | 列出批次，`limit` 范围 1–100 |
@@ -314,6 +315,8 @@ uv run video-download-capabilities --database-path $Database revoke `
 | `POST` | `/api/v1/operations/queue/resume` | 磁盘恢复到配置水位后恢复队列 |
 | `GET` | `/api/v1/platform-circuits` | 查询各平台 `closed` / `open` / `half_open`、连续失败、最后错误、`cooldown_until` 与 `requires_manual_reset` |
 | `POST` | `/api/v1/platform-circuits/{platform}/reset` | 仅人工复位已进入 manual-reset lock 的六个平台；自动 cooldown 或其他冲突返回 409，不允许提前绕过冷却 |
+
+下载首页和非 Editing / Upload / Workflow 的顶层 `/api/v1/*` 要求唯一的 loopback `Host`，并校验可选的同源 `Origin` 与 `Sec-Fetch-Site`。所有非 `GET` / `HEAD` 请求还必须把 `/api/v1/session` 返回的非空 ASCII 令牌放在唯一 `X-Download-CSRF` header 中；令牌在应用重启后更换，不能放在 URL/query，也不能与上传、编辑或自动流程令牌交换。浏览器页会自动完成这一会话建立；直接 API 调用见[Runbook](docs/RUNBOOK.md#6-api-操作速查)。
 
 JSON 新建请求的 `credential_mode` 和 TXT/CSV 导入 query 参数同名，省略均为 `use_default`，也可显式指定 `anonymous`。配置重验失败或新绑定所需默认 profile 失效时返回固定 409，批次创建不留下部分 Job。未配置平台保持匿名。重试请求体可为 `{"credential_mode":"use_default"}` 或 `{"credential_mode":"anonymous"}`；不发请求体时保留旧绑定以兼容旧客户端。网页重试发送当前表单选择。去重返回已有 live/ready 工作时不重新绑定或改写其凭证，不代表重新以当前模式下载；既有任务的 profile 仍由 Worker 在领取时检查。
 

@@ -276,6 +276,20 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/capability-snapshot
 
 ## 4. 运行观测与操作控制
 
+直接调用第 4～6 节中的下载域写接口前，先从同一 loopback origin 取得当前进程令牌并构造 header。应用重启后必须重新执行；令牌不得放入 URL/query、日志或支持材料。
+
+```powershell
+$OpenFlameBase = "http://127.0.0.1:8000"
+$DownloadSession = Invoke-RestMethod "$OpenFlameBase/api/v1/session"
+if (
+  [string]::IsNullOrWhiteSpace($DownloadSession.csrf_token) -or
+  $DownloadSession.csrf_token -match '[^\x00-\x7F]'
+) {
+  throw "Open-Flame returned an invalid download session token"
+}
+$DownloadHeaders = @{ "X-Download-CSRF" = $DownloadSession.csrf_token }
+```
+
 读取 JSON 指标：
 
 ```powershell
@@ -303,7 +317,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/operations/queue
 ```powershell
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8000/api/v1/operations/queue/resume
+  -Uri http://127.0.0.1:8000/api/v1/operations/queue/resume `
+  -Headers $DownloadHeaders
 ```
 
 若剩余空间仍低于水位，API 返回 409 并保持暂停。当前没有管理员手动 pause API；计划维护窗口时应停止 Worker 和控制面，而不是修改数据库。
@@ -328,7 +343,8 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/platform-circuits
 $Platform = "youtube" # x | youtube | bilibili | douyin | tiktok | instagram
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/platform-circuits/$Platform/reset"
+  -Uri "http://127.0.0.1:8000/api/v1/platform-circuits/$Platform/reset" `
+  -Headers $DownloadHeaders
 ```
 
 不要为了清空红色状态反复 reset；这会绕过抑制重试风暴的运维意图。
@@ -341,7 +357,8 @@ Invoke-RestMethod `
 $JobId = "replace-with-terminal-failed-flat-job-id"
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/jobs/$JobId/retry"
+  -Uri "http://127.0.0.1:8000/api/v1/jobs/$JobId/retry" `
+  -Headers $DownloadHeaders
 ```
 
 成功返回 `status=queued` 和递增后的 `run_generation`。该操作在一个 `BEGIN IMMEDIATE` 事务内推进 Input/Job 的 active generation、清空本代终态字段并把 `generation_attempt_count` 归零；累计 `attempt_count` 和所有历史 Attempt 保留。缺失 Job 返回 404；非终态、graph Job、并发重试失败，或相同 source 已有 queued/active/ready 工作时返回 409。不要通过重复提交或直接改库绕过 CAS。
@@ -427,6 +444,7 @@ $Body = @{
 $Batch = Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:8000/api/v1/batches `
+  -Headers $DownloadHeaders `
   -ContentType "application/json" `
   -Body $Body
 $Batch.id
@@ -459,6 +477,7 @@ $Bytes = [System.IO.File]::ReadAllBytes("C:\private\urls.txt")
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://127.0.0.1:8000/api/v1/batches/import?filename=urls.txt&name=import-check" `
+  -Headers $DownloadHeaders `
   -ContentType "text/plain" `
   -Body $Bytes
 ```
@@ -469,7 +488,8 @@ Invoke-RestMethod `
 $JobId = "replace-with-job-id"
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/jobs/$JobId/cancel"
+  -Uri "http://127.0.0.1:8000/api/v1/jobs/$JobId/cancel" `
+  -Headers $DownloadHeaders
 ```
 
 按 Input 取消其所有非终态工作：queued parent/child 会原子变为 canceled，active Job 写协作取消请求，已 ready child 与不可变历史保留；聚合结果仍只看 active snapshot。
@@ -478,7 +498,8 @@ Invoke-RestMethod `
 $InputId = "replace-with-input-record-id"
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/inputs/$InputId/cancel"
+  -Uri "http://127.0.0.1:8000/api/v1/inputs/$InputId/cancel" `
+  -Headers $DownloadHeaders
 ```
 
 仅对 graph-v2 Input 做显式 rediscover。当前 Input 的所有 parent/child 都必须已终态；只要还有 queued 或 active 工作，或 Input 不是 graph-v2，API 返回 409。成功后 parent 进入下一 `run_generation` 并返回新的 generation：
@@ -487,7 +508,8 @@ Invoke-RestMethod `
 $InputId = "replace-with-terminal-graph-input-id"
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/inputs/$InputId/rediscover"
+  -Uri "http://127.0.0.1:8000/api/v1/inputs/$InputId/rediscover" `
+  -Headers $DownloadHeaders
 ```
 
 普通失败重试留在同一 generation，受 `generation_attempt_count` 上限约束；rediscover 会把 parent 的 generation-local attempt count 重置为 0，但累计 `attempt_count` 保持单调递增。新探测只切换 `active_discovery_id` / `active_run_generation`，不删除旧 discovery、relation、Job、Attempt 或 Asset；相同 snapshot 可复用，变化只影响新的 active snapshot。

@@ -77,7 +77,7 @@ INDEX_HTML = """<!doctype html>
         <button id="refresh-credentials" class="secondary" type="button">刷新 Cookie 状态</button>
         <p id="credential-help" class="muted">仅通过本地配置启用平台默认 Cookie，不在页面上传或展示 Cookie。选择只影响实际新建任务和点击重试的任务；去重不会改写已存在任务。</p>
         <p id="batch-error" class="danger" role="alert" hidden></p>
-        <button id="submit" type="submit">创建批次</button>
+        <button id="submit" type="submit" disabled>创建批次</button>
       </form>
     </section>
 
@@ -164,6 +164,7 @@ INDEX_HTML = """<!doctype html>
     const inputsField = document.querySelector('#inputs');
     const importFile = document.querySelector('#import-file');
     const batchError = document.querySelector('#batch-error');
+    let csrf = '';
     let credentialRequestId = 0;
     let pollGeneration = 0;
     let pollRequestId = 0;
@@ -188,7 +189,12 @@ INDEX_HTML = """<!doctype html>
     const activeStatuses = new Set(['queued', 'probing', 'downloading', 'postprocessing', 'verifying']);
 
     async function fetchJson(url, options = {}, action = '请求') {
-      const response = await fetch(url, options);
+      const headers = new Headers(options.headers || {});
+      const method = String(options.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        headers.set('X-Download-CSRF', csrf);
+      }
+      const response = await fetch(url, {...options, headers});
       let payload;
       try {
         payload = await response.json();
@@ -1081,6 +1087,10 @@ INDEX_HTML = """<!doctype html>
       event.preventDefault();
       if (event.isComposing || inputComposing) return;
       clearBatchError();
+      if (!csrf) {
+        showBatchError('下载会话尚未建立，请刷新页面后重试。');
+        return;
+      }
       pollGeneration += 1;
       pollRequestId += 1;
       if (pollTimer !== null) clearTimeout(pollTimer);
@@ -1150,13 +1160,29 @@ INDEX_HTML = """<!doctype html>
     importFile.addEventListener('change', clearBatchError);
     refreshCapabilities.addEventListener('click', loadCapabilityState);
     refreshCredentials.addEventListener('click', loadCredentialDefaults);
-    loadCredentialDefaults();
-    loadWorkerRuntime();
-    refreshOperations();
-    loadCapabilityState();
-    loadToolchain();
-    loadRuntimeLogs();
-    loadRecentBatches();
+    (async () => {
+      try {
+        const session = await fetchJson('/api/v1/session', {}, '建立下载会话');
+        if (
+          typeof session.csrf_token !== 'string'
+          || !session.csrf_token
+          || [...session.csrf_token].some(character => character.charCodeAt(0) > 127)
+        ) {
+          throw new Error('建立下载会话失败：会话凭据无效');
+        }
+        csrf = session.csrf_token;
+        button.disabled = false;
+        loadCredentialDefaults();
+        loadWorkerRuntime();
+        refreshOperations();
+        loadCapabilityState();
+        loadToolchain();
+        loadRuntimeLogs();
+        loadRecentBatches();
+      } catch (error) {
+        showBatchError(`下载器连接失败：${error}`);
+      }
+    })();
   </script>
 </body>
 </html>

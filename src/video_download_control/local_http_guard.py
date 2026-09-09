@@ -40,6 +40,7 @@ def install_local_http_guard(
     csrf_header: str,
     forbidden_detail: str,
     requires_csrf: Callable[[str, str], bool],
+    preserve_existing_no_store: bool = False,
 ) -> str:
     """Install one local surface boundary and return its process-local token."""
 
@@ -74,7 +75,13 @@ def install_local_http_guard(
         if not safe:
             return JSONResponse({"detail": forbidden_detail}, status_code=403)
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        cache_control = response.headers.get("cache-control", "")
+        has_no_store = any(
+            directive.strip().lower() == "no-store"
+            for directive in cache_control.split(",")
+        )
+        if not preserve_existing_no_store or not has_no_store:
+            response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"

@@ -59,6 +59,7 @@ from .editing.api import install_editing_routes
 from .editing.contracts import EditingError
 from .editing.media import MediaProcessor as EditingMediaProcessor
 from .importers import MAX_IMPORT_BYTES, BatchImportError, parse_batch_file
+from .local_http_guard import install_local_http_guard
 from .local_short_links import LocalDirectShortLinkTransport
 from .observability import collect_metrics
 from .repository import BatchRepository
@@ -176,6 +177,25 @@ _TOOLCHAIN_SECURITY_NOTE = (
     "仍未验证。redistribution_status 只描述本机第三方工具包，不描述项目源码"
     "的 Apache-2.0 许可状态。"
 )
+
+_DELEGATED_API_PREFIXES = (
+    "/api/v1/edits",
+    "/api/v1/uploads",
+    "/api/v1/workflows",
+)
+
+
+def _download_http_path(path: str) -> bool:
+    if path == "/":
+        return True
+    if not path.startswith("/api/v1/"):
+        return False
+    return not any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in _DELEGATED_API_PREFIXES
+    )
+
+
 _TOOLCHAIN_LOG_VERSION_FIELDS = (
     "yt_dlp_version",
     "ffmpeg_version",
@@ -1190,6 +1210,14 @@ def create_app(
         default_workflow_root(resolved_settings.data_root), workflow_adapter
     )
     install_workflow_routes(app, workflow_manager)
+    download_nonce = install_local_http_guard(
+        app,
+        protects_path=_download_http_path,
+        csrf_header="x-download-csrf",
+        forbidden_detail="download_request_forbidden",
+        requires_csrf=lambda method, _path: method not in {"GET", "HEAD"},
+        preserve_existing_no_store=True,
+    )
 
     @app.exception_handler(CredentialDefaultsError)
     async def credential_defaults_error(_request: Request, _exc: CredentialDefaultsError):
@@ -1312,6 +1340,10 @@ def create_app(
                 "X-Frame-Options": "DENY",
             },
         )
+
+    @app.get("/api/v1/session")
+    def download_session():
+        return {"csrf_token": download_nonce}
 
     def shared_ui_asset(name: str) -> Response:
         payload, media_type = ui_asset(name)
