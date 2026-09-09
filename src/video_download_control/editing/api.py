@@ -473,6 +473,33 @@ class EditingManager:
     ) -> EditingError:
         return EditingError(error.code)
 
+    def validate_ai_operation(
+        self,
+        operation: str,
+        provider_id: str,
+        model_id: str,
+        stored_authorization: object,
+        *,
+        expected_authorization_sha256: str,
+        voice_id: str | None = None,
+    ) -> None:
+        """Match a frozen workflow authorization against the current runtime."""
+
+        try:
+            current = self._ai_executor.operation_authorization(
+                operation,
+                provider_id,
+                model_id,
+                voice_id=voice_id,
+            )
+            require_authorization_match(
+                stored_authorization,
+                current,
+                expected_sha256=expected_authorization_sha256,
+            )
+        except (AiBridgeError, AiAuthorizationError) as error:
+            raise self._as_editing_error(error) from None
+
     def create_ai_task(
         self,
         project_id: str,

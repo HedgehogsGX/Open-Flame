@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -84,6 +85,7 @@ class UploadManager(Protocol):
 
 
 DownloadAssetResolver = Callable[[str], tuple[Path, str]]
+DownloadRuntimeProbe = Callable[[], Mapping[str, Any]]
 
 
 def _domain_failure(error: object, fallback: str) -> NoReturn:
@@ -150,17 +152,151 @@ class LocalWorkflowAdapter:
     editing_manager: EditingManager
     upload_manager: UploadManager
     download_asset_resolver: DownloadAssetResolver
+    download_runtime_probe: DownloadRuntimeProbe | None = None
+
+    def preflight(
+        self,
+        recipe: Mapping[str, Any],
+        ai: Mapping[str, Any] | None,
+        upload: Mapping[str, Any],
+        *,
+        cover_aspect_ratio: str | None,
+        expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
+    ) -> Sequence[Mapping[str, str]]:
+        """Check every local execution dependency before download side effects."""
+
+        self._validate_download_runtime()
+        if self.editing_manager.media_ready is not True:
+            raise WorkflowError("processor_not_configured")
+        bindings = self.validate_upload(
+            upload,
+            cover_aspect_ratio=cover_aspect_ratio,
+            expected_account_bindings=expected_account_bindings,
+        )
+        if ai is not None:
+            self._validate_ai(recipe, ai)
+        return bindings
+
+    def _validate_download_runtime(self) -> None:
+        if self.download_runtime_probe is None:
+            raise WorkflowError("download_worker_unobserved")
+        try:
+            status = self.download_runtime_probe()
+        except Exception:
+            raise WorkflowError("download_runtime_unavailable") from None
+        if not isinstance(status, Mapping):
+            raise WorkflowError("download_runtime_unavailable")
+        if status.get("mode") != "managed_direct":
+            raise WorkflowError("download_worker_unobserved")
+        state = status.get("state")
+        if state == "paused" or status.get("queue_paused") is True:
+            raise WorkflowError("download_queue_paused")
+        if state == "stale":
+            raise WorkflowError("download_worker_stale")
+        if state != "online":
+            raise WorkflowError("download_worker_not_ready")
+        if status.get("network_download_enabled") is not True:
+            raise WorkflowError("download_network_disabled")
+        age = status.get("heartbeat_age_seconds")
+        timeout = status.get("heartbeat_timeout_seconds")
+        if (
+            isinstance(age, bool)
+            or not isinstance(age, (int, float))
+            or isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(age)
+            or not math.isfinite(timeout)
+            or age < 0
+            or timeout <= 0
+            or age >= timeout
+        ):
+            raise WorkflowError("download_worker_stale")
+
+    def _validate_ai(
+        self,
+        recipe: Mapping[str, Any],
+        ai: Mapping[str, Any],
+    ) -> None:
+        try:
+            normalized = recipe_from_mapping(recipe)
+        except EditingError as error:
+            _domain_failure(error, "invalid_recipe")
+        if (
+            not normalized.translation.enabled
+            or not normalized.dubbing.enabled
+            or normalized.dubbing.authorization is None
+            or set(ai) != _BOUND_AI_KEYS
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        operations = (
+            (
+                "transcribe",
+                ai.get("transcription_provider"),
+                ai.get("transcription_model"),
+                ai.get("transcription_authorization"),
+                ai.get("transcription_authorization_sha256"),
+                None,
+            ),
+            (
+                "translate",
+                normalized.translation.provider,
+                normalized.translation.model,
+                ai.get("translation_authorization"),
+                ai.get("translation_authorization_sha256"),
+                None,
+            ),
+            (
+                "synthesize",
+                normalized.dubbing.provider,
+                normalized.dubbing.model,
+                normalized.dubbing.authorization,
+                normalized.dubbing.authorization.sha256,
+                normalized.dubbing.voice,
+            ),
+        )
+        try:
+            for operation, provider, model, authorization, digest, voice in operations:
+                if not isinstance(provider, str) or not isinstance(model, str):
+                    raise WorkflowError("workflow_domain_data_invalid")
+                if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+                    raise WorkflowError("workflow_domain_data_invalid")
+                self.editing_manager.validate_ai_operation(
+                    operation,
+                    provider,
+                    model,
+                    authorization,
+                    expected_authorization_sha256=digest,
+                    voice_id=voice,
+                )
+        except EditingError as error:
+            _domain_failure(error, "ai_operation_blocked")
 
     def validate_upload(
         self,
         upload: Mapping[str, Any],
         *,
         cover_aspect_ratio: str | None,
+        expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
     ) -> Sequence[Mapping[str, str]]:
         if not isinstance(upload, Mapping) or set(upload) != _UPLOAD_INPUT_KEYS:
             raise WorkflowError("workflow_domain_data_invalid")
+        if expected_account_bindings is not None and (
+            not isinstance(expected_account_bindings, Sequence)
+            or isinstance(expected_account_bindings, (str, bytes))
+            or any(
+                not isinstance(binding, Mapping)
+                for binding in expected_account_bindings
+            )
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
         try:
-            targets = self.upload_manager.get().preflight_jobs(**dict(upload))
+            options = dict(upload)
+            if expected_account_bindings is not None:
+                options["expected_account_bindings"] = [
+                    dict(binding) for binding in expected_account_bindings
+                ]
+                options["execution_check"] = True
+            targets = self.upload_manager.get().preflight_jobs(**options)
         except UploadError as error:
             _domain_failure(error, "upload_metadata_invalid")
         bindings: list[Mapping[str, str]] = []

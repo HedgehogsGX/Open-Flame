@@ -1062,6 +1062,19 @@ def create_app(
     managed_product_identity = current_product_identity() if managed_worker_status is not None else None
     upload_root = default_upload_root(resolved_settings.data_root)
 
+    def current_worker_runtime_status() -> WorkerRuntimeStatusResponse:
+        if managed_worker_status is None or managed_product_identity is None:
+            return unknown_runtime_status()
+        try:
+            queue = worker_repository.get_queue_control()
+        except Exception:
+            return unknown_runtime_status(detail_code="queue_state_unavailable")
+        return managed_worker_status.snapshot(
+            expected_run_id=active_logger.run_id,
+            expected_product_identity=managed_product_identity,
+            queue_paused=bool(queue["paused"]),
+        )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         upload_activity = await run_in_threadpool(
@@ -1170,6 +1183,7 @@ def create_app(
         editing_manager=editing_manager,
         upload_manager=app.state.upload_manager,
         download_asset_resolver=upload_original_asset,
+        download_runtime_probe=lambda: current_worker_runtime_status().model_dump(),
     )
     workflow_manager = WorkflowManager(
         default_workflow_root(resolved_settings.data_root), workflow_adapter
@@ -1324,17 +1338,7 @@ def create_app(
 
     @app.get("/api/v1/operations/runtime", response_model=WorkerRuntimeStatusResponse)
     def worker_runtime_status() -> WorkerRuntimeStatusResponse:
-        if managed_worker_status is None or managed_product_identity is None:
-            return unknown_runtime_status()
-        try:
-            queue = worker_repository.get_queue_control()
-        except Exception:
-            return unknown_runtime_status(detail_code="queue_state_unavailable")
-        return managed_worker_status.snapshot(
-            expected_run_id=active_logger.run_id,
-            expected_product_identity=managed_product_identity,
-            queue_paused=bool(queue["paused"]),
-        )
+        return current_worker_runtime_status()
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

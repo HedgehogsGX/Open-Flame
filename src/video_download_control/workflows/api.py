@@ -92,12 +92,37 @@ def _safe_error(exc: WorkflowError) -> HTTPException:
         "workflow_profile_changed",
         "workflow_preset_conflict",
         "workflow_preset_authorization_changed",
+        "account_session_changed",
+        "ai_authorization_changed",
     }:
         status = 409
     elif code in {
         "workflow_database_unavailable",
         "workflow_manager_stopped",
         "workflow_preset_storage_unavailable",
+        "download_worker_unobserved",
+        "download_runtime_unavailable",
+        "download_queue_paused",
+        "download_worker_stale",
+        "download_worker_not_ready",
+        "download_network_disabled",
+        "processor_not_configured",
+        "ai_runtime_missing",
+        "ai_runtime_invalid",
+        "ai_runtime_changed",
+        "ai_runtime_unsupported",
+        "runtime_missing",
+        "runtime_invalid",
+        "runtime_busy",
+        "runtime_upgrade_required",
+        "runtime_unavailable",
+        "unsupported_platform",
+        "scheduler_owned_by_other_instance",
+        "scheduler_database_unavailable",
+        "scheduler_failed",
+        "upload_scheduler_not_ready",
+        "uploader_stopped",
+        "upload_activity_busy",
     }:
         status = 503
     else:

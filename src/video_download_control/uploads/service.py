@@ -793,6 +793,52 @@ class UploadService:
                 "max_source_bytes": MAX_SOURCE_BYTES,
                 "max_cover_bytes": MAX_COVER_BYTES}
 
+    def _require_workflow_runtime(self, *, execution_check: bool) -> None:
+        """Verify the upload runtime and this instance's scheduler for workflows."""
+
+        try:
+            # Admission re-enumerates the tree with identity-bound digest
+            # reuse. The created-to-download gate performs a fully uncached
+            # check. Lightweight synthetic backends retain inspect().
+            probe_name = (
+                "inspect_for_execution" if execution_check else "inspect_for_workflow"
+            )
+            runtime_probe = getattr(self.backend, probe_name, None)
+            backend = (
+                runtime_probe()
+                if callable(runtime_probe)
+                else self.backend.inspect()
+            )
+        except Exception as error:
+            code = str(error)
+            if _SAFE_CODE.fullmatch(code) is None:
+                code = "runtime_unavailable"
+            raise UploadError(code) from None
+        if not isinstance(backend, Mapping):
+            raise UploadError("runtime_unavailable")
+        if backend.get("ready") is not True:
+            code = backend.get("code")
+            if not isinstance(code, str) or _SAFE_CODE.fullmatch(code) is None:
+                code = "runtime_unavailable"
+            raise UploadError(code)
+        with self._active_guard:
+            scheduler_state = self._scheduler_state
+            scheduler_code = self._scheduler_code
+            worker_running = bool(
+                self._thread
+                and self._thread.is_alive()
+                and scheduler_state != "faulted"
+            )
+        if scheduler_state == "running" and worker_running:
+            return
+        if scheduler_state == "stopped":
+            raise UploadError("uploader_stopped")
+        if not isinstance(scheduler_code, str) or _SAFE_CODE.fullmatch(
+            scheduler_code
+        ) is None:
+            scheduler_code = "upload_scheduler_not_ready"
+        raise UploadError(scheduler_code or "upload_scheduler_not_ready")
+
     def accounts(self) -> list[dict]:
         with self._db() as db:
             return [dict(row) for row in db.execute("SELECT * FROM accounts ORDER BY created_at,id")]
@@ -2264,9 +2310,13 @@ class UploadService:
         copyright: int | None = None,
         source_credit: str = "",
         target_overrides: list[dict] | None = None,
+        expected_account_bindings: list[dict] | None = None,
+        execution_check: bool = False,
     ) -> list[dict]:
         """Validate workflow upload metadata before download or AI work begins."""
 
+        if type(execution_check) is not bool:
+            raise UploadError("invalid_runtime_check")
         if (
             not isinstance(account_ids, list)
             or not 1 <= len(account_ids) <= 20
@@ -2323,12 +2373,19 @@ class UploadService:
             # reads and accidentally bless a different browser session.
             db.execute("BEGIN IMMEDIATE")
             targets: list[dict] = []
+            accounts_by_id: dict[str, sqlite3.Row] = {}
             for account_id in account_ids:
                 account = db.execute(
                     "SELECT * FROM accounts WHERE id=?", (account_id,)
                 ).fetchone()
                 if account is None:
                     raise UploadError("account_not_found")
+                accounts_by_id[account_id] = account
+            self._validate_workflow_account_bindings(
+                db, accounts_by_id, expected_account_bindings
+            )
+            for account_id in account_ids:
+                account = accounts_by_id[account_id]
                 if account["lifecycle_state"] != "active":
                     raise UploadError("account_disconnected")
                 if account["auth_state"] != "ready":
@@ -2346,6 +2403,7 @@ class UploadService:
                     db, account
                 )
                 targets.append(target)
+        self._require_workflow_runtime(execution_check=execution_check)
         return targets
 
     @_requires_activity

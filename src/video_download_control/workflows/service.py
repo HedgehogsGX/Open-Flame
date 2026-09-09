@@ -57,6 +57,60 @@ _AI_LEDGER_REVIEW_CODES = frozenset(
         "ai_remote_abandoned",
     }
 )
+_PREFLIGHT_RETRY_CODES = frozenset(
+    {
+        "download_worker_unobserved",
+        "download_runtime_unavailable",
+        "download_queue_paused",
+        "download_worker_stale",
+        "download_worker_not_ready",
+        "download_network_disabled",
+        "processor_not_configured",
+        "ai_runtime_missing",
+        "ai_runtime_invalid",
+        "ai_runtime_changed",
+        "ai_runtime_unsupported",
+        "ai_provider_not_found",
+        "ai_provider_operation_unsupported",
+        "ai_model_not_found",
+        "ai_model_operation_unsupported",
+        "ai_provider_auth_missing",
+        "ai_provider_auth_environment_invalid",
+        "ai_authorization_binding_required",
+        "ai_authorization_changed",
+        "ai_authorization_invalid",
+        "ai_voice_not_allowed",
+        "runtime_missing",
+        "runtime_invalid",
+        "runtime_busy",
+        "runtime_upgrade_required",
+        "runtime_unavailable",
+        "unsupported_platform",
+        "scheduler_owned_by_other_instance",
+        "scheduler_database_unavailable",
+        "scheduler_failed",
+        "upload_scheduler_not_ready",
+        "uploader_stopped",
+        "upload_activity_busy",
+        "account_not_found",
+        "account_disconnected",
+        "account_not_ready",
+        "account_session_changed",
+    }
+)
+_PREFLIGHT_WAIT_CODES = frozenset(
+    {
+        "download_worker_unobserved",
+        "download_runtime_unavailable",
+        "download_queue_paused",
+        "download_worker_stale",
+        "download_worker_not_ready",
+        "download_network_disabled",
+        "runtime_busy",
+        "upload_activity_busy",
+        "account_not_ready",
+    }
+)
 
 
 class WorkflowError(ValueError):
@@ -615,6 +669,38 @@ class WorkflowService:
         finally:
             connection.close()
 
+    def _preflight(
+        self,
+        profile: Mapping[str, Any],
+        *,
+        expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
+        recipe = profile["edit_recipe"]
+        cover = recipe.get("cover")
+        upload = dict(profile["upload"])
+        upload.pop("account_bindings", None)
+        raw_bindings = self.adapter.preflight(
+            recipe,
+            profile["ai"],
+            upload,
+            cover_aspect_ratio=(
+                None if cover is None else cover.get("aspect_ratio")
+            ),
+            expected_account_bindings=expected_account_bindings,
+        )
+        if (
+            not isinstance(raw_bindings, Sequence)
+            or isinstance(raw_bindings, (str, bytes))
+            or any(not isinstance(item, Mapping) for item in raw_bindings)
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        bindings = [dict(item) for item in raw_bindings]
+        if expected_account_bindings is not None and bindings != [
+            dict(item) for item in expected_account_bindings
+        ]:
+            raise WorkflowError("account_session_changed")
+        return bindings
+
     def create(
         self,
         *,
@@ -649,21 +735,16 @@ class WorkflowService:
                     if prior["request_digest"] != request_digest:
                         raise WorkflowError("idempotency_conflict")
                     return self._public(prior)
-            cover = normalized["edit_recipe"].get("cover")
-            account_bindings = self.adapter.validate_upload(
-                normalized["upload"],
-                cover_aspect_ratio=(
-                    None if cover is None else cover.get("aspect_ratio")
-                ),
-            )
-            normalized["upload"]["account_bindings"] = [
-                dict(item) for item in account_bindings
-            ]
-            normalized, encoded, profile_digest = _profile(
-                normalized,
-                bound_accounts=True,
-                require_ai_authorization=True,
-            )
+        # Runtime integrity may require a cold scan. It has no workflow-domain
+        # side effects, so do not hold the global mutation lock while it runs.
+        # The request key is checked again in the insertion transaction below.
+        normalized["upload"]["account_bindings"] = self._preflight(normalized)
+        normalized, encoded, profile_digest = _profile(
+            normalized,
+            bound_accounts=True,
+            require_ai_authorization=True,
+        )
+        with self._lock:
             with self._db() as db:
                 db.execute("BEGIN IMMEDIATE")
                 prior = db.execute(
@@ -805,6 +886,16 @@ class WorkflowService:
                         )
                         continue
                     return self.get(workflow_id)
+                if (
+                    state == "attention_required"
+                    and record["batch_id"] is None
+                    and record["code"] in _PREFLIGHT_RETRY_CODES
+                ):
+                    # Environment setup, credentials, or a selected account may
+                    # have been repaired after the zero-side-effect preflight.
+                    # Only an explicit advance reaches inactive attention rows.
+                    self._transition(workflow_id, "created", "")
+                    continue
                 if (
                     state == "attention_required"
                     and record["code"] in _AI_LEDGER_REVIEW_CODES
@@ -1060,6 +1151,19 @@ class WorkflowService:
     def _advance_once(self, record: dict[str, Any]) -> bool:
         workflow_id, state = record["id"], record["state"]
         if state == "created":
+            try:
+                self._preflight(
+                    record["profile"],
+                    expected_account_bindings=record["profile"]["upload"][
+                        "account_bindings"
+                    ],
+                )
+            except WorkflowError as error:
+                if error.code in _PREFLIGHT_WAIT_CODES:
+                    self._transition(workflow_id, "created", error.code)
+                else:
+                    self._attention(workflow_id, error.code)
+                return False
             batch_id = self.adapter.create_download(
                 workflow_id,
                 record["source_url"],

@@ -105,18 +105,21 @@ class UploadSnapshot:
 class WorkflowDomainAdapter(Protocol):
     """The complete cross-domain seam consumed by the workflow state machine."""
 
+    def preflight(
+        self,
+        recipe: Mapping[str, Any],
+        ai: Mapping[str, Any] | None,
+        upload: Mapping[str, Any],
+        *,
+        cover_aspect_ratio: str | None,
+        expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
+    ) -> Sequence[Mapping[str, str]]: ...
+
     def create_download(
         self, workflow_id: str, source_url: str, credential_mode: str
     ) -> str: ...
 
     def inspect_download(self, batch_id: str) -> DownloadSnapshot: ...
-
-    def validate_upload(
-        self,
-        upload: Mapping[str, Any],
-        *,
-        cover_aspect_ratio: str | None,
-    ) -> Sequence[Mapping[str, str]]: ...
 
     def prepare_edit(
         self,

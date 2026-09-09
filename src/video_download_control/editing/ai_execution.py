@@ -451,6 +451,8 @@ class AiTaskExecutor:
         operation: str,
         provider_id: str,
         model_id: str,
+        *,
+        voice_id: str | None = None,
     ) -> AiOperationAuthorization:
         """Return the current verified binding before a task is persisted."""
 
@@ -476,6 +478,15 @@ class AiTaskExecutor:
         credential_code = self._credential_code(provider)
         if credential_code is not None:
             raise AiBridgeError(credential_code)
+        if voice_id is not None:
+            configured_voices = provider.config.get("standard_voice_ids")
+            if (
+                operation != "synthesize"
+                or not isinstance(configured_voices, list)
+                or voice_id not in configured_voices
+                or any(not isinstance(voice, str) for voice in configured_voices)
+            ):
+                raise AiBridgeError("ai_voice_not_allowed")
         return authorization
 
     def verify_operation(

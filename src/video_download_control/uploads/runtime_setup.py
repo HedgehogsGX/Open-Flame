@@ -105,8 +105,10 @@ class RuntimeInspectionCache:
 
     Cached digests are reused only while the file identity, size and timestamps
     remain unchanged. A complete result is retained briefly so a three-second UI
-    poll does not walk thousands of files each time. Upload execution and the
-    setup CLI do not use this cache.
+    poll does not walk thousands of files each time. Workflow admission skips
+    the complete-result cache but may reuse a digest only while file identity,
+    size, mtime and ctime are unchanged. Platform execution and the setup CLI
+    still perform their existing fully uncached checks.
     """
 
     def __init__(self) -> None:
@@ -533,7 +535,10 @@ def _reject_redirects(path: Path) -> None:
 
 
 def inspect_runtime(
-    root: Path, *, cache: RuntimeInspectionCache | None = None
+    root: Path,
+    *,
+    cache: RuntimeInspectionCache | None = None,
+    reuse_status: bool = True,
 ) -> dict:
     runtime = Path(root) / "runtime"
     manifest_path = runtime / "manifest.json"
@@ -553,7 +558,7 @@ def inspect_runtime(
         manifest_signature = _signature(manifest_info)
         if manifest_info.st_size <= 0 or manifest_info.st_size > _MAX_MANIFEST_BYTES:
             raise ValueError()
-        if cache is not None:
+        if cache is not None and reuse_status:
             cached = cache.get_status(runtime, manifest_signature)
             if cached is not None:
                 return cached

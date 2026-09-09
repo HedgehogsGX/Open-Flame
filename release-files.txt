@@ -244,6 +244,7 @@ validation/iteration-0.28.0-post-release-ai-authorization.md
 validation/iteration-0.28.0-post-release-automation-correctness.md
 validation/iteration-0.28.0-workflow-multisegment-ui.md
 validation/iteration-0.28.0-workflow-readiness-ui.md
+validation/iteration-0.28.0-workflow-server-preflight.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

@@ -17,7 +17,7 @@ import time
 from dataclasses import asdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 from ..windows_job import WindowsKillOnCloseJob
 from .contracts import BackendResult, UploadRequest
@@ -172,6 +172,7 @@ class SauBackend:
         self.check_timeout = check_timeout
         self.upload_timeout = upload_timeout
         self._runtime_cache = RuntimeInspectionCache()
+        self._workflow_inspection_lock = Lock()
 
     def inspect(self) -> dict:
         if os.name != "nt":
@@ -193,6 +194,40 @@ class SauBackend:
         if os.name != "nt":
             return {"ready": False, "code": "unsupported_platform"}
         return inspect_runtime(self.root)
+
+    def inspect_for_workflow(self) -> dict:
+        """Re-enumerate workflow inputs while reusing identity-bound digests."""
+
+        if os.name != "nt":
+            return {"ready": False, "code": "unsupported_platform"}
+        if not self.root.is_dir():
+            return {"ready": False, "code": "runtime_missing"}
+        try:
+            # Concurrent workflow submissions share the per-file cache, but a
+            # cold scan can still hash the same runtime once per caller. Keep
+            # those scans sequential without coupling them to workflow state.
+            with self._workflow_inspection_lock:
+                with runtime_lock(self.root, exclusive=False):
+                    return inspect_runtime(
+                        self.root,
+                        cache=self._runtime_cache,
+                        reuse_status=False,
+                    )
+        except SetupError as exc:
+            return {"ready": False, "code": str(exc)}
+
+    def inspect_for_execution(self) -> dict:
+        """Return fully uncached, lock-protected execution readiness."""
+
+        if os.name != "nt":
+            return {"ready": False, "code": "unsupported_platform"}
+        if not self.root.is_dir():
+            return {"ready": False, "code": "runtime_missing"}
+        try:
+            with runtime_lock(self.root, exclusive=False):
+                return self._inspect_for_execution()
+        except SetupError as exc:
+            return {"ready": False, "code": str(exc)}
 
     def login(self, platform: str, account_id: str, stop: Event) -> BackendResult:
         return self._run("login", platform, account_id, {}, stop, self.login_timeout)

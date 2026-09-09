@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度、服务端零副作用执行预检与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 自动流程服务端执行预检：`WorkflowService.create()` 现在先核对本次托管下载 Worker、FFmpeg、逐平台投稿参数、所选账号 ready/session revision、上传 runtime/调度器，以及启用 AI 时听写/翻译/配音三项当前 authorization 与标准音色；创建预检失败时不保存 workflow/event，也不建立下载 batch。创建成功后在 `created → downloading` 前用冻结账号绑定和完全无缓存的上传 runtime 校验再次检查，覆盖请求后的窄竞态、重启恢复和 Windows `ctime` 不能代表 ChangeTime 的摘要缓存限制。创建 admission 跳过页面的 10 秒整体验证结果缓存并重新枚举树，只对 identity/大小/mtime/ctime 未变文件复用摘要；同进程扫描用独立锁避免并发冷散列，平台 child 前还会第三次执行完全无缓存检查。首次冷校验不持有 WorkflowService 全局 mutation lock。启动/暂停等短暂下载状态留在 `created` 有界重试，需要修复 runtime、凭据、账号或 authorization 的状态进入 attention，并可由显式“立即对账”重新检查。ignored validator 以外部网络 audit guard 覆盖缓存分歧、三项 AI/音色、账号绑定转发、API 状态码和真实 Local adapter 零下游写入；完整离线整链再次通过。证据见[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)。真实下载、OpenAI 与三平台网络仍未运行。
 
 2026-09-09 多分段自动流程切片：Workflow Schema 2 以 `outputs_json` 保存最多 10 个按 recipe ordinal 排列的视频输出；每个输出分别绑定上传 source，并按冻结账号顺序保存 account/platform/current job slot。最多 3 个账号形成不超过 30 个草稿，逐段准备通过稳定幂等键和 durable prefix checkpoint 恢复，但所有草稿仍要一起交给一次 `confirm_many`，任一校验失败时整批不会进入队列。retry 只原位替换当前 leaf job ID，并重新要求确认；Schema 1 只在精确结构、canonical profile/digest、单输出基数和状态/引用一致时事务迁移，矛盾数据库保持 Schema 1。自动 AI 多段只允许首尾连续，避免用 bounding clip 外发未选择的音频。证据见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)。
 
@@ -40,7 +42,7 @@
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
-| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 与生产页面保存/配置最多 10 个有序输出，并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；发布后还收敛真实 upload outcome、逐操作 authorization、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 仅完成 synthetic/offline 适配、迁移、恢复和浏览器验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
+| T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 与生产页面保存/配置最多 10 个有序输出，并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；服务端在保存 workflow 与建立下载前复核下载 Worker、FFmpeg、三项 AI authorization/音色、上传 runtime/调度器及账号绑定；发布后还收敛真实 upload outcome、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 与执行预检仅完成 synthetic/offline 适配、迁移、恢复和浏览器验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
 | T11 / T12 / T15 | **NOT RUN** | 三平台真实上传、当前六平台下载与 Linux/Docker/NAS 必须绑定 0.28.0 最终 receipt 后的同一构建分别执行 |
 
@@ -48,7 +50,7 @@
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.28.0 本地范围见[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[生产多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
+当前 0.28.0 本地范围见[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[生产多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -423,7 +425,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读 [0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。Editing Schema 4 的远端调用 ledger、unknown 人工 reconciliation 及完成/重试阻断已经接线；可复用预设和真实域离线整链已重新验证，详见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。下一步核对实际启动数据根/runtime 条件并准备当前冻结候选。这些完成后仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读 [自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设和真实域离线整链均已重新验证。下一步等待用户在液态玻璃 A/B/C 候选中选定方向，然后统一实现下载、编辑、上传和自动流程四页并做实际浏览器 QA；其后再核对实际启动数据根/runtime 条件并准备当前冻结候选。仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 
