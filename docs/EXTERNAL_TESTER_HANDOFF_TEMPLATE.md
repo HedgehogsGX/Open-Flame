@@ -30,6 +30,7 @@
 | Fresh or reused data | `<fresh/reused, prior schema>` |
 | Download Worker | `<state/detail_code>` |
 | AI runtime/provider | `<integrity/status; no secret>` |
+| AI sample parameters | `<models; source/target language; standard voice; exact speech rate>` |
 | Upload runtime/scheduler | `<schema/status>` |
 | Accounts | `<platform + opaque test label only>` |
 

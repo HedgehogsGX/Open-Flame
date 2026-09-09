@@ -945,10 +945,14 @@ def _synthesize(
     if not isinstance(language, str) or not _BCP47.fullmatch(language):
         _fail("ai_provider_input_invalid")
     rate = options.get("rate")
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+    if (
+        isinstance(rate, bool)
+        or not isinstance(rate, (int, float))
+        or not 0.88 <= rate <= 1.12
+    ):
         _fail("ai_provider_input_invalid")
     speed = float(rate)
-    if not math.isfinite(speed) or not 0.88 <= speed <= 1.12:
+    if not math.isfinite(speed):
         _fail("ai_provider_input_invalid")
     style = options.get("style")
     if style is not None:

@@ -88,6 +88,7 @@ class DubbingRequest(BaseModel):
     state: Literal["disabled", "needs_review", "ready", "blocked"] = "disabled"
     replace_original_audio: bool = Field(default=False, strict=True)
     authorization: dict[str, Any] | None = None
+    rate: float = Field(default=1.0, ge=0.88, le=1.12, strict=True, allow_inf_nan=False)
 
 
 class RecipeRequest(BaseModel):

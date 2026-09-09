@@ -102,7 +102,7 @@ Invoke-RestMethod "$debugBase/api/v1/uploads/status"
 - `source_changed` / `source_hash_mismatch`：源副本与登记快照不同；重新导入或重建，不覆盖旧记录。
 - `cover_font_unavailable` / `cover_glyph_unsupported`：选择受支持字体/文字；空文字封面不需要字体。
 - `ai_segment_boundary_splits_cue`：分段边界切入字幕 cue；把边界移到 cue 开始或结束。
-- `ai_speech_timing_overflow`：配音超过对应时间槽；缩短文本、换标准音色/语速或人工调整时间轴，不静默截断。
+- `ai_speech_timing_overflow`：配音超过对应时间槽。先记录 plan 的 `recipe_sha256`、dubbing `voice`/`rate`、cue 时长和对应 WAV 时长；再只改变一个变量。可以缩短文本、换标准音色、在 `0.88`～`1.12` 内明确提高语速或人工调整时间轴。新 rate 必须形成新的 recipe/profile SHA 和 request fingerprint；它不会自动重试旧调用，也不会静默截断或顺延。
 
 ### AI runtime 与授权
 
@@ -113,6 +113,8 @@ Invoke-RestMethod "$debugBase/api/v1/uploads/status"
 3. control 进程是否仅收到允许的 `OPEN_FLAME_AI_OPENAI_API_KEY`；不要打印值。
 4. workflow/AI task/plan 持久化的 authorization SHA 是否仍匹配当前 capability。
 5. `ai_invocations` 中该 owner 的调用状态。
+
+语速排错时同时核对编辑计划或 workflow 卡片显示的实际值、持久化 recipe 中的 `dubbing.rate`（缺失表示兼容默认 `1.0`）以及 provider request fingerprint。authorization SHA 不随语速改变，因为它绑定 runtime/model/operation/上限；recipe/profile SHA 应在非默认语速变化时改变。若页面恢复预设后改变了区间内合法小数，或输入变化后旧的数据外发勾选仍保留，应按前端回归处理。
 
 远程调用账本语义：
 

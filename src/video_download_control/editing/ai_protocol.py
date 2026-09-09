@@ -124,10 +124,14 @@ def _integer(value: object, minimum: int, maximum: int) -> int:
 
 
 def _number(value: object, minimum: float, maximum: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not minimum <= value <= maximum
+    ):
         raise AiProtocolError("ai_protocol_invalid")
     converted = float(value)
-    if not math.isfinite(converted) or not minimum <= converted <= maximum:
+    if not math.isfinite(converted):
         raise AiProtocolError("ai_protocol_invalid")
     return converted
 

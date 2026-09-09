@@ -1,6 +1,7 @@
 """Public contracts for deterministic, non-destructive media editing."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -15,6 +16,19 @@ class EditingError(ValueError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def _speech_rate(value: object) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0.88 <= value <= 1.12
+    ):
+        raise EditingError("invalid_recipe")
+    result = float(value)
+    if not math.isfinite(result):
+        raise EditingError("invalid_recipe")
+    return result
 
 
 @dataclass(frozen=True)
@@ -52,6 +66,10 @@ class DubbingSpec:
     state: str = "disabled"
     replace_original_audio: bool = False
     authorization: AiOperationAuthorization | None = None
+    rate: float = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rate", _speech_rate(self.rate))
 
 
 @dataclass(frozen=True)
@@ -73,6 +91,8 @@ class EditRecipe:
         }
         if self.dubbing.authorization is not None:
             dubbing["authorization"] = self.dubbing.authorization.to_dict()
+        if self.dubbing.rate != 1.0:
+            dubbing["rate"] = self.dubbing.rate
         return {
             "segments": [
                 {"start_ms": item.start_ms, "end_ms": item.end_ms, "label": item.label}
@@ -213,7 +233,7 @@ def _dubbing(value: object) -> DubbingSpec:
         value = {}
     if not isinstance(value, Mapping):
         raise EditingError("invalid_dubbing")
-    _exact_keys(value, {"enabled", "language", "provider", "model", "voice", "state", "replace_original_audio", "authorization"})
+    _exact_keys(value, {"enabled", "language", "provider", "model", "voice", "state", "replace_original_audio", "authorization", "rate"})
     enabled = _boolean(value.get("enabled", False))
     state = value.get("state", "needs_review" if enabled else "disabled")
     if state not in {"disabled", "needs_review", "ready", "blocked"}:
@@ -234,6 +254,7 @@ def _dubbing(value: object) -> DubbingSpec:
         state=state,
         replace_original_audio=_boolean(value.get("replace_original_audio", False)),
         authorization=authorization,
+        rate=_speech_rate(value.get("rate", 1.0)),
     )
     if (
         enabled == (state == "disabled")

@@ -6,6 +6,7 @@ recipes, timeline revisions, or the upload confirmation boundary.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -130,7 +131,12 @@ class SpeechOptions:
             raise ValueError("invalid voice id")
         if not _BCP47.fullmatch(self.language):
             raise ValueError("invalid speech language")
-        if not 0.88 <= self.rate <= 1.12:
+        if (
+            isinstance(self.rate, bool)
+            or not isinstance(self.rate, (int, float))
+            or not 0.88 <= self.rate <= 1.12
+            or not math.isfinite(float(self.rate))
+        ):
             raise ValueError("speech rate must remain within the timing policy")
         if self.style is not None and len(self.style) > 500:
             raise ValueError("speech style is too long")

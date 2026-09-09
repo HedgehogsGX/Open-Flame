@@ -185,6 +185,8 @@ Owner 完成前必须没有 `reserved`、`dispatched` 或 `unknown`。这些状�
 4. 选择标准音色、语速和“替换原声/压低原声后叠加”，生成待确认编辑计划。配音逐 cue 生成 WAV；音频超过字幕时间槽时返回 `ai_speech_timing_overflow`，不会截断文字或顺延并覆盖后续 cue。
 5. 确认本地渲染计划后，时间轴按每个已选分段过滤并从 0 ms 重新计时，分别生成 segment-local VTT 与 `dubbed_video`。分段边界切入 cue 会以 `ai_segment_boundary_splits_cue` 拒绝；没有 cue 的 B-roll 分段使用空 VTT 与本地静音，不调用 Speech API。保留原声时固定把原声压到 22% 后再混入配音；下载原件与此前编辑输出保持不变。上传仍有单独的账号和发布确认域。
 
+编辑页与自动流程页都把 `0.88`～`1.12` 的有限数值写入冻结的 dubbing recipe；自动流程预设会原样恢复该值。默认 `1.0` 不写入 canonical recipe，因而旧草稿、计划和 workflow 的 JSON/SHA-256 保持兼容；非默认值会改变 recipe/profile SHA-256，并随逐 cue Speech request 进入脱敏 request fingerprint。authorization 仍描述同一模型和调用上限，不因语速变化而改变。OpenAI provider 把该值发送为 Speech API 的 `speed`。提高语速只影响本次明确确认的生成，不会触发第二次付费调用、自动重试、截断或时间轴顺延。
+
 单 URL 自动流程未授权“自动确认编辑”时，会在听写与翻译结果处停到 `awaiting_ai_review`，并引导到编辑页查看完整时间轴。若操作者主动启用自动确认编辑，该授权也允许流程确认 AI 调用和批准返回时间轴；profile 会冻结各 operation 的 authorization，确认时仍须与当前 runtime 做 CAS。这会跳过逐项人工停顿，应只用于已经接受该精确处理范围和结果风险的流程。runtime、model 声明、外发范围或 limits 变化后，旧流程不会继承新的能力，必须重建。
 
 ## 6. 云端外发、费用与取消边界
@@ -203,6 +205,6 @@ OpenAI provider 是远程 provider。当前执行会发送：
 
 构建成功、`--check` 返回 `ready`、页面列出 provider/model 或本地渲染 smoke 通过，只能证明对应本机 runtime 结构、散列、协议和本地媒体路径满足当前代码合同。
 
-当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger 的三个 ignored 本地 validator 与本轮多分段 workflow validator、预授权 queued 工作安全重启续跑 validator、Python compileall、编辑/自动流程页内联 JavaScript 语法检查、依赖一致性检查和本机浏览器检查已经通过；本轮既有定向集合为 277 passed，另有 3 项历史导航断言仍只允许下载/编辑/上传三项，未包含早已存在的 `/workflows`，测试文件按仓库策略未修改。详见[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)与 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
+当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger 与配音语速的 ignored 本地 validator、多分段 workflow、预授权 queued 工作安全重启续跑、Python compileall、页面内联 JavaScript、依赖一致性和本机浏览器检查用于证明本地合同；测试文件按仓库策略未修改。详见[配音语速记录](../validation/iteration-0.28.0-speech-rate.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)与 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
 
 2026-09-09 追加的普通 Start 密钥边界验证仅使用合成 sentinel 和本地重建 runtime：它确认 sentinel 只进入 control child，不进入下载 Worker；三项能力从 `blocked / ai_provider_auth_missing` 转为 `unverified / provider_health_required`；验证期间网络入口被强制拒绝，输出中没有 sentinel。该结果不是 provider health 或真实 API 验收。

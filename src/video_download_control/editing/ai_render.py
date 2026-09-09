@@ -796,7 +796,7 @@ class AiRenderProcessor:
                 options = SpeechOptions(
                     voice_id=voice.id,
                     language=spec.language,
-                    rate=1.0,
+                    rate=spec.rate,
                     style=None,
                 )
                 cancelled = (
