@@ -103,6 +103,10 @@ class UploadSnapshot:
     code: str = ""
     job_ids: tuple[str, ...] | None = None
     outcome: UploadOutcome | None = None
+    # True when at least one current leaf is a local draft that still needs the
+    # domain confirmation gate. Fail closed for adapters that have not yet
+    # classified a waiting upload.
+    needs_confirmation: bool = True
 
 
 @dataclass(frozen=True, slots=True)

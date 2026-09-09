@@ -2018,12 +2018,14 @@ class LocalWorkflowAdapter:
                     "waiting",
                     code="upload_retry_confirmation_required",
                     job_ids=current_ids,
+                    needs_confirmation=True,
                 )
             if codes == {"restart_confirmation_required"}:
                 return UploadSnapshot(
                     "waiting",
                     code="upload_restart_confirmation_required",
                     job_ids=current_ids,
+                    needs_confirmation=True,
                 )
             if codes:
                 review_code = next(iter(codes))
@@ -2035,8 +2037,14 @@ class LocalWorkflowAdapter:
                         else "upload_review_confirmation_required"
                     ),
                     job_ids=current_ids,
+                    needs_confirmation=True,
                 )
-        return UploadSnapshot("waiting", job_ids=current_ids)
+            return UploadSnapshot(
+                "waiting", job_ids=current_ids, needs_confirmation=True
+            )
+        return UploadSnapshot(
+            "waiting", job_ids=current_ids, needs_confirmation=False
+        )
 
     def confirm_uploads(
         self,

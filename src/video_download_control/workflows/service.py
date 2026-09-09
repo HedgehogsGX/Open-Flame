@@ -931,10 +931,10 @@ class WorkflowService:
                             workflow_id,
                             (
                                 "awaiting_upload_confirmation"
-                                if snapshot.code
+                                if snapshot.needs_confirmation
                                 else "uploading"
                             ),
-                            snapshot.code,
+                            snapshot.code if snapshot.needs_confirmation else "",
                             expected=record,
                         )
                         continue
@@ -1648,6 +1648,9 @@ class WorkflowService:
                     expected=record,
                 )
                 return False
+            if not snapshot.needs_confirmation:
+                self._transition(workflow_id, "uploading", "", expected=record)
+                return True
             if record["code"] not in _AUTO_UPLOAD_REVIEW_CODES:
                 return False
             if snapshot.code and snapshot.code != record["code"]:
@@ -1669,7 +1672,7 @@ class WorkflowService:
             snapshot = self._inspect_upload(record)
             self._sync_upload_job_ids(record, snapshot)
             if snapshot.status == "waiting":
-                if snapshot.code:
+                if snapshot.needs_confirmation:
                     self._transition(
                         workflow_id,
                         "awaiting_upload_confirmation",
