@@ -249,6 +249,8 @@ def _profile(
         recipe = parsed_recipe.to_dict()
     except EditingError as exc:
         raise WorkflowError(exc.code) from None
+    if parsed_recipe.translation.revision_id is not None:
+        raise WorkflowError("invalid_workflow_profile")
     if len(parsed_recipe.segments) > MAX_WORKFLOW_SEGMENTS or (
         not parsed_recipe.dubbing.enabled and not parsed_recipe.segments
     ):

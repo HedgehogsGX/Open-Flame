@@ -76,6 +76,7 @@ class TranslationRequest(BaseModel):
     provider: str = Field(default="", max_length=64)
     model: str = Field(default="", max_length=120)
     state: Literal["disabled", "needs_review", "ready", "blocked"] = "disabled"
+    revision_id: Identifier | None = None
 
 
 class DubbingRequest(BaseModel):

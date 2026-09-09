@@ -235,10 +235,12 @@ function render(items){
       }
     }
     if(!cancelRequested&&item.state==='awaiting_edit_confirmation'&&confirmationReady){
+      const review=workflowFocus(el('a','在编辑页核对计划','button-link secondary'),item.id+':review-edit');
+      review.href='/edits#plans-heading';
       const button=workflowFocus(el('button','确认开始编辑'),item.id+':confirm-edit');
       button.type='button';
       button.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/confirm-edit',{method:'POST',body:JSON.stringify({expected_revision:item.revision,expected_profile_sha256:item.profile_sha256})})));
-      actions.append(button);
+      actions.append(review,button);
     }
     if(!cancelRequested&&item.state==='awaiting_upload_confirmation'){
       const count=item.upload_job_count||plannedJobs,button=workflowFocus(el('button','确认 '+count+' 个任务上传'),item.id+':confirm-upload');

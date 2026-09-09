@@ -31,6 +31,16 @@ def _speech_rate(value: object) -> float:
     return result
 
 
+def _translation_revision_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 32
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise EditingError("invalid_translation")
+    return value
+
+
 @dataclass(frozen=True)
 class SegmentSpec:
     start_ms: int
@@ -54,6 +64,16 @@ class TranslationSpec:
     provider: str = ""
     model: str = ""
     state: str = "disabled"
+    revision_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.revision_id is None:
+            return
+        object.__setattr__(
+            self, "revision_id", _translation_revision_id(self.revision_id)
+        )
+        if not self.enabled or self.state != "ready":
+            raise EditingError("invalid_translation")
 
 
 @dataclass(frozen=True)
@@ -80,6 +100,16 @@ class EditRecipe:
     dubbing: DubbingSpec = DubbingSpec()
 
     def to_dict(self) -> dict[str, Any]:
+        translation: dict[str, Any] = {
+            "enabled": self.translation.enabled,
+            "source_language": self.translation.source_language,
+            "target_language": self.translation.target_language,
+            "provider": self.translation.provider,
+            "model": self.translation.model,
+            "state": self.translation.state,
+        }
+        if self.translation.revision_id is not None:
+            translation["revision_id"] = self.translation.revision_id
         dubbing: dict[str, Any] = {
             "enabled": self.dubbing.enabled,
             "language": self.dubbing.language,
@@ -106,14 +136,7 @@ class EditRecipe:
                 "title": self.cover.title,
                 "subtitle": self.cover.subtitle,
             },
-            "translation": {
-                "enabled": self.translation.enabled,
-                "source_language": self.translation.source_language,
-                "target_language": self.translation.target_language,
-                "provider": self.translation.provider,
-                "model": self.translation.model,
-                "state": self.translation.state,
-            },
+            "translation": translation,
             "dubbing": dubbing,
         }
 
@@ -210,10 +233,29 @@ def _translation(value: object) -> TranslationSpec:
         value = {}
     if not isinstance(value, Mapping):
         raise EditingError("invalid_translation")
-    _exact_keys(value, {"enabled", "source_language", "target_language", "provider", "model", "state"})
+    _exact_keys(
+        value,
+        {
+            "enabled",
+            "source_language",
+            "target_language",
+            "provider",
+            "model",
+            "state",
+            "revision_id",
+        },
+    )
     enabled = _boolean(value.get("enabled", False))
     state = value.get("state", "needs_review" if enabled else "disabled")
     if state not in {"disabled", "needs_review", "ready", "blocked"}:
+        raise EditingError("invalid_translation")
+    raw_revision_id = value.get("revision_id")
+    revision_id = (
+        None
+        if raw_revision_id is None
+        else _translation_revision_id(raw_revision_id)
+    )
+    if revision_id is not None and (not enabled or state != "ready"):
         raise EditingError("invalid_translation")
     result = TranslationSpec(
         enabled=enabled,
@@ -222,6 +264,7 @@ def _translation(value: object) -> TranslationSpec:
         provider=_token(value.get("provider", ""), 64, required=enabled),
         model=_token(value.get("model", ""), 120),
         state=state,
+        revision_id=revision_id,
     )
     if enabled == (state == "disabled"):
         raise EditingError("invalid_translation")

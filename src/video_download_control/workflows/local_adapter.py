@@ -863,11 +863,21 @@ class LocalWorkflowAdapter:
             if isinstance(translated, AiSnapshot):
                 return translated
 
+            translated_revision_id = _record_id(translated)
             ready_recipe = normalized.to_dict()
             ready_recipe["translation"]["source_language"] = source_language
             ready_recipe["translation"]["state"] = "ready"
+            ready_recipe["translation"]["revision_id"] = translated_revision_id
             if normalized.dubbing.enabled:
                 ready_recipe["dubbing"]["state"] = "ready"
+            legacy_ready_recipe = {
+                **ready_recipe,
+                "translation": {
+                    key: value
+                    for key, value in ready_recipe["translation"].items()
+                    if key != "revision_id"
+                },
+            }
             draft = self.editing_manager.invoke("draft", project_id)
             if not isinstance(draft, Mapping):
                 raise WorkflowError("workflow_domain_data_invalid")
@@ -878,7 +888,7 @@ class LocalWorkflowAdapter:
                 or draft_version < 1
             ):
                 raise WorkflowError("workflow_domain_data_invalid")
-            if draft.get("recipe") != ready_recipe:
+            if draft.get("recipe") not in (ready_recipe, legacy_ready_recipe):
                 if draft.get("recipe") != normalized.to_dict():
                     raise WorkflowError("workflow_edit_draft_changed")
                 draft = self.editing_manager.invoke(
@@ -901,13 +911,14 @@ class LocalWorkflowAdapter:
                 project_id,
                 draft_version,
                 f"wf-{workflow_id}-edit-plan",
-                timeline_revision_id=_record_id(translated),
+                timeline_revision_id=translated_revision_id,
             )
             plan_id = _record_id(plan)
             if (
                 plan.get("project_id") != project_id
                 or plan.get("draft_version") != draft_version
-                or plan.get("timeline_revision_id") != _record_id(translated)
+                or plan.get("timeline_revision_id") != translated_revision_id
+                or plan.get("recipe") != draft.get("recipe")
             ):
                 raise WorkflowError("workflow_domain_data_invalid")
             return AiSnapshot(

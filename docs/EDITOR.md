@@ -1,11 +1,11 @@
 # Open-Flame 0.28.0 编辑工作台指南
 
-日期：2026-09-09
+日期：2026-09-10
 适用范围：Open-Flame 0.28.0 当前源码中的本地编辑与可选 AI 处理
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[译文精确修订绑定记录](../validation/iteration-0.28.0-translation-revision-binding.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -19,9 +19,9 @@ ready 下载视频
     │ 可选：建立并确认听写/翻译任务
     ▼
 审核完整时间轴并批准或拒绝
-    │ 可选：把已批准译文和标准音色写入草稿
+    │ 可选：把已批准译文的精确 revision_id 和标准音色写入草稿
     ▼
-冻结当前草稿和批准的时间轴为 review 计划
+冻结当前草稿和精确批准时间轴为 review 计划
     │ 核对本地处理及配音外发范围，再明确确认
     ▼
 单个本地 worker 渲染
@@ -53,11 +53,15 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 
 保存请求携带 `expected_version`。如果另一页面已经先保存了新版本，旧页面会收到 `draft_version_conflict`，必须刷新并根据新版本重新编辑。每个草稿保存完整 canonical recipe 及其 SHA-256。
 
+翻译处于 `ready` 时，新保存的 recipe 还会写入操作者所选批准译文的精确 `revision_id`。服务端复核该修订属于当前项目、目标语言/provider/model 一致、父修订是已批准听写、source language 一致（`auto` 除外）且 cue 结构匹配。旧 recipe 没有该字段时仍保持原 canonical JSON 与 SHA-256；页面只有在完整条件下恰好找到一个匹配修订时才自动恢复，零个或多个匹配都保持未选择并要求明确重选，下一次保存再升级为精确绑定。已有 ID 的草稿只恢复该 ID，不回退到别的同参数修订。
+
 旧草稿和已经建立的处理计划保持不变。用户可以继续保存 `v3`、`v4`，而基于 `v2` 的旧计划仍精确引用 `v2`。
 
 ### 1.3 生成待核对计划
 
 “生成待核对处理计划”会先保存当前表单，再把该草稿版本、完整 recipe 和 recipe SHA-256 冻结为新的 render plan。新计划状态为 `review`，代码为 `explicit_confirmation_required`。
+
+翻译已 ready 时，建立计划要求请求中的 `timeline_revision_id` 与 recipe 内的 ID 完全一致，并继续使用既有 `plan_timeline_bindings` 冻结译文/父听写修订及两份 cue 摘要；计划摘要会显示绑定 ID 和 cue 摘要，自动流程页也提供到 `/edits#plans-heading` 的审阅入口。即使配音仍为 `review` 或 `blocked`，也可建立带精确绑定、可检查的 review 计划；`confirm_plan` 仍会拒绝排队，直到配音 ready，或直接拒绝 blocked 定义。
 
 建立计划不会运行 FFmpeg。用户应核对计划引用的草稿版本、分段和封面参数，然后单独点击“确认并开始本地处理”。只有这次明确确认才把计划转为 `queued`。
 
@@ -211,7 +215,7 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 | `assets` | ready 输出的种类、名称、大小、SHA-256、时长、尺寸、container 与 codec |
 | `requests` | 幂等请求键、操作、请求摘要与结果 ID |
 
-`drafts` 禁止 UPDATE/DELETE，render plan 的项目、草稿版本、recipe、摘要、创建时间、时间轴绑定和重试来源禁止修改。当前 0.28.0 没有编辑数据库备份 CLI 或编辑成品删除/配额 UI；不要把下载/上传备份能力推定到编辑根。
+`drafts` 禁止 UPDATE/DELETE，render plan 的项目、草稿版本、recipe、摘要、创建时间、时间轴绑定和重试来源禁止修改。译文 `revision_id` 保存在现有 recipe JSON 中，计划继续复用现有 `plan_timeline_bindings`；本切片没有新增表或迁移，Editing Schema 仍为 4。当前 0.28.0 没有编辑数据库备份 CLI 或编辑成品删除/配额 UI；不要把下载/上传备份能力推定到编辑根。
 
 ## 6. 编辑 API
 
@@ -227,10 +231,10 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 | `GET /projects/{project_id}` | 读取单个项目 |
 | `POST /projects/assets/{download_asset_id}` | 显式复制 ready 下载视频并建立项目；body 含 `name`、`idempotency_key` |
 | `GET /projects/{project_id}/draft` | 读取当前草稿 |
-| `PUT /projects/{project_id}/draft` | 以 `expected_version` 追加草稿版本 |
-| `POST /projects/{project_id}/plans` | 从指定当前版本建立 `review` 计划 |
+| `PUT /projects/{project_id}/draft` | 以 `expected_version` 追加草稿版本；ready 翻译须保存并校验精确 `revision_id` |
+| `POST /projects/{project_id}/plans` | 从指定当前版本建立 `review` 计划；ready 翻译的 `timeline_revision_id` 须与 recipe ID 一致并冻结绑定 |
 | `GET /projects/{project_id}/source` | 同源预览经过复核的编辑源副本 |
-| `GET /plans?project_id=...` | 列出全部或某项目的计划 |
+| `GET /plans?project_id=...` | 列出全部或某项目的计划，并返回可核对的时间轴绑定摘要 |
 | `GET /plans/{plan_id}` | 读取计划、冻结 recipe 和已登记输出 |
 | `POST /projects/{project_id}/ai-tasks` | 建立待确认听写/翻译任务；创建本身不调用 provider |
 | `GET /ai-tasks` / `GET /ai-tasks/{task_id}` | 列出或读取 AI task、状态、重试来源和结果修订 |
@@ -256,6 +260,7 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 - `TimelineCue` 保存稳定 cue ID、顺序、整数毫秒起止时间、来源文字、来源语言与可选 speaker ID。SRT/WebVTT parser 只接受 UTF-8，单文件上限 2 MiB，最多 10000 个 cue；所有进入当前时间轴、翻译和 TTS 的单 cue 文字统一限制为 4096 字符。
 - 听写与翻译分别保存不可变 AI task；创建停在 `review`，明确确认后才进入队列。provider 返回的时间轴或译文先保存为 `review` revision，只有整份批准后才可作为下一步输入。
 - `TranslationRevision` 必须按原 cue ID、数量和顺序返回译文，不能丢段、换序或偷偷合并。时间轴 JSON 上限为 3 MiB，为隔离 runtime 的 4 MiB 请求 envelope 留出操作字段和 glossary 空间。
+- 新手动草稿和新 AI-ready 自动流程草稿把所选译文 `revision_id` 写入 recipe。旧 ready recipe 没有 ID 时只允许唯一完整匹配自动恢复；歧义或无匹配时失败关闭并等待操作者重选。可复用 workflow profile/preset 禁止携带运行期 revision ID，已有 in-flight legacy 草稿也不会被静默改写。
 - 当前 AI runtime 与核心 `.venv`、上传 runtime 分开；builder 冻结 CPython、worker、协议、provider、model declaration 和全文件摘要。标准库 OpenAI provider 不依赖 SDK，API key 只从 `OPEN_FLAME_AI_OPENAI_API_KEY` 读取。
 - 自动流程的听写请求允许完整视频、一个分段或首尾连续的多个分段；有分段时以首段起点和末段终点作为 `clip_start_ms` / `clip_end_ms`，本机 FFmpeg 只派生该连续范围的 mono AAC，provider 返回的相对时间随后加回首段起点。含间隙的多分段在创建远端任务前以 `workflow_ai_segments_must_be_contiguous` 拒绝，避免发送未选择的音频。编辑页直接建立听写任务时当前没有片段选择控件，默认处理完整编辑源。
 - `SpeechOptions` 允许有限的 0.88～1.12 倍语速；编辑页和自动流程页会把实际数值冻结到 dubbing recipe，预设原样恢复。默认 `1.0` 为兼容旧记录而不写入 canonical JSON；非默认值改变 recipe/profile SHA-256，并进入逐 cue provider request 与调用指纹。每个 cue 独立取得 WAV、检查格式和时长，再在对应分段内构造 PCM 轨。超出时间槽以 `ai_speech_timing_overflow` 失败，不自动再次调用、截断或顺延后续 cue。
@@ -269,7 +274,7 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 8. 后续 AI 验收与本地 provider 方向
 
-0.28.0 发布后源码已完成逐操作 authorization、输入/调用硬上限、Editing Schema 4 远程调用账本、非密钥复用预设、完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke、三平台参数卡与下载前封面预检，以及已预授权、确定尚未 dispatch 的原始 queued AI/render/upload 安全重启续跑；`running`、retry 与 unknown 继续停下。下一工程切片等待用户选定液态玻璃方向后统一四页生产视觉。之后再在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、供应商 request/账单证据、实际费用和真人试听；真实结果不能由 manifest、账本人工结论或 synthetic 媒体推定。
+0.28.0 发布后源码已完成逐操作 authorization、输入/调用硬上限、Editing Schema 4 远程调用账本、非密钥复用预设、完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke、三平台参数卡与下载前封面预检、已预授权且确定尚未 dispatch 的原始 queued AI/render/upload 安全重启续跑、方向 C“编辑式玻璃”四页生产视觉，以及译文精确 `revision_id` 绑定；`running`、retry 与 unknown 继续停下。下一阶段应在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、供应商 request/账单证据、实际费用和真人试听；真实结果不能由 manifest、账本人工结论或 synthetic 媒体推定。
 
 本地 provider 仍是后续方向。若继续实现本地 ASR/翻译/TTS，应分别固定模型 revision、文件 SHA-256、许可证、架构和转换参数，并复用现有 task/timeline/plan 确认边界。候选研究包括 faster-whisper/CTranslate2、M2M100 与 Kokoro；这些候选尚未进入 0.28.0 runtime，也没有 ready 声明。
 
@@ -311,4 +316,4 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 10. 当前可以准确声称的结果
 
-0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/标准音色与可选语速配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复，原始预授权 queued 工作可在重启后重新校验并续跑。自动流程页可恢复配音语速，并可填写首批三平台的独立内容、定时、发布模式和专属选项。仓库内验证只覆盖本机定义、ignored validator、synthetic/fake 编排、本地媒体处理、compileall 和既有回归；测试文件按仓库策略未修改。以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。
+0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、精确 `revision_id` 绑定的处理计划、本地分段/封面/字幕/标准音色与可选语速配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复，原始预授权 queued 工作可在重启后重新校验并续跑。自动流程页可恢复配音语速，并可填写首批三平台的独立内容、定时、发布模式和专属选项。译文绑定切片的服务验证为 17/17 PASS、严格浏览器检查及 4 个既有浏览器回归 PASS，full-chain/full-video/speech-rate/multisegment 也均 PASS；聚焦 pytest 为 69 passed、2 个既有 Editing Schema 1 旧断言失败，测试文件未改。仓库内验证仍只覆盖本机定义、ignored validator、synthetic/fake 编排和本地媒体处理；以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真实下载、真人试听、三平台真实上传/投稿/发布或新发行制品证据。

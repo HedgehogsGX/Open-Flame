@@ -839,18 +839,25 @@ class EditingService:
         source_id = _identifier(source_id)
         name = _text(name, 160, required=True)
         key = _request_id(idempotency_key)
+        ready_translation = False
         if recipe is None:
             recipe_value = _EMPTY_RECIPE
             encoded = json.dumps(recipe_value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             recipe_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         else:
-            _normalized, encoded, recipe_hash = _canonical_recipe(recipe)
+            normalized, encoded, recipe_hash = _canonical_recipe(recipe)
+            ready_translation = (
+                normalized.translation.state == "ready"
+                or normalized.translation.revision_id is not None
+            )
         request_digest = _digest("create_project", {
             "source_id": source_id, "name": name, "recipe_sha256": recipe_hash
         })
         existing = self._request_result(key, "create_project", request_digest)
         if existing is not None:
             return self.project(existing)
+        if ready_translation:
+            raise EditingError("ai_timeline_revision_required")
         with self._db() as db:
             source_row = db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         if source_row is None:
@@ -884,7 +891,7 @@ class EditingService:
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 1:
             raise EditingError("invalid_version")
         key = _request_id(idempotency_key)
-        _normalized, encoded, recipe_hash = _canonical_recipe(recipe)
+        normalized, encoded, recipe_hash = _canonical_recipe(recipe)
         request_digest = _digest("update_draft", {
             "project_id": project_id,
             "expected_version": expected_version,
@@ -905,6 +912,16 @@ class EditingService:
                 raise EditingError("project_not_found")
             if project["current_version"] != expected_version:
                 raise EditingError("draft_version_conflict")
+            if normalized.translation.state == "ready":
+                revision_id = normalized.translation.revision_id
+                if revision_id is None:
+                    raise EditingError("ai_timeline_revision_required")
+                self._approved_translation_binding(
+                    db,
+                    project_id=project_id,
+                    recipe=normalized,
+                    revision_id=revision_id,
+                )
             next_version = expected_version + 1
             now = _now()
             db.execute(
@@ -1117,7 +1134,9 @@ class EditingService:
                 or not hmac.compare_digest(plan_request["digest"], expected_plan_digest)
                 or expected_recipe is not None
                 and not self._workflow_plan_recipe_matches(
-                    expected_recipe, plan.get("recipe")
+                    expected_recipe,
+                    plan.get("recipe"),
+                    plan.get("timeline_revision_id"),
                 )
             ):
                 raise EditingError("editing_request_invalid")
@@ -1125,7 +1144,9 @@ class EditingService:
 
     @staticmethod
     def _workflow_plan_recipe_matches(
-        expected: EditRecipe, actual: object
+        expected: EditRecipe,
+        actual: object,
+        timeline_revision_id: object,
     ) -> bool:
         """Allow only the deterministic AI-ready evolution of a workflow recipe."""
 
@@ -1135,7 +1156,7 @@ class EditingService:
             return False
         expected_recipe = expected.to_dict()
         if not (expected.translation.enabled or expected.dubbing.enabled):
-            return actual_recipe == expected_recipe
+            return timeline_revision_id is None and actual_recipe == expected_recipe
         translation = actual_recipe.get("translation")
         expected_translation = expected_recipe.get("translation")
         dubbing = actual_recipe.get("dubbing")
@@ -1145,10 +1166,17 @@ class EditingService:
             or not isinstance(expected_translation, dict)
             or not isinstance(dubbing, dict)
             or not isinstance(expected_dubbing, dict)
+            or not isinstance(timeline_revision_id, str)
+            or _ID.fullmatch(timeline_revision_id) is None
             or translation.get("state") != "ready"
             or expected.dubbing.enabled and dubbing.get("state") != "ready"
         ):
             return False
+        actual_revision_id = translation.get("revision_id")
+        if actual_revision_id is not None and actual_revision_id != timeline_revision_id:
+            return False
+        if expected_translation.get("revision_id") is None:
+            translation.pop("revision_id", None)
         translation["source_language"] = expected_translation["source_language"]
         translation["state"] = expected_translation["state"]
         if expected.dubbing.enabled:
@@ -1842,6 +1870,12 @@ class EditingService:
         self._draft_public(draft)
         recipe = self._recipe_from_row(draft)
         self._verified_source_row(source_row)
+        recipe_revision_id = recipe.translation.revision_id
+        if recipe_revision_id is not None:
+            if timeline_revision_id is None:
+                raise EditingError("ai_timeline_revision_required")
+            if recipe_revision_id != timeline_revision_id:
+                raise EditingError("ai_timeline_mismatch")
         plan_id, now = uuid4().hex, _now()
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -2312,32 +2346,22 @@ class EditingService:
     def source_path_for_plan(self, plan_id: str) -> Path:
         return self.source_identity_for_plan(plan_id)[0]
 
-    def _timeline_binding(
+    def _approved_translation_binding(
         self,
         db: sqlite3.Connection,
         *,
         project_id: str,
         recipe: EditRecipe,
-        revision_id: str | None,
-    ) -> dict[str, Any] | None:
-        ai_enabled = recipe.translation.enabled or recipe.dubbing.enabled
-        if not ai_enabled:
-            if revision_id is not None:
-                raise EditingError("ai_timeline_not_expected")
-            return None
+        revision_id: str,
+    ) -> dict[str, Any]:
+        revision_id = _identifier(revision_id)
         if (
             not recipe.translation.enabled
             or recipe.translation.state != "ready"
-            or (recipe.dubbing.enabled and recipe.dubbing.state != "ready")
+            or recipe.translation.revision_id is not None
+            and recipe.translation.revision_id != revision_id
         ):
-            if revision_id is not None:
-                raise EditingError("ai_timeline_not_expected")
-            # A blocked or review-state plan can still be inspected, but
-            # confirm_plan will refuse to queue it until a new ready draft is
-            # frozen with an exact approved timeline revision.
-            return None
-        if revision_id is None:
-            raise EditingError("ai_timeline_revision_required")
+            raise EditingError("ai_timeline_mismatch")
         row = db.execute(
             "SELECT * FROM timeline_revisions WHERE id=?", (revision_id,)
         ).fetchone()
@@ -2391,6 +2415,34 @@ class EditingService:
             "target_language": timeline.language,
             "timeline": timeline,
         }
+
+    def _timeline_binding(
+        self,
+        db: sqlite3.Connection,
+        *,
+        project_id: str,
+        recipe: EditRecipe,
+        revision_id: str | None,
+    ) -> dict[str, Any] | None:
+        ai_enabled = recipe.translation.enabled or recipe.dubbing.enabled
+        if not ai_enabled:
+            if revision_id is not None:
+                raise EditingError("ai_timeline_not_expected")
+            return None
+        if not recipe.translation.enabled or recipe.translation.state != "ready":
+            if revision_id is not None:
+                raise EditingError("ai_timeline_not_expected")
+            # A blocked or review-state plan can still be inspected, but
+            # confirm_plan will refuse to queue it until AI work is ready.
+            return None
+        if revision_id is None:
+            raise EditingError("ai_timeline_revision_required")
+        return self._approved_translation_binding(
+            db,
+            project_id=project_id,
+            recipe=recipe,
+            revision_id=revision_id,
+        )
 
     def approved_timeline_for_plan(
         self, plan_id: str
@@ -2976,6 +3028,11 @@ class EditingService:
             "FROM plan_timeline_bindings WHERE plan_id=?",
             (row["id"],),
         ).fetchone()
+        if recipe.translation.revision_id is not None and (
+            binding is None
+            or binding["revision_id"] != recipe.translation.revision_id
+        ):
+            raise EditingError("editing_data_invalid")
         result["timeline_revision_id"] = (
             None if binding is None else binding["revision_id"]
         )
