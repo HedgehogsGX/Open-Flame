@@ -26,7 +26,16 @@ from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
 
-from ..managed_files import UnsafeManagedPath, file_signature, lstat_plain
+from ..managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    UnsafeManagedPath,
+    file_signature,
+    hash_open_binary,
+    lstat_plain,
+    open_matching_binary,
+    require_matching_fstat,
+)
 
 from .activity_lock import (
     UploadActivityBusy,
@@ -608,43 +617,42 @@ class UploadService:
         changed_code: str,
         unavailable_code: str,
     ) -> tuple[int, str]:
-        digest, total = hashlib.sha256(), 0
+        expected = file_signature(before)
         try:
-            with path.open("rb") as handle:
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError(changed_code)
-                while chunk := handle.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > maximum:
-                        raise UploadError(size_code)
-                    digest.update(chunk)
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError(changed_code)
-            if total != before.st_size or file_signature(_plain(path)) != file_signature(before):
-                raise UploadError(changed_code)
+            opened = open_matching_binary(path, expected=expected)
+            with opened.handle as handle:
+                hashed = hash_open_binary(handle, maximum=maximum)
+                require_matching_fstat(handle, expected=expected)
+            if hashed.size != before.st_size or file_signature(_plain(path)) != expected:
+                raise ManagedFileChanged
         except UploadError:
             raise
+        except ManagedFileSizeExceeded:
+            raise UploadError(size_code) from None
+        except ManagedFileChanged:
+            raise UploadError(changed_code) from None
         except OSError:
             raise UploadError(unavailable_code) from None
-        return total, digest.hexdigest()
+        return hashed.size, hashed.hexdigest
 
     @staticmethod
     def _stable_cover_payload(
         path: Path, before: os.stat_result,
     ) -> tuple[bytes, str]:
+        expected = file_signature(before)
         try:
-            with path.open("rb") as handle:
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("cover_changed")
+            opened = open_matching_binary(path, expected=expected)
+            with opened.handle as handle:
                 payload = handle.read(MAX_COVER_BYTES + 1)
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("cover_changed")
+                require_matching_fstat(handle, expected=expected)
             if len(payload) > MAX_COVER_BYTES:
                 raise UploadError("cover_size_invalid")
-            if len(payload) != before.st_size or file_signature(_plain(path)) != file_signature(before):
+            if len(payload) != before.st_size or file_signature(_plain(path)) != expected:
                 raise UploadError("cover_changed")
         except UploadError:
             raise
+        except ManagedFileChanged:
+            raise UploadError("cover_changed") from None
         except OSError:
             raise UploadError("cover_unavailable") from None
         return payload, hashlib.sha256(payload).hexdigest()
@@ -1115,17 +1123,22 @@ class UploadService:
             before = _plain(path)
             if before.st_size != row["size"]:
                 raise UploadError("source_changed")
-            with path.open("rb") as handle:
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("source_changed")
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("source_changed")
+            expected = file_signature(before)
+            opened = open_matching_binary(path, expected=expected)
+            with opened.handle as handle:
+                hashed = hash_open_binary(handle, maximum=MAX_SOURCE_BYTES)
+                require_matching_fstat(handle, expected=expected)
             after = _plain(path)
-            valid = digest == row["sha256"] and file_signature(after) == file_signature(before)
+            valid = (
+                hashed.size == before.st_size
+                and hashed.hexdigest == row["sha256"]
+                and file_signature(after) == expected
+            )
             self._source_integrity_cache[row["id"]] = (file_signature(after), valid)
             if not valid:
                 raise UploadError("source_changed")
+        except (ManagedFileChanged, ManagedFileSizeExceeded):
+            raise UploadError("source_changed") from None
         except OSError:
             raise UploadError("source_unavailable") from None
         return path
@@ -1183,12 +1196,11 @@ class UploadService:
             before = _plain(path)
             if before.st_size != row["size"]:
                 raise UploadError("cover_changed")
-            with path.open("rb") as handle:
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("cover_changed")
+            expected = file_signature(before)
+            opened = open_matching_binary(path, expected=expected)
+            with opened.handle as handle:
                 payload = handle.read(MAX_COVER_BYTES + 1)
-                if file_signature(os.fstat(handle.fileno())) != file_signature(before):
-                    raise UploadError("cover_changed")
+                require_matching_fstat(handle, expected=expected)
             try:
                 mime_type, width, height = _cover_metadata(payload, row["suffix"])
             except UploadError:
@@ -1201,13 +1213,15 @@ class UploadService:
                 and mime_type == row["mime_type"]
                 and width == row["width"]
                 and height == row["height"]
-                and file_signature(after) == file_signature(before)
+                and file_signature(after) == expected
             )
             self._asset_integrity_cache[row["id"]] = (file_signature(after), valid)
             if not valid:
                 raise UploadError("cover_changed")
         except FileNotFoundError:
             raise UploadError("cover_reimport_required") from None
+        except ManagedFileChanged:
+            raise UploadError("cover_changed") from None
         except OSError:
             raise UploadError("cover_unavailable") from None
         return path, payload

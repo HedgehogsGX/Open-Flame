@@ -15,7 +15,16 @@ from threading import Event
 from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 from uuid import UUID, uuid4
 
-from ..managed_files import UnsafeManagedPath, file_signature, lstat_plain
+from ..managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    UnsafeManagedPath,
+    file_signature,
+    hash_open_binary,
+    lstat_plain,
+    open_matching_binary,
+    require_matching_fstat,
+)
 
 from .contracts import (
     EditRecipe,
@@ -176,22 +185,20 @@ def _hash_plain_file(path: Path, *, maximum: int) -> tuple[int, str]:
     before = _plain(path)
     if not 0 < before.st_size <= maximum:
         raise EditingError("editing_media_size_invalid")
-    digest = hashlib.sha256()
+    expected = file_signature(before)
     try:
-        with path.open("rb") as handle:
-            opened = os.fstat(handle.fileno())
-            if file_signature(opened) != file_signature(before):
-                raise EditingError("editing_media_changed")
-            while chunk := handle.read(1024 * 1024):
-                digest.update(chunk)
-            after_handle = os.fstat(handle.fileno())
+        opened = open_matching_binary(path, expected=expected)
+        with opened.handle as handle:
+            hashed = hash_open_binary(handle, maximum=maximum)
+            require_matching_fstat(handle, expected=expected)
+    except (ManagedFileChanged, ManagedFileSizeExceeded):
+        raise EditingError("editing_media_changed") from None
     except OSError as exc:
         raise EditingError("editing_media_unavailable") from exc
     after = _plain(path)
-    if (file_signature(after_handle) != file_signature(before)
-            or file_signature(after) != file_signature(before)):
+    if hashed.size != before.st_size or file_signature(after) != expected:
         raise EditingError("editing_media_changed")
-    return before.st_size, digest.hexdigest()
+    return hashed.size, hashed.hexdigest
 
 
 def _open_verified_file(
@@ -209,39 +216,44 @@ def _open_verified_file(
         before = _plain(path)
         if not 0 < before.st_size <= maximum or before.st_size != expected_size:
             raise EditingError(error_code)
-        handle = path.open("rb")
-        opened = os.fstat(handle.fileno())
-        if file_signature(opened) != file_signature(before):
-            raise EditingError(error_code)
-        digest = hashlib.sha256()
-        chunk_digests: list[bytes] = []
-        total = 0
-        while chunk := handle.read(VERIFIED_MEDIA_CHUNK_BYTES):
-            total += len(chunk)
-            if total > expected_size:
-                raise EditingError(error_code)
-            digest.update(chunk)
-            chunk_digests.append(hashlib.sha256(chunk).digest())
-        finished = os.fstat(handle.fileno())
+        expected = file_signature(before)
+        opened = open_matching_binary(path, expected=expected)
+        handle = opened.handle
+        hashed = hash_open_binary(
+            handle,
+            maximum=expected_size,
+            chunk_size=VERIFIED_MEDIA_CHUNK_BYTES,
+            collect_chunk_digests=True,
+        )
+        require_matching_fstat(handle, expected=expected)
         after = _plain(path)
         if (
-            total != expected_size
-            or digest.hexdigest() != expected_sha256
-            or file_signature(opened) != file_signature(before)
-            or file_signature(finished) != file_signature(before)
-            or file_signature(after) != file_signature(before)
+            hashed.size != expected_size
+            or hashed.hexdigest != expected_sha256
+            or file_signature(after) != expected
         ):
             raise EditingError(error_code)
         handle.seek(0)
-        return handle, opened, tuple(chunk_digests)
+        return handle, opened.info, hashed.chunk_digests
     except EditingError:
         if handle is not None:
             handle.close()
         raise
+    except (ManagedFileChanged, ManagedFileSizeExceeded):
+        if handle is not None:
+            handle.close()
+        raise EditingError(error_code) from None
     except OSError as exc:
         if handle is not None:
             handle.close()
         raise EditingError(error_code) from exc
+    except BaseException:
+        if handle is not None:
+            try:
+                handle.close()
+            except BaseException:
+                pass
+        raise
 
 
 class EditingService:
