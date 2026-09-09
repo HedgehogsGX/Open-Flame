@@ -39,6 +39,7 @@ from .contracts import (
     EditingError,
     RenderAsset,
     RenderResult,
+    SegmentSpec,
     recipe_from_mapping,
 )
 
@@ -390,11 +391,19 @@ class MediaProcessor:
         cancel_event: Event | None = None,
         expected_source_size: int | None = None,
         expected_source_sha256: str | None = None,
+        full_video_output: bool = False,
     ) -> RenderResult:
         """Render all local operations or leave no completed output behind."""
 
+        if type(full_video_output) is not bool:
+            raise EditingError("invalid_edit_recipe")
         self._validate_cancel_event(cancel_event)
-        normalized = self._validated_recipe(recipe)
+        normalized = self._validated_recipe(
+            recipe,
+            allow_empty=full_video_output,
+        )
+        if full_video_output and normalized.segments:
+            raise EditingError("invalid_edit_recipe")
         try:
             self._check_cancelled(cancel_event)
             cover_font = self._preflight_cover_font(normalized)
@@ -415,9 +424,14 @@ class MediaProcessor:
         if source_path.is_relative_to(self.tool_root):
             raise EditingError("invalid_source_media")
 
+        planned_video_count = (
+            len(normalized.segments)
+            if normalized.segments
+            else int(full_video_output)
+        )
         planned = [
             destination / f"segment-{index:03d}.mp4"
-            for index in range(1, len(normalized.segments) + 1)
+            for index in range(1, planned_video_count + 1)
         ]
         if normalized.cover is not None:
             planned.append(destination / "cover.png")
@@ -436,11 +450,22 @@ class MediaProcessor:
             )
             self._assert_signature(source_path, source_signature, source=True)
             self._validate_recipe_against_source(normalized, source_probe)
-            estimated_bytes = self._estimated_plan_bytes(normalized, source_probe)
+            render_segments = normalized.segments
+            if full_video_output:
+                render_segments = (
+                    SegmentSpec(0, source_probe.duration_ms, "whole-video"),
+                )
+            render_recipe = EditRecipe(
+                segments=render_segments,
+                cover=normalized.cover,
+                translation=normalized.translation,
+                dubbing=normalized.dubbing,
+            )
+            estimated_bytes = self._estimated_plan_bytes(render_recipe, source_probe)
             self._require_capacity(destination, estimated_bytes)
             completed_bytes = 0
 
-            for ordinal, segment in enumerate(normalized.segments, start=1):
+            for ordinal, segment in enumerate(render_segments, start=1):
                 target = destination / f"segment-{ordinal:03d}.mp4"
                 owned_paths.append(target)
                 file_limit = min(
@@ -768,7 +793,11 @@ class MediaProcessor:
             raise
 
     @staticmethod
-    def _validated_recipe(recipe: EditRecipe) -> EditRecipe:
+    def _validated_recipe(
+        recipe: EditRecipe,
+        *,
+        allow_empty: bool = False,
+    ) -> EditRecipe:
         if type(recipe) is not EditRecipe:
             raise EditingError("invalid_edit_recipe")
         try:
@@ -777,7 +806,7 @@ class MediaProcessor:
             raise EditingError("invalid_edit_recipe") from exc
         if normalized.translation.enabled or normalized.dubbing.enabled:
             raise EditingError("capability_unavailable")
-        if not normalized.segments and normalized.cover is None:
+        if not allow_empty and not normalized.segments and normalized.cover is None:
             raise EditingError("invalid_edit_recipe")
         return normalized
 

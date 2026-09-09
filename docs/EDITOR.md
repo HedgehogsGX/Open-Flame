@@ -5,7 +5,7 @@
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[译文精确修订绑定记录](../validation/iteration-0.28.0-translation-revision-binding.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[无 AI 完整视频验证](../validation/iteration-0.28.0-no-ai-full-video.md)、[译文精确修订绑定记录](../validation/iteration-0.28.0-translation-revision-binding.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -49,7 +49,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 
 ### 1.2 保存版本化草稿
 
-新项目自动建立空的草稿 `v1`。编辑页目前要求至少添加一个分段；每次点击“保存编辑草稿”都会追加一个新版本，不会覆盖旧版本。
+新项目自动建立空的草稿 `v1`。空分段列表是明确的完整视频模式；只启用封面时仍会生成完整视频，并额外生成封面。每次点击“保存编辑草稿”都会追加一个新版本，不会覆盖旧版本。
 
 保存请求携带 `expected_version`。如果另一页面已经先保存了新版本，旧页面会收到 `draft_version_conflict`，必须刷新并根据新版本重新编辑。每个草稿保存完整 canonical recipe 及其 SHA-256。
 
@@ -85,7 +85,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 
 ## 2. 当前分段能力
 
-一份 recipe 最多包含 100 个分段。时间在 UI 中用秒输入，在 API 和数据库中保存为整数毫秒。
+一份 recipe 最多包含 100 个显式分段。`segments=[]` 表示从 0 ms 到真实源时长生成一个完整视频；时间在 UI 中用秒输入，在 API 和数据库中保存为整数毫秒。
 
 - 每段必须满足 `0 <= start_ms < end_ms <= 604800000`。
 - 每段至少 100 ms。
@@ -94,7 +94,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 - UI 可读取播放器当前时间作为起点、终点或封面抽帧位置。
 - 片段名称只作为 recipe 中的显示信息，不进入命令参数或文件路径。
 
-每段都重新编码为固定安全文件名 `segment-001.mp4`、`segment-002.mp4` 等。当前处理参数为 H.264（`libopenh264`、4 Mbit/s、`yuv420p`）和可选 AAC（192 kbit/s）；源视频没有音轨时，输出也不伪造音轨。字幕流、data stream 和源 metadata 不写入分段，输出使用 `+faststart`。
+完整视频与每个显式分段都重新编码为固定安全文件名 `segment-001.mp4`、`segment-002.mp4` 等；完整视频只有 `segment-001.mp4`。当前处理参数为 H.264（`libopenh264`、4 Mbit/s、`yuv420p`）和可选 AAC（192 kbit/s）；源视频没有音轨时，输出也不伪造音轨。字幕流、data stream 和源 metadata 不写入成品，输出使用 `+faststart`。
 
 单次计划的全部正式输出上限为 8 GiB。开始 FFmpeg 前会按固定视频/音频码率、逐段余量和可选封面估算计划空间，并为 staging 到正式 assets 的复制按两份峰值预算，再额外保留 64 MiB。每个 FFmpeg 输出还带固定 `-fs` 上限；运行期间约每 250 ms 检查受管目标大小、累计输出和剩余空间，越界时终止进程树并清理部分文件。空间不足返回 `editing_storage_full`，输出预算越界返回 `media_output_too_large`。
 

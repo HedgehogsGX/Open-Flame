@@ -263,6 +263,7 @@ validation/iteration-0.28.0-workflow-source-title.md
 validation/iteration-0.28.0-workflow-manager-recovery.md
 validation/iteration-0.28.0-download-http-boundary.md
 validation/iteration-0.28.0-hosted-ci-recovery.md
+validation/iteration-0.28.0-no-ai-full-video.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

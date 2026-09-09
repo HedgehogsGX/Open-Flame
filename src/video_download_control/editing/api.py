@@ -28,8 +28,18 @@ from .ai_bridge import AiBridgeError
 from .ai_execution import AiTaskExecutor
 from .ai_render import AiRenderProcessor
 from .ai_runtime import default_ai_runtime_root
-from .contracts import EditingError, MediaProcessor, RenderResult, recipe_from_mapping
-from .service import EditingService, VERIFIED_MEDIA_CHUNK_BYTES, default_editing_root
+from .contracts import (
+    EditingError,
+    MediaProcessor,
+    RenderResult,
+    recipe_from_mapping,
+)
+from .service import (
+    EditingService,
+    VERIFIED_MEDIA_CHUNK_BYTES,
+    default_editing_root,
+    render_ordinary_plan,
+)
 from .web import EDITING_HTML
 
 Identifier = Annotated[str, Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")]
@@ -764,7 +774,8 @@ class EditingManager:
                         expected_source_sha256=source_sha256,
                     )
                 else:
-                    result = service.processor.render(
+                    result = render_ordinary_plan(
+                        service.processor,
                         source,
                         output_dir,
                         recipe,

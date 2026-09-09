@@ -175,6 +175,7 @@ class MediaProcessor(Protocol):
         cancel_event: Event | None = None,
         expected_source_size: int | None = None,
         expected_source_sha256: str | None = None,
+        full_video_output: bool = False,
     ) -> RenderResult: ...
 
 
@@ -223,8 +224,6 @@ def recipe_from_mapping(value: EditRecipe | Mapping[str, Any]) -> EditRecipe:
 
     translation = _translation(value.get("translation", {}))
     dubbing = _dubbing(value.get("dubbing", {}))
-    if not segments and cover is None and not translation.enabled and not dubbing.enabled:
-        raise EditingError("empty_recipe")
     return EditRecipe(tuple(segments), cover, translation, dubbing)
 
 

@@ -252,9 +252,7 @@ def _profile(
         raise WorkflowError(exc.code) from None
     if parsed_recipe.translation.revision_id is not None:
         raise WorkflowError("invalid_workflow_profile")
-    if len(parsed_recipe.segments) > MAX_WORKFLOW_SEGMENTS or (
-        not parsed_recipe.dubbing.enabled and not parsed_recipe.segments
-    ):
+    if len(parsed_recipe.segments) > MAX_WORKFLOW_SEGMENTS:
         raise WorkflowError("workflow_output_count_invalid")
     if (
         (parsed_recipe.translation.enabled or parsed_recipe.dubbing.enabled)

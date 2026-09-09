@@ -116,6 +116,42 @@ def _canonical_recipe(recipe: EditRecipe | Mapping[str, Any]) -> tuple[EditRecip
     return normalized, encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def render_ordinary_plan(
+    processor: MediaProcessor,
+    source: Path,
+    output_dir: Path,
+    recipe: EditRecipe | Mapping[str, Any],
+    *,
+    cancel_event: Event | None = None,
+    expected_source_size: int | None = None,
+    expected_source_sha256: str | None = None,
+) -> RenderResult:
+    """Render a non-AI plan using the canonical whole-video convention."""
+
+    normalized = recipe_from_mapping(recipe)
+    if normalized.segments:
+        return processor.render(
+            source,
+            output_dir,
+            normalized,
+            cancel_event=cancel_event,
+            expected_source_size=expected_source_size,
+            expected_source_sha256=expected_source_sha256,
+        )
+    # AI rendering owns its separate whole-video dubbed output and never enters
+    # this ordinary-plan helper. For ordinary plans, zero segments means one
+    # deterministic full-length video, with a cover as an optional extra asset.
+    return processor.render(
+        source,
+        output_dir,
+        normalized,
+        cancel_event=cancel_event,
+        expected_source_size=expected_source_size,
+        expected_source_sha256=expected_source_sha256,
+        full_video_output=True,
+    )
+
+
 def _digest(operation: str, payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
         {"operation": operation, "payload": payload},
@@ -2686,7 +2722,8 @@ class EditingService:
         plan_id, token = claim["id"], claim["claim_token"]
         try:
             source, source_size, source_sha256 = self.source_identity_for_plan(plan_id)
-            result = self.processor.render(
+            result = render_ordinary_plan(
+                self.processor,
                 source,
                 self.output_dir_for_plan(plan_id, token),
                 recipe_from_mapping(claim["recipe"]),

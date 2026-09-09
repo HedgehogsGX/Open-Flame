@@ -1469,9 +1469,7 @@ class LocalWorkflowAdapter:
             recipe = recipe_from_mapping(plan.get("recipe"))
         except EditingError:
             return EditSnapshot("attention", code="edit_output_shape_invalid")
-        expected_video_count = len(recipe.segments) or (
-            1 if recipe.dubbing.enabled else 0
-        )
+        expected_video_count = len(recipe.segments) or 1
         if not 1 <= expected_video_count <= MAX_WORKFLOW_SEGMENTS:
             return EditSnapshot("attention", code="edit_output_shape_invalid")
 
