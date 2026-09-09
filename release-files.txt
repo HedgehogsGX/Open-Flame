@@ -252,6 +252,7 @@ validation/iteration-0.28.0-workflow-server-preflight.md
 validation/iteration-0.28.0-workflow-restart-continuation.md
 validation/iteration-0.28.0-workflow-full-video-default.md
 validation/iteration-0.28.0-workflow-cancellation.md
+validation/iteration-0.28.0-workflow-duplicate-download-owner.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

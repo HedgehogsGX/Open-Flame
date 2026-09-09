@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 from uuid import UUID
 
 from ..credential_defaults import CredentialDefaultsError
+from ..domain import ErrorCode
 from ..editing.contracts import EditingError, recipe_from_mapping
 from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
@@ -55,6 +56,14 @@ _DOWNLOAD_JOB_STATES = {
     "failed",
     "canceled",
 }
+_DOWNLOAD_ACTIVE_JOB_STATES = {
+    "queued",
+    "probing",
+    "downloading",
+    "postprocessing",
+    "verifying",
+}
+_DOWNLOAD_FAILURE_CODES = frozenset(code.value for code in ErrorCode)
 _EDIT_WAITING_STATES = {"review", "queued", "running", "canceling"}
 _UPLOAD_WAITING_STATES = {"draft", "queued", "running"}
 _UPLOAD_SUCCESS_STATES = {"submitted", "draft_saved"}
@@ -402,9 +411,16 @@ class LocalWorkflowAdapter:
 
     def inspect_download(self, batch_id: str) -> DownloadSnapshot:
         batch_id = _download_identifier(batch_id)
-        batch = self.batch_service.get_batch(batch_id)
-        if not isinstance(batch, Mapping):
+        observation = self.batch_service.inspect_single_input_download(batch_id)
+        if observation is None:
             return DownloadSnapshot("attention", code="download_batch_not_found")
+        if not isinstance(observation, Mapping):
+            return DownloadSnapshot("attention", code="download_state_invalid")
+        batch = observation.get("batch")
+        if not isinstance(batch, Mapping):
+            return DownloadSnapshot("attention", code="download_state_invalid")
+        if batch.get("id") != batch_id:
+            return DownloadSnapshot("attention", code="download_state_invalid")
         state = batch.get("status")
         if state not in _DOWNLOAD_STATES:
             return DownloadSnapshot("attention", code="download_state_unknown")
@@ -417,13 +433,78 @@ class LocalWorkflowAdapter:
                 return DownloadSnapshot("attention", code="download_state_unknown")
             job_states.append(job["status"])
 
-        assets = self.batch_service.list_ready_assets_for_batch(batch_id)
-        if assets is None:
-            return DownloadSnapshot("attention", code="download_batch_not_found")
+        assets = observation.get("assets")
         if not isinstance(assets, list):
             return DownloadSnapshot("attention", code="download_state_invalid")
         if len(assets) > 1:
             return DownloadSnapshot("attention", code="download_multiple_assets")
+
+        if state == "duplicate":
+            owner = observation.get("duplicate_owner")
+            if not isinstance(owner, Mapping) or owner.get("valid") is not True:
+                return DownloadSnapshot("attention", code="download_state_invalid")
+            if owner.get("job_kind") != "download":
+                return DownloadSnapshot("attention", code="download_state_invalid")
+            input_state = owner.get("input_status")
+            job_state = owner.get("job_status")
+            input_error = owner.get("input_error_code")
+            input_error_message = owner.get("input_error_message")
+            job_error = owner.get("job_error_code")
+            if job_state not in _DOWNLOAD_JOB_STATES:
+                return DownloadSnapshot("attention", code="download_state_unknown")
+            if input_state == "queued":
+                if (
+                    job_state not in _DOWNLOAD_ACTIVE_JOB_STATES
+                    or input_error is not None
+                    or input_error_message is not None
+                    or job_error is not None
+                    or assets
+                ):
+                    return DownloadSnapshot(
+                        "attention", code="download_state_invalid"
+                    )
+                return DownloadSnapshot("waiting")
+            if input_state == "ready":
+                if (
+                    job_state != "ready"
+                    or input_error is not None
+                    or input_error_message is not None
+                    or job_error is not None
+                    or not assets
+                ):
+                    return DownloadSnapshot(
+                        "attention", code="download_state_invalid"
+                    )
+            elif input_state == "failed":
+                if (
+                    job_state != "failed"
+                    or not isinstance(input_error, str)
+                    or input_error != job_error
+                    or input_error not in _DOWNLOAD_FAILURE_CODES
+                ):
+                    return DownloadSnapshot(
+                        "attention", code="download_state_invalid"
+                    )
+                if assets:
+                    return DownloadSnapshot(
+                        "attention", code="download_state_invalid"
+                    )
+                return DownloadSnapshot("failed", code=input_error)
+            elif input_state == "canceled":
+                if (
+                    job_state != "canceled"
+                    or input_error is not None
+                    or input_error_message is not None
+                    or job_error is not None
+                    or assets
+                ):
+                    return DownloadSnapshot(
+                        "attention", code="download_state_invalid"
+                    )
+                return DownloadSnapshot("failed", code="download_canceled")
+            else:
+                return DownloadSnapshot("attention", code="download_state_invalid")
+
         if assets:
             asset = assets[0]
             if not isinstance(asset, Mapping):
@@ -438,8 +519,7 @@ class LocalWorkflowAdapter:
 
         if state == "queued":
             if not any(
-                job_state
-                in {"queued", "probing", "downloading", "postprocessing", "verifying"}
+                job_state in _DOWNLOAD_ACTIVE_JOB_STATES
                 for job_state in job_states
             ):
                 return DownloadSnapshot("attention", code="download_state_invalid")

@@ -250,6 +250,11 @@ class BatchService:
     ) -> list[dict[str, Any]] | None:
         return self.repository.list_ready_assets_for_batch(batch_id)
 
+    def inspect_single_input_download(
+        self, batch_id: str
+    ) -> dict[str, Any] | None:
+        return self.repository.inspect_single_input_download(batch_id)
+
     def get_ready_original_asset(self, asset_id: str) -> dict[str, Any] | None:
         return self.repository.get_ready_original_asset(asset_id)
 
