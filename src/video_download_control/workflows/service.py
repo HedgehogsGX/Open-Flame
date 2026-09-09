@@ -85,6 +85,7 @@ _AUTO_EDIT_REVIEW_CODES = frozenset(
     }
 )
 _AUTO_UPLOAD_REVIEW_CODES = frozenset({"", "upload_restart_confirmation_required"})
+_SOURCE_METADATA_RETRY_CODE = "workflow_source_metadata_unavailable"
 _PREFLIGHT_RETRY_CODES = frozenset(
     {
         "download_worker_unobserved",
@@ -396,7 +397,21 @@ def _profile(
         "target_overrides",
     }
     expected_upload = required_upload | ({"account_bindings"} if bound_accounts else set())
-    if set(raw_upload) != expected_upload:
+    raw_upload_keys = frozenset(raw_upload)
+    if raw_upload_keys not in {frozenset(expected_upload), frozenset(expected_upload | {"title_mode"})}:
+        raise WorkflowError("invalid_workflow_profile")
+    title_mode = raw_upload.get("title_mode", "explicit")
+    if not isinstance(title_mode, str) or title_mode not in {"explicit", "source"}:
+        raise WorkflowError("invalid_workflow_profile")
+    normalized_title = _text(
+        raw_upload.get("title"),
+        100,
+        required=title_mode == "explicit",
+    )
+    if title_mode == "source" and normalized_title:
+        # The source title is intentionally unknown until the download is
+        # ready.  Reject hidden placeholders so they cannot change request
+        # identity while being ignored during execution.
         raise WorkflowError("invalid_workflow_profile")
     account_ids = raw_upload.get("account_ids")
     if (
@@ -453,6 +468,13 @@ def _profile(
             or account_id in override_accounts
         ):
             raise WorkflowError("invalid_workflow_profile")
+        if title_mode == "source" and "title" in item:
+            override_title = _text(item.get("title"), 100, required=True)
+            if override_title != item.get("title"):
+                # The frozen title shown by Workflow must exactly match the
+                # upload-domain value.  New source profiles therefore reject
+                # a target title that would be normalized later.
+                raise WorkflowError("invalid_workflow_profile")
         override_accounts.append(account_id)
     normalized_bindings: list[dict[str, str]] = []
     if bound_accounts:
@@ -497,7 +519,7 @@ def _profile(
         "ai": normalized_ai,
         "upload": {
             "account_ids": list(account_ids),
-            "title": _text(raw_upload.get("title"), 100, required=True),
+            "title": normalized_title,
             "description": _text(raw_upload.get("description"), 2000),
             "tags": normalized_tags,
             "category_id": category_id,
@@ -512,8 +534,88 @@ def _profile(
     }
     if bound_accounts:
         normalized["upload"]["account_bindings"] = normalized_bindings
+    # Keep existing explicit-title profiles byte-for-byte canonical.  The
+    # source mode is opt-in and is frozen separately once download metadata is
+    # available.
+    if title_mode == "source":
+        normalized["upload"]["title_mode"] = "source"
     encoded, digest = _canonical(normalized)
     return normalized, encoded, digest
+
+
+def _resolved_upload(
+    value: object,
+    profile: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Validate one concrete upload snapshot against its immutable profile."""
+
+    if not isinstance(value, Mapping):
+        raise WorkflowError("workflow_data_invalid")
+    candidate = dict(profile)
+    candidate["upload"] = dict(value)
+    normalized, _, _ = _profile(candidate, bound_accounts=True)
+    upload = normalized["upload"]
+    if "title_mode" in upload:
+        raise WorkflowError("workflow_data_invalid")
+    profile_upload = profile.get("upload")
+    immutable_fields = (
+        "account_ids",
+        "description",
+        "tags",
+        "category_id",
+        "mode",
+        "copyright",
+        "source_credit",
+        "account_bindings",
+    )
+    if (
+        not isinstance(profile_upload, Mapping)
+        or profile_upload.get("title_mode") != "source"
+        or any(upload.get(field) != profile_upload.get(field) for field in immutable_fields)
+    ):
+        raise WorkflowError("workflow_data_invalid")
+
+    account_ids = upload["account_ids"]
+    source_overrides = profile_upload.get("target_overrides")
+    resolved_overrides = upload.get("target_overrides")
+    if (
+        not isinstance(source_overrides, Sequence)
+        or isinstance(source_overrides, (str, bytes))
+        or not isinstance(resolved_overrides, Sequence)
+        or isinstance(resolved_overrides, (str, bytes))
+        or [item.get("account_id") for item in resolved_overrides]
+        != account_ids
+    ):
+        raise WorkflowError("workflow_data_invalid")
+    source_by_account = {
+        item.get("account_id"): item
+        for item in source_overrides
+        if isinstance(item, Mapping)
+    }
+    if len(source_by_account) != len(source_overrides):
+        raise WorkflowError("workflow_data_invalid")
+    for resolved_override in resolved_overrides:
+        if not isinstance(resolved_override, Mapping):
+            raise WorkflowError("workflow_data_invalid")
+        account_id = resolved_override.get("account_id")
+        source_override = source_by_account.get(account_id, {"account_id": account_id})
+        try:
+            resolved_title = _text(
+                resolved_override.get("title"), 100, required=True
+            )
+        except WorkflowError:
+            raise WorkflowError("workflow_data_invalid") from None
+        if (
+            set(resolved_override) != set(source_override) | {"title"}
+            or any(
+                resolved_override.get(field) != field_value
+                for field, field_value in source_override.items()
+            )
+            or resolved_title != resolved_override.get("title")
+        ):
+            raise WorkflowError("workflow_data_invalid")
+    encoded, _ = _canonical(upload)
+    return upload, encoded
 
 
 def _workflow_outputs(
@@ -633,8 +735,14 @@ def _workflow_outputs(
 
 
 def _migration_profile_is_valid(value: Mapping[str, object]) -> bool:
-    """Apply the current complete reader contract before a Schema 1 migration."""
+    """Apply the exact legacy profile contract before a Schema 1/2 migration."""
 
+    upload = value.get("upload") if isinstance(value, Mapping) else None
+    if not isinstance(upload, Mapping) or "title_mode" in upload:
+        # Schema 1 and 2 predate source-derived titles.  A legacy database that
+        # already contains this key is forged or corrupt and must not be
+        # reinterpreted under the newer contract.
+        return False
     try:
         _profile(value, bound_accounts=True)
     except WorkflowError:
@@ -948,6 +1056,19 @@ class WorkflowService:
                     # have been repaired after the zero-side-effect preflight.
                     # Only an explicit advance reaches inactive attention rows.
                     self._transition(workflow_id, "created", "", expected=record)
+                    continue
+                if (
+                    state == "attention_required"
+                    and record["code"] == _SOURCE_METADATA_RETRY_CODE
+                    and record["batch_id"] is not None
+                    and record["download_asset_id"] is not None
+                    and record["resolved_upload"] is None
+                    and record["profile"]["upload"].get("title_mode") == "source"
+                ):
+                    # Metadata and capability reads are local and replayable.
+                    # An explicit reconcile can retry them without repeating
+                    # the completed download or creating edit/upload effects.
+                    self._transition(workflow_id, "downloading", "", expected=record)
                     continue
                 if (
                     state == "attention_required"
@@ -1397,11 +1518,70 @@ class WorkflowService:
                     expected=record,
                 )
                 return False
-            record = self._set_refs(
-                workflow_id,
-                expected=record,
-                download_asset_id=snapshot.asset_id,
-            )
+            if (
+                record["download_asset_id"] is not None
+                and record["download_asset_id"] != snapshot.asset_id
+            ):
+                # Once a ready asset has been observed, retries may fill in
+                # metadata but must never retarget the workflow to a different
+                # media object.
+                self._attention(
+                    workflow_id,
+                    "workflow_data_invalid",
+                    expected=record,
+                )
+                return False
+            refs: dict[str, object] = {"download_asset_id": snapshot.asset_id}
+            upload_profile = record["profile"]["upload"]
+            if upload_profile.get("title_mode") == "source":
+                if record["resolved_upload"] is not None:
+                    if record["download_asset_id"] != snapshot.asset_id:
+                        self._attention(
+                            workflow_id,
+                            "workflow_data_invalid",
+                            expected=record,
+                        )
+                        return False
+                    # The snapshot and asset id were committed together before
+                    # the state transition.  Reuse them after a crash instead
+                    # of resolving against metadata or capabilities that may
+                    # have changed in the meantime.
+                    self._transition(
+                        workflow_id,
+                        "preparing_edit",
+                        "",
+                        expected=record,
+                    )
+                    return True
+                resolver = getattr(self.adapter, "resolve_upload", None)
+                if not callable(resolver):
+                    record = self._set_refs(
+                        workflow_id,
+                        expected=record,
+                        download_asset_id=snapshot.asset_id,
+                    )
+                    self._attention(
+                        workflow_id,
+                        "workflow_source_metadata_unavailable",
+                        expected=record,
+                    )
+                    return False
+                try:
+                    candidate = resolver(upload_profile, snapshot)
+                    resolved_upload, _ = _resolved_upload(
+                        candidate,
+                        record["profile"],
+                    )
+                except WorkflowError as error:
+                    record = self._set_refs(
+                        workflow_id,
+                        expected=record,
+                        download_asset_id=snapshot.asset_id,
+                    )
+                    self._attention(workflow_id, error.code, expected=record)
+                    return False
+                refs["resolved_upload"] = resolved_upload
+            record = self._set_refs(workflow_id, expected=record, **refs)
             self._transition(
                 workflow_id, "preparing_edit", "", expected=record
             )
@@ -1584,7 +1764,7 @@ class WorkflowService:
                     workflow_id,
                     pending["edit_output_id"],
                     record["edit_cover_id"],
-                    record["profile"]["upload"],
+                    self._upload_for_execution(record),
                     segment_ordinal=pending["segment_ordinal"],
                 )
             except WorkflowError as error:
@@ -1714,7 +1894,7 @@ class WorkflowService:
                 expected_account_bindings=record["profile"]["upload"][
                     "account_bindings"
                 ],
-                expected_upload=record["profile"]["upload"],
+                expected_upload=self._upload_for_execution(record),
                 expected_cover_id=record["edit_cover_id"],
             )
             if snapshot.status == "upload_completed":
@@ -1782,6 +1962,23 @@ class WorkflowService:
         return CancellationSnapshot(
             "attention", code="workflow_domain_data_invalid"
         )
+
+    @staticmethod
+    def _upload_for_execution(record: Mapping[str, Any]) -> Mapping[str, Any]:
+        profile = record.get("profile")
+        if not isinstance(profile, Mapping):
+            raise WorkflowError("workflow_data_invalid")
+        upload = profile.get("upload")
+        if not isinstance(upload, Mapping):
+            raise WorkflowError("workflow_data_invalid")
+        if upload.get("title_mode") != "source":
+            if record.get("resolved_upload") is not None:
+                raise WorkflowError("workflow_data_invalid")
+            return upload
+        resolved = record.get("resolved_upload")
+        if not isinstance(resolved, Mapping):
+            raise WorkflowError("workflow_source_metadata_unavailable")
+        return resolved
 
     def _cancel_via_discovery(
         self,
@@ -1969,6 +2166,7 @@ class WorkflowService:
             "edit_cover_id",
             "upload_cover_id",
             "outputs",
+            "resolved_upload",
         }
         if not values or set(values) - allowed:
             raise WorkflowError("workflow_data_invalid")
@@ -2012,17 +2210,31 @@ class WorkflowService:
             )
             if (row["revision"], row["state"], row["code"]) != identity:
                 raise WorkflowError("workflow_revision_conflict")
-            if "outputs" in values:
+            normalized_profile: dict[str, Any] | None = None
+            if "outputs" in values or "resolved_upload" in values:
                 try:
                     profile = json.loads(row["profile_json"])
                 except (TypeError, ValueError):
                     raise WorkflowError("workflow_data_invalid") from None
                 normalized_profile, _, _ = _profile(profile, bound_accounts=True)
+            if "outputs" in values:
+                assert normalized_profile is not None
                 values["outputs"] = _workflow_outputs(
                     values["outputs"], normalized_profile
                 )
+            if "resolved_upload" in values:
+                assert normalized_profile is not None
+                _, encoded_resolved = _resolved_upload(
+                    values["resolved_upload"], normalized_profile
+                )
+                if normalized_profile["upload"].get("title_mode") != "source":
+                    raise WorkflowError("workflow_data_invalid")
+                values["resolved_upload"] = encoded_resolved
             for name, value in values.items():
-                column = "outputs_json" if name == "outputs" else name
+                column = {
+                    "outputs": "outputs_json",
+                    "resolved_upload": "resolved_upload_json",
+                }.get(name, name)
                 if name == "outputs":
                     value = json.dumps(
                         value,
@@ -2153,6 +2365,39 @@ class WorkflowService:
             != int(normalized_profile["auto_confirm_upload"])
         ):
             raise WorkflowError("workflow_data_invalid")
+        resolved_upload: dict[str, Any] | None = None
+        raw_resolved_upload = row["resolved_upload_json"]
+        if raw_resolved_upload is not None:
+            if row["download_asset_id"] is None:
+                raise WorkflowError("workflow_data_invalid")
+            if (
+                not isinstance(raw_resolved_upload, str)
+                or len(raw_resolved_upload.encode("utf-8")) > 128 * 1024
+            ):
+                raise WorkflowError("workflow_data_invalid")
+            try:
+                candidate = json.loads(raw_resolved_upload)
+            except (TypeError, ValueError):
+                raise WorkflowError("workflow_data_invalid") from None
+            resolved_upload, encoded_resolved = _resolved_upload(
+                candidate,
+                normalized_profile,
+            )
+            if (
+                encoded_resolved != raw_resolved_upload
+                or normalized_profile["upload"].get("title_mode") != "source"
+            ):
+                raise WorkflowError("workflow_data_invalid")
+        elif (
+            normalized_profile["upload"].get("title_mode") == "source"
+            and row["download_asset_id"] is not None
+            and row["state"] not in {
+                "downloading",
+                "attention_required",
+                "canceled",
+            }
+        ):
+            raise WorkflowError("workflow_data_invalid")
         outputs = _workflow_outputs(raw_outputs, normalized_profile)
         outputs_json = json.dumps(
             outputs,
@@ -2191,6 +2436,7 @@ class WorkflowService:
         public.pop("profile_json")
         public.pop("upload_job_ids_json")
         public.pop("outputs_json")
+        public.pop("resolved_upload_json")
         edit_output_ids = [item["edit_output_id"] for item in outputs]
         upload_source_ids = [
             item["upload_source_id"]
@@ -2203,6 +2449,7 @@ class WorkflowService:
             for target in item["targets"]
         ]
         public["profile"] = normalized_profile
+        public["resolved_upload"] = resolved_upload
         public["outputs"] = outputs
         public["edit_output_ids"] = edit_output_ids
         public["upload_source_ids"] = upload_source_ids

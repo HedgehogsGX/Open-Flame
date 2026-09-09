@@ -16,10 +16,11 @@ from pathlib import Path
 from .contracts import MAX_WORKFLOW_ACCOUNTS, workflow_outputs_match_state
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4F465746
 
 _SCHEMA_V1_VERSION = 1
+_SCHEMA_V2_VERSION = 2
 _IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _PLATFORMS = frozenset({"bilibili", "douyin", "tencent"})
 
@@ -67,14 +68,29 @@ _SCHEMA_V1_TRIGGER_STATEMENTS = (
  BEFORE DELETE ON workflow_events BEGIN SELECT RAISE(ABORT,'immutable workflow event'); END""",
 )
 
-TABLE_STATEMENTS = (
+_SCHEMA_V2_TABLE_STATEMENTS = (
     _SCHEMA_V1_TABLE_STATEMENTS[0],
     _SCHEMA_V1_TABLE_STATEMENTS[1][:-1]
     + ", outputs_json TEXT NOT NULL DEFAULT '[]')",
     _SCHEMA_V1_TABLE_STATEMENTS[2],
 )
-INDEX_STATEMENTS = _SCHEMA_V1_INDEX_STATEMENTS
-TRIGGER_STATEMENTS = _SCHEMA_V1_TRIGGER_STATEMENTS
+_SCHEMA_V2_INDEX_STATEMENTS = _SCHEMA_V1_INDEX_STATEMENTS
+_SCHEMA_V2_TRIGGER_STATEMENTS = _SCHEMA_V1_TRIGGER_STATEMENTS
+
+TABLE_STATEMENTS = (
+    _SCHEMA_V2_TABLE_STATEMENTS[0],
+    _SCHEMA_V2_TABLE_STATEMENTS[1][:-1] + ", resolved_upload_json TEXT)",
+    _SCHEMA_V2_TABLE_STATEMENTS[2],
+)
+INDEX_STATEMENTS = _SCHEMA_V2_INDEX_STATEMENTS
+TRIGGER_STATEMENTS = _SCHEMA_V2_TRIGGER_STATEMENTS + (
+    """CREATE TRIGGER workflow_resolved_upload_immutable
+ BEFORE UPDATE OF download_asset_id,resolved_upload_json ON workflows
+ WHEN OLD.resolved_upload_json IS NOT NULL
+  AND (NEW.resolved_upload_json IS NOT OLD.resolved_upload_json
+   OR NEW.download_asset_id IS NOT OLD.download_asset_id)
+ BEGIN SELECT RAISE(ABORT,'immutable resolved upload snapshot'); END""",
+)
 
 SCHEMA_DDL = ";\n".join(TABLE_STATEMENTS + INDEX_STATEMENTS + TRIGGER_STATEMENTS) + ";"
 _TABLE_NAMES = ("metadata", "workflows", "workflow_events")
@@ -83,6 +99,7 @@ _TRIGGER_NAMES = (
     "workflow_intent_immutable",
     "workflow_event_immutable",
     "workflow_event_delete_forbidden",
+    "workflow_resolved_upload_immutable",
 )
 _INITIALIZE_LOCK = threading.Lock()
 LegacyProfileValidator = Callable[[Mapping[str, object]], bool]
@@ -120,15 +137,22 @@ def _expected_sql(names: tuple[str, ...], statements: tuple[str, ...]) -> dict[s
 
 _EXPECTED_TABLE_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(_TABLE_NAMES, _SCHEMA_V1_TABLE_STATEMENTS),
+    _SCHEMA_V2_VERSION: _expected_sql(_TABLE_NAMES, _SCHEMA_V2_TABLE_STATEMENTS),
     SCHEMA_VERSION: _expected_sql(_TABLE_NAMES, TABLE_STATEMENTS),
 }
 _EXPECTED_INDEX_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(_INDEX_NAMES, _SCHEMA_V1_INDEX_STATEMENTS),
+    _SCHEMA_V2_VERSION: _expected_sql(_INDEX_NAMES, _SCHEMA_V2_INDEX_STATEMENTS),
     SCHEMA_VERSION: _expected_sql(_INDEX_NAMES, INDEX_STATEMENTS),
 }
 _EXPECTED_TRIGGER_SQL = {
     _SCHEMA_V1_VERSION: _expected_sql(
-        _TRIGGER_NAMES, _SCHEMA_V1_TRIGGER_STATEMENTS
+        _TRIGGER_NAMES[: len(_SCHEMA_V1_TRIGGER_STATEMENTS)],
+        _SCHEMA_V1_TRIGGER_STATEMENTS,
+    ),
+    _SCHEMA_V2_VERSION: _expected_sql(
+        _TRIGGER_NAMES[: len(_SCHEMA_V2_TRIGGER_STATEMENTS)],
+        _SCHEMA_V2_TRIGGER_STATEMENTS,
     ),
     SCHEMA_VERSION: _expected_sql(_TRIGGER_NAMES, TRIGGER_STATEMENTS),
 }
@@ -247,10 +271,9 @@ def validate_workflow_schema(path: Path) -> None:
     _validated_schema_version(Path(path), frozenset({SCHEMA_VERSION}))
 
 
-def _legacy_outputs(
-    row: sqlite3.Row,
-    profile_validator: LegacyProfileValidator,
-) -> str:
+def _legacy_profile(
+    row: sqlite3.Row, profile_validator: LegacyProfileValidator
+) -> dict[str, object]:
     profile_json = row["profile_json"]
     profile_sha256 = row["profile_sha256"]
     if (
@@ -261,10 +284,9 @@ def _legacy_outputs(
         raise WorkflowSchemaError
     try:
         profile = json.loads(profile_json)
-        job_ids = json.loads(row["upload_job_ids_json"])
     except (TypeError, ValueError):
         raise WorkflowSchemaError from None
-    if not isinstance(profile, dict) or not isinstance(job_ids, list):
+    if not isinstance(profile, dict):
         raise WorkflowSchemaError
     try:
         canonical_profile = json.dumps(
@@ -282,6 +304,20 @@ def _legacy_outputs(
         != profile_sha256
         or profile_validator(profile) is not True
     ):
+        raise WorkflowSchemaError
+    return profile
+
+
+def _legacy_outputs(
+    row: sqlite3.Row,
+    profile_validator: LegacyProfileValidator,
+) -> str:
+    profile = _legacy_profile(row, profile_validator)
+    try:
+        job_ids = json.loads(row["upload_job_ids_json"])
+    except (TypeError, ValueError):
+        raise WorkflowSchemaError from None
+    if not isinstance(job_ids, list):
         raise WorkflowSchemaError
     upload = profile.get("upload")
     edit_recipe = profile.get("edit_recipe")
@@ -386,10 +422,13 @@ def _migrate_to_current(
     path: Path,
     legacy_profile_validator: LegacyProfileValidator | None,
 ) -> None:
-    version = _validated_schema_version(path, frozenset({_SCHEMA_V1_VERSION, SCHEMA_VERSION}))
+    version = _validated_schema_version(
+        path,
+        frozenset({_SCHEMA_V1_VERSION, _SCHEMA_V2_VERSION, SCHEMA_VERSION}),
+    )
     if version == SCHEMA_VERSION:
         return
-    if legacy_profile_validator is None:
+    if version in {_SCHEMA_V1_VERSION, _SCHEMA_V2_VERSION} and legacy_profile_validator is None:
         raise WorkflowSchemaError
     connection: sqlite3.Connection | None = None
     try:
@@ -398,28 +437,38 @@ def _migrate_to_current(
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=30000")
         connection.execute("BEGIN IMMEDIATE")
-        _validate_connection(connection, _SCHEMA_V1_VERSION)
-        rows = connection.execute(
-            "SELECT profile_json,profile_sha256,state,edit_output_id,"
-            "upload_source_id,upload_job_ids_json "
-            "FROM workflows ORDER BY id"
-        ).fetchall()
-        encoded_outputs = [
-            _legacy_outputs(row, legacy_profile_validator) for row in rows
-        ]
-        identifiers = [
-            row[0]
-            for row in connection.execute("SELECT id FROM workflows ORDER BY id").fetchall()
-        ]
-        connection.execute(
-            "ALTER TABLE workflows ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '[]'"
-        )
-        for workflow_id, outputs_json in zip(identifiers, encoded_outputs, strict=True):
+        _validate_connection(connection, version)
+        if legacy_profile_validator is None:
+            raise WorkflowSchemaError
+        if version == _SCHEMA_V1_VERSION:
+            rows = connection.execute(
+                "SELECT id,profile_json,profile_sha256,state,edit_output_id,"
+                "upload_source_id,upload_job_ids_json "
+                "FROM workflows ORDER BY id"
+            ).fetchall()
+            encoded_outputs = [
+                (row["id"], _legacy_outputs(row, legacy_profile_validator))
+                for row in rows
+            ]
             connection.execute(
-                "UPDATE workflows SET outputs_json=?,edit_output_id=NULL,"
-                "upload_source_id=NULL,upload_job_ids_json='[]' WHERE id=?",
-                (outputs_json, workflow_id),
+                "ALTER TABLE workflows ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '[]'"
             )
+            for workflow_id, outputs_json in encoded_outputs:
+                connection.execute(
+                    "UPDATE workflows SET outputs_json=?,edit_output_id=NULL,"
+                    "upload_source_id=NULL,upload_job_ids_json='[]' WHERE id=?",
+                    (outputs_json, workflow_id),
+                )
+        else:
+            rows = connection.execute(
+                "SELECT profile_json,profile_sha256 FROM workflows ORDER BY id"
+            ).fetchall()
+            for row in rows:
+                _legacy_profile(row, legacy_profile_validator)
+        connection.execute(
+            "ALTER TABLE workflows ADD COLUMN resolved_upload_json TEXT"
+        )
+        connection.execute(TRIGGER_STATEMENTS[-1])
         connection.execute("UPDATE metadata SET version=?", (SCHEMA_VERSION,))
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         _validate_connection(connection, SCHEMA_VERSION)
@@ -472,7 +521,7 @@ def ensure_workflow_schema(
     *,
     legacy_profile_validator: LegacyProfileValidator | None = None,
 ) -> None:
-    """Create Schema 2 atomically or migrate an exact Schema 1 database."""
+    """Create Schema 3 atomically or migrate an exact Schema 1 or 2 database."""
 
     path = Path(path)
     if path.name in {"", ".", ".."}:

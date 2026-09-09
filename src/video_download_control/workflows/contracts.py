@@ -59,6 +59,7 @@ class DownloadSnapshot:
     status: StepStatus
     asset_id: str | None = None
     code: str = ""
+    source_title: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +137,12 @@ class WorkflowDomainAdapter(Protocol):
     ) -> str: ...
 
     def inspect_download(self, batch_id: str) -> DownloadSnapshot: ...
+
+    def resolve_upload(
+        self,
+        upload: Mapping[str, Any],
+        download: DownloadSnapshot,
+    ) -> Mapping[str, Any]: ...
 
     def cancel_download(
         self,

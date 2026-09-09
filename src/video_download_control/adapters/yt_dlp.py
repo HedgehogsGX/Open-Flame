@@ -19,7 +19,7 @@ import os
 import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -945,6 +945,13 @@ def _parse_probe_result(
     for key in ("duration", "timestamp", "width", "height"):
         if (value := _safe_number(raw.get(key))) is not None:
             sanitized_source[key] = value
+    author = _safe_text(raw.get("uploader"), max_chars=512)
+    if author is None:
+        author = _safe_text(raw.get("channel"), max_chars=512)
+    if author is not None:
+        sanitized_source["author"] = author
+    if (published_at := _safe_published_at(raw)) is not None:
+        sanitized_source["published_at"] = published_at
 
     snapshot = {
         "canonical_url": request.canonical_url,
@@ -1012,6 +1019,26 @@ def _safe_number(value: object) -> int | float | None:
     if value < 0 or value > 10**12:
         return None
     return value
+
+
+def _safe_published_at(info: Mapping[str, Any]) -> str | None:
+    timestamp = _safe_number(info.get("timestamp"))
+    if timestamp is not None:
+        try:
+            return (
+                datetime.fromtimestamp(timestamp, tz=UTC)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
+        except (OSError, OverflowError, ValueError):
+            pass
+    upload_date = _safe_text(info.get("upload_date"), max_chars=8)
+    if upload_date is None:
+        return None
+    try:
+        return datetime.strptime(upload_date, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
 
 
 def _derived_media_key(canonical_url: str, ordinal: int) -> str:

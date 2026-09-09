@@ -48,7 +48,7 @@ Invoke-RestMethod "$debugBase/api/v1/uploads/status"
 %LOCALAPPDATA%\Open-Flame\video-download-control\
   data\                 下载 Schema 11、资产、temporary、logs
   data-edits\           Editing Schema 4、编辑副本与成品
-  data-workflows\       Workflow Schema 2、无秘密预设
+  data-workflows\       Workflow Schema 3、无秘密预设
   data-uploads\         Upload Schema 3、受管媒体、账号私有目录、上传 runtime
   data-ai-runtime\      隔离 AI runtime
   runtime-tools\        固定本地工具链（如由 Setup 放置）
@@ -161,6 +161,10 @@ created → downloading → preparing_edit → awaiting_ai_review
 - `attention_required` 是需要核对的终止点，不等于失败可重试。
 - 自动确认只适用于该 workflow 的冻结 intent。重启、retry、legacy migration、running/canceling 和 unknown 有各自保守规则。
 - `outputs` 必须按 segment ordinal 排列；每个 output 的 targets 必须与冻结 account/platform 对应。不要只看兼容的单值 `edit_output_id`。
+- 来源标题模式的冻结 profile 含 `upload.title_mode=source` 和空公共标题。下载完成后必须同时出现 `download_asset_id` 与只写一次的 `resolved_upload`；后者应含非空公共标题、冻结账号绑定，以及按账号顺序排列的最终标题覆盖。进入后续编辑或上传状态却缺少该快照属于数据不一致。
+- `workflow_source_metadata_unavailable` 只表示下载库中的来源标题或本地上传 capability 无法形成安全标题快照。先确认对应 ready asset 关联的 `source_items.title` 非空；X attachment 可检查该 Job 的 `input_record.canonical_url` 所指父 `source_items.title`。再检查 `/api/v1/uploads/status` 中所选平台有合法 `title_limit`。修复后点“立即对账”；它会复用既有 batch/asset，不会再次建立下载或改绑素材。若标题本来就不存在，改用手动标题重新创建流程。
+- 若一次冻结后重启，`downloading` 状态中的现有 `resolved_upload` 必须原样复用，不能按新来源元数据或新 capability 重新计算。SQLite trigger 会拒绝修改/清空已冻结值及更换对应 `download_asset_id`；不要手工编辑数据库绕过此边界。旧 Workflow Schema 1/2 profile 不允许 `title_mode`，发现这类预埋字段时迁移应整体失败并保持旧版本。
+- 页面记住的预设只在 `/presets`、账号列表和 AI capability 都成功读取后应用。初次读取失败时，预设选择器或帮助文字会显示失败且表单保持原值；刷新成功后，仅在用户未编辑表单时恢复。若帮助文字说明用户已编辑，重新手动选择预设，不要清 localStorage 强迫覆盖。
 - 完整视频使用 `segments=[]` 并期待一个输出；分段使用 1–10 个有序、不重叠区间；AI 多段必须首尾连续。
 - `workflow_cancellation_requested` 是持久取消意图。manager 重启后应继续取消最远的已创建下游；全部安全停止才成为 `canceled/workflow_canceled`。任何已提交/草稿保存、running 后未知或身份不符都要进入精确的 attention code。
 - `workflow_revision_conflict` 表示页面使用了旧 revision；刷新后重新判断，不能自动重放操作。
@@ -185,8 +189,9 @@ created → downloading → preparing_edit → awaiting_ai_review
 1. 先看浏览器 Console 的首个异常和 Network 中首个失败请求；记录 route、method、status 和安全 detail，不保存请求中的敏感正文。
 2. 检查页面是否从同一个 loopback origin 打开。写请求需要当前页面 session 的 CSRF header；旧页面刷新后可能需要重新加载。
 3. 轮询问题要复现：保持输入/选区/焦点/details 10 秒以上；判断是 DOM 被重建、迟到响应覆盖，还是记录确实变化。
-4. 视觉问题同时记录 viewport、DPI、theme、系统 reduce-motion/透明度设置和截图。320 px、200% 文字缩放、键盘焦点和深色主题都要复查。
-5. CSP 错误要核对生产 HTML 与 `page_content_security_policy()`；不要临时允许 inline/eval 或外网资源来掩盖。
+4. 预设自动恢复问题先检查 `localStorage` 中的 `open-flame-workflow-last-preset-v1` 是否只是 32 位预设 ID。页面必须等账号、AI capability 和预设列表都完成初始读取后才应用；初始化期间已经发生用户输入时不得覆盖表单。不存在的 ID 应自动清除。
+5. 视觉问题同时记录 viewport、DPI、theme、系统 reduce-motion/透明度设置和截图。320 px、200% 文字缩放、键盘焦点和深色主题都要复查。
+6. CSP 错误要核对生产 HTML 与 `page_content_security_policy()`；不要临时允许 inline/eval 或外网资源来掩盖。
 
 ## 10. SQLite 与文件完整性
 

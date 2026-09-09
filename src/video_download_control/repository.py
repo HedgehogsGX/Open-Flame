@@ -406,12 +406,19 @@ class BatchRepository:
                 asset.width,
                 asset.height,
                 asset.size_bytes,
-                asset.sha256
+                asset.sha256,
+                COALESCE(source.title, input_source.title) AS source_title
             FROM download_jobs AS job
             JOIN job_assets AS link
               ON link.job_id = job.id AND link.role = 'original'
             JOIN media_assets AS asset
               ON asset.id = link.asset_id AND asset.status = 'ready'
+            JOIN source_items AS source
+              ON source.id = asset.source_item_id
+            JOIN input_records AS owner_input
+              ON owner_input.id = job.input_record_id
+            LEFT JOIN source_items AS input_source
+              ON input_source.canonical_url = owner_input.canonical_url
             WHERE job.input_record_id IN (SELECT id FROM asset_inputs)
               AND job.status = 'ready'
               AND asset.source_item_id = job.source_item_id

@@ -1,10 +1,10 @@
 # Open-Flame / Video Download Control v0.28.0 Runbook
 
-> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 4、独立上传数据库 Schema 3、独立 Workflow Schema 2。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 4、独立上传数据库 Schema 3、独立 Workflow Schema 3。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
 
 0.28.0 AI runtime、自动流程与本地验证边界见[本轮证据](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI Runtime](AI_RUNTIME.md)和[编辑指南](EDITOR.md)；此前 [0.27.0 编辑工作台](../validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保留各自冻结构建的历史范围。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。重复批次不创建新下载，也不改变原任务的凭证。
 
-0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1，0.28.0 冻结版本先使用 Editing Schema 3 和 Workflow Schema 1。这些短语只用于识别旧记录。当前发布后源码将精确 Editing Schema 1/2/3 向前迁移到 Schema 4，并把精确 Workflow Schema 1 的合法单输出记录迁移到 Workflow Schema 2；上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
+0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1，0.28.0 冻结版本先使用 Editing Schema 3 和 Workflow Schema 1。这些短语只用于识别旧记录。当前发布后源码将精确 Editing Schema 1/2/3 向前迁移到 Schema 4，并把精确 Workflow Schema 1 或 2 迁移到 Workflow Schema 3；Schema 1 会在同一事务内先重建合法单输出 `outputs_json`。上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
 
 ### 启动失败时
 
@@ -37,6 +37,7 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 - `/workflows` 的 AI 步骤把首个已选分段起点到末个已选分段终点的连续派生音频发送给听写；启用 AI 时各分段必须首尾连续，不能把未选择的间隙一并外发。单 cue 上限 4096 字符。字幕与配音按每个分段过滤并把时间归零，边界切入 cue 时拒绝，空 B-roll 段使用本地静音，保留原声时固定压到 22% 后混音。应用重启时，只有 canonical profile 已预授权且域恢复证明为原始、尚未 dispatch 的 queued AI/render/upload 会重新校验并续跑；手动流程、所有 retry、running/canceling、账本 dispatched/unknown 与上传 unknown 都停下。远程调用账本不保存 provider request ID，人工 reconciliation 也不能把未知结果改写成可静默重试。
 - Workflow 冻结每个上传账号的 `session_revision`。待确认的账号若重新登录则以 `account_session_changed` 停下；上传重试只沿账号、来源和平台不变的唯一 retry leaf 对账，分叉、循环或身份变化失败关闭。远端 `unknown` 永远要求先查平台后台，不能自动重发。
 - `/workflows` 顶部的“自动执行就绪度”分别读取本次托管下载 Worker 心跳、AI runtime/三项 authorization、上传 runtime/当前 scheduler，以及 `active + ready` 的所选账号。四项探针相互独立；“可执行”只表示创建前本地条件通过，不证明 URL、provider 或平台会接受。页面状态有时间差，创建、worker 领取和实际执行仍由服务端重新校验；详见[就绪度界面记录](../validation/iteration-0.28.0-workflow-readiness-ui.md)。
+- `/workflows` 默认使用下载来源标题。首次先选择账号并填写 Bilibili 分区、标签、原创/转载、各平台声明、封面和发布时间等不可推断参数，再保存预设；后续恢复该预设时可只更换 URL。页面只有在预设、账号和 AI capability 都读取成功且用户尚未编辑时才恢复上次预设；读取失败会保留表单并允许刷新后重试。下载 ready 后，Workflow Schema 3 把公共标题和每个账号按当前 capability 截断后的最终标题一次冻结到 `resolved_upload`；显式账号标题优先。普通 ready asset 使用自身来源标题，X 附件标题缺失时只回退到同一 Job 输入的父来源标题。重启、分段 fan-out 与取消对账复用该快照，冻结后 asset ID 也不可改。`workflow_source_metadata_unavailable` 表示来源标题或本地 capability 暂不可读，修复后点“立即对账”只重试本地解析，不重复下载或换绑素材。预设只保存参数和账号 ID，不保存 URL、密钥或登录会话。
 
 代码已把 Linux Worker network namespace、只读 digest 镜像、受控 proxy 私有 Unix socket、loopback relay、精确版本、资源限制、Cookie boundary 和短链可信 transport 组装成 fail-closed candidate；v0.9.0 可显式提供唯一受校验的 Node/Deno/Bun/QuickJS 路径且保持 remote components 禁用，但目标镜像尚未随附或验收 JS runtime。Windows 本机直连闭环不满足这条隔离 contract；没有 Docker/Linux 实跑、Stage 0 host allowlist、外部认证和生产规模恢复证据时，不得把 Linux candidate 改称可部署版本。
 

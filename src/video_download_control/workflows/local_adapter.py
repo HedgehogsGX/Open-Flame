@@ -86,6 +86,8 @@ _UPLOAD_INPUT_KEYS = {
     "target_overrides",
 }
 _UPLOAD_KEYS = _UPLOAD_INPUT_KEYS | {"account_bindings"}
+_UPLOAD_TITLE_MODE_KEY = "title_mode"
+_SOURCE_METADATA_ERROR = "workflow_source_metadata_unavailable"
 _COVER_KEYS = {"cover_landscape_asset_id", "cover_portrait_asset_id"}
 _LEGACY_AI_KEYS = frozenset({"transcription_provider", "transcription_model"})
 _DIGEST_AI_KEYS = _LEGACY_AI_KEYS | frozenset({
@@ -339,7 +341,13 @@ class LocalWorkflowAdapter:
         cover_aspect_ratio: str | None,
         expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
     ) -> Sequence[Mapping[str, str]]:
-        if not isinstance(upload, Mapping) or set(upload) != _UPLOAD_INPUT_KEYS:
+        if not isinstance(upload, Mapping) or set(upload) not in {
+            frozenset(_UPLOAD_INPUT_KEYS),
+            frozenset(_UPLOAD_INPUT_KEYS | {_UPLOAD_TITLE_MODE_KEY}),
+        }:
+            raise WorkflowError("workflow_domain_data_invalid")
+        title_mode = upload.get(_UPLOAD_TITLE_MODE_KEY, "explicit")
+        if not isinstance(title_mode, str) or title_mode not in {"explicit", "source"}:
             raise WorkflowError("workflow_domain_data_invalid")
         if expected_account_bindings is not None and (
             not isinstance(expected_account_bindings, Sequence)
@@ -352,6 +360,14 @@ class LocalWorkflowAdapter:
             raise WorkflowError("workflow_domain_data_invalid")
         try:
             options = dict(upload)
+            options.pop(_UPLOAD_TITLE_MODE_KEY, None)
+            if title_mode == "source":
+                # Source metadata is unavailable before the download.  A
+                # bounded placeholder lets the upload domain validate account,
+                # platform, runtime, cover, and all other metadata now; the
+                # concrete source title is frozen by ``resolve_upload`` before
+                # any upload source or job is created.
+                options["title"] = "source"
             if expected_account_bindings is not None:
                 options["expected_account_bindings"] = [
                     dict(binding) for binding in expected_account_bindings
@@ -515,7 +531,13 @@ class LocalWorkflowAdapter:
                 return DownloadSnapshot("attention", code="download_state_invalid")
             if asset.get("media_kind") != "video":
                 return DownloadSnapshot("attention", code="download_asset_not_video")
-            return DownloadSnapshot("ready", asset_id=asset_id)
+            return DownloadSnapshot(
+                "ready",
+                asset_id=asset_id,
+                source_title=self._download_source_text(
+                    asset.get("source_title"), maximum=1024
+                ),
+            )
 
         if state == "queued":
             if not any(
@@ -1827,6 +1849,162 @@ class LocalWorkflowAdapter:
             cover_id=imported_cover_id,
             job_ids=tuple(job_ids),
         )
+
+    def resolve_upload(
+        self,
+        upload: Mapping[str, Any],
+        download: DownloadSnapshot,
+    ) -> dict[str, Any]:
+        """Freeze source-title mode into the legacy upload mapping shape."""
+
+        if not isinstance(upload, Mapping) or set(upload) not in {
+            frozenset(_UPLOAD_KEYS),
+            frozenset(_UPLOAD_KEYS | {_UPLOAD_TITLE_MODE_KEY}),
+        }:
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        title_mode = upload.get(_UPLOAD_TITLE_MODE_KEY, "explicit")
+        if not isinstance(title_mode, str):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        if title_mode == "explicit":
+            concrete = dict(upload)
+            concrete.pop(_UPLOAD_TITLE_MODE_KEY, None)
+            return concrete
+        if title_mode != "source":
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        if (
+            not isinstance(download, DownloadSnapshot)
+            or download.status != "ready"
+            or not isinstance(download.asset_id, str)
+        ):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        source_title = self._download_source_text(
+            download.source_title, maximum=1024
+        )
+        if source_title is None:
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+
+        account_ids = upload.get("account_ids")
+        bindings = upload.get("account_bindings")
+        raw_overrides = upload.get("target_overrides")
+        if (
+            not isinstance(account_ids, list)
+            or not 1 <= len(account_ids) <= MAX_WORKFLOW_ACCOUNTS
+            or not isinstance(bindings, Sequence)
+            or isinstance(bindings, (str, bytes))
+            or len(bindings) != len(account_ids)
+            or not isinstance(raw_overrides, Sequence)
+            or isinstance(raw_overrides, (str, bytes))
+        ):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+
+        platforms: dict[str, str] = {}
+        try:
+            normalized_account_ids = [_hex_identifier(value) for value in account_ids]
+            if (
+                normalized_account_ids != account_ids
+                or len(set(normalized_account_ids)) != len(normalized_account_ids)
+            ):
+                raise WorkflowError(_SOURCE_METADATA_ERROR)
+            for binding in bindings:
+                if not isinstance(binding, Mapping) or set(binding) != {
+                    "account_id", "platform", "session_revision",
+                }:
+                    raise WorkflowError(_SOURCE_METADATA_ERROR)
+                account_id = _hex_identifier(binding.get("account_id"))
+                _hex_identifier(binding.get("session_revision"))
+                platform = binding.get("platform")
+                if (
+                    account_id not in account_ids
+                    or account_id in platforms
+                    or platform not in {"bilibili", "douyin", "tencent"}
+                ):
+                    raise WorkflowError(_SOURCE_METADATA_ERROR)
+                platforms[account_id] = platform
+        except WorkflowError:
+            raise WorkflowError(_SOURCE_METADATA_ERROR) from None
+        if set(platforms) != set(account_ids):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+
+        title_limits = self._upload_title_limits(set(platforms.values()))
+        overrides: dict[str, dict[str, Any]] = {}
+        for raw in raw_overrides:
+            if not isinstance(raw, Mapping):
+                raise WorkflowError(_SOURCE_METADATA_ERROR)
+            try:
+                account_id = _hex_identifier(raw.get("account_id"))
+            except WorkflowError:
+                raise WorkflowError(_SOURCE_METADATA_ERROR) from None
+            if account_id not in account_ids or account_id in overrides:
+                raise WorkflowError(_SOURCE_METADATA_ERROR)
+            overrides[account_id] = dict(raw)
+
+        for account_id in account_ids:
+            override = overrides.setdefault(account_id, {"account_id": account_id})
+            if "title" not in override:
+                override["title"] = self._ellipsis_title(
+                    source_title,
+                    title_limits[platforms[account_id]],
+                )
+
+        concrete = dict(upload)
+        concrete.pop(_UPLOAD_TITLE_MODE_KEY, None)
+        concrete["title"] = self._ellipsis_title(source_title, 100)
+        concrete["target_overrides"] = [overrides[value] for value in account_ids]
+        return concrete
+
+    def _upload_title_limits(self, platforms: set[str]) -> dict[str, int]:
+        try:
+            status = self.upload_manager.get().status()
+        except Exception:
+            raise WorkflowError(_SOURCE_METADATA_ERROR) from None
+        if not isinstance(status, Mapping):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        capabilities = status.get("platforms")
+        if not isinstance(capabilities, Sequence) or isinstance(
+            capabilities, (str, bytes)
+        ):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        limits: dict[str, int] = {}
+        for capability in capabilities:
+            if not isinstance(capability, Mapping):
+                continue
+            platform = capability.get("id")
+            if platform not in platforms:
+                continue
+            limit = capability.get("title_limit")
+            if (
+                platform in limits
+                or isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+            ):
+                raise WorkflowError(_SOURCE_METADATA_ERROR)
+            limits[platform] = limit
+        if set(limits) != platforms:
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        return limits
+
+    @staticmethod
+    def _ellipsis_title(value: str, maximum: int) -> str:
+        if len(value) <= maximum:
+            return value
+        if maximum == 1:
+            return "…"
+        return value[: maximum - 1] + "…"
+
+    @staticmethod
+    def _download_source_text(value: object, *, maximum: int) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if (
+            not normalized
+            or len(normalized) > maximum
+            or any(ord(character) < 32 for character in normalized)
+            or "\x7f" in normalized
+        ):
+            return None
+        return normalized
 
     @staticmethod
     def _transcription_clip_options(recipe: object) -> dict[str, int]:
