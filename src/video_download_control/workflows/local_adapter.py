@@ -657,11 +657,31 @@ class LocalWorkflowAdapter:
         if self._ai_task_retry_blocked(task):
             return AiSnapshot("attention", code="ai_remote_retry_blocked")
         if state == "review":
+            reason = task.get("code")
+            # A retry remains an explicit decision even when its last queued
+            # attempt was revoked by restart recovery.  Check lineage before
+            # the generic restart code so an automatic workflow cannot mistake
+            # a recovered retry for its originally pre-authorized task.
+            if task.get("retry_of") is not None and not explicit:
+                return AiSnapshot("review", code="ai_retry_confirmation_required")
             if (
-                task.get("code") == "restart_confirmation_required"
+                reason == "restart_confirmation_required"
                 and not explicit
+                and not authorization[0]
             ):
                 return AiSnapshot("review", code="ai_restart_confirmation_required")
+            if not explicit and reason not in {
+                "explicit_confirmation_required",
+                "restart_confirmation_required",
+            }:
+                return AiSnapshot(
+                    "review",
+                    code=(
+                        reason
+                        if isinstance(reason, str) and _SAFE_CODE.fullmatch(reason)
+                        else "ai_review_required"
+                    ),
+                )
             if not authorization[0]:
                 return AiSnapshot("review", code=confirmation_code)
             request_sha256 = task.get("request_sha256")
@@ -905,14 +925,21 @@ class LocalWorkflowAdapter:
             return EditSnapshot("attention", code="edit_state_invalid")
         state = plan.get("state")
         if state == "review":
-            code = plan.get("code")
+            # Retry successors always keep their separate confirmation gate.
+            # The editing domain uses the same restart recovery code for every
+            # queued row, so lineage must take precedence here.
+            code = (
+                "render_retry_confirmation_required"
+                if plan.get("retry_of") is not None
+                else plan.get("code")
+            )
+            if code == "":
+                code = "edit_review_confirmation_required"
+            elif not isinstance(code, str) or _SAFE_CODE.fullmatch(code) is None:
+                return EditSnapshot("attention", code="edit_state_invalid")
             return EditSnapshot(
                 "waiting",
-                code=(
-                    code
-                    if isinstance(code, str) and _SAFE_CODE.fullmatch(code)
-                    else "edit_confirmation_required"
-                ),
+                code=code,
             )
         if state in _EDIT_WAITING_STATES:
             return EditSnapshot("waiting")
@@ -1364,25 +1391,50 @@ class LocalWorkflowAdapter:
                 "ready", job_ids=current_ids, outcome="draft_saved"
             )
         if any(state == "draft" for state in states):
-            codes = {
+            draft_reasons = [
                 job.get("code")
                 for job in jobs
                 if isinstance(job, Mapping) and job.get("state") == "draft"
+            ]
+            if any(
+                not isinstance(reason, str)
+                or (reason and _SAFE_CODE.fullmatch(reason) is None)
+                for reason in draft_reasons
+            ):
+                return UploadSnapshot(
+                    "attention", code="upload_job_set_invalid", job_ids=current_ids
+                )
+            codes = {
+                reason for reason in draft_reasons if reason
             }
             if "account_session_changed" in codes:
                 return UploadSnapshot(
                     "attention", code="account_session_changed", job_ids=current_ids
                 )
-            if "restart_confirmation_required" in codes:
+            # A recovered queued retry also carries the generic restart code.
+            # Lineage wins so automatic restart continuation remains limited to
+            # the workflow's original, pre-authorized upload jobs.
+            if any(job.get("retry_of") is not None for job in jobs):
+                return UploadSnapshot(
+                    "waiting",
+                    code="upload_retry_confirmation_required",
+                    job_ids=current_ids,
+                )
+            if codes == {"restart_confirmation_required"}:
                 return UploadSnapshot(
                     "waiting",
                     code="upload_restart_confirmation_required",
                     job_ids=current_ids,
                 )
-            if any(job.get("retry_of") is not None for job in jobs):
+            if codes:
+                review_code = next(iter(codes))
                 return UploadSnapshot(
                     "waiting",
-                    code="upload_retry_confirmation_required",
+                    code=(
+                        review_code
+                        if len(codes) == 1
+                        else "upload_review_confirmation_required"
+                    ),
                     job_ids=current_ids,
                 )
         return UploadSnapshot("waiting", job_ids=current_ids)

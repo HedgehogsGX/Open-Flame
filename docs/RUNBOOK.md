@@ -34,7 +34,7 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 - graph-v2 的 exact-selector 证据只来自测试内的离线 `ScriptedGraphFakeAdapter`。Windows 本机 Worker 在领取任务的同一 SQL 事务中跳过 `discover` 与 `x_attachment`，让这些任务保持 queued 并继续寻找可处理的 flat-v1 `download`；这不是 graph 支持。candidate real Worker 同样不能据此运行真实 X graph。
 - 任意现存批次可通过 `GET /api/v1/batches/{batch_id}/assets` 获得已完成原件的元数据与相对下载 URL，包括沿实际重复输入引用找到的原 owner 成品；空列表不表示其他任务已经结束。`GET /api/v1/assets/{asset_id}/download` 仍只提供数据库登记且重验通过的 original。前端不再等待整个批次 ready，并提供“刷新成品”；不会按同链接的后来任务替换原 owner，也不使用批次名或平台标题拼接下载文件名。
 - 控制面与 Worker 具有本地、有界、轮转、字段白名单的 JSONL 排障日志；`/health` 在队列未暂停时报告 `worker=external_status_unknown`，明确表示控制面不知道外部 Worker 进程状态，而不是心跳、在线或已启动证明。
-- `/workflows` 的 AI 步骤把首个已选分段起点到末个已选分段终点的连续派生音频发送给听写；启用 AI 时各分段必须首尾连续，不能把未选择的间隙一并外发。单 cue 上限 4096 字符。字幕与配音按每个分段过滤并把时间归零，边界切入 cue 时拒绝，空 B-roll 段使用本地静音，保留原声时固定压到 22% 后混音。应用重启及 AI/配音重试都需要再次确认；当前无远程 request ID reconciliation，重试可能重复计费。
+- `/workflows` 的 AI 步骤把首个已选分段起点到末个已选分段终点的连续派生音频发送给听写；启用 AI 时各分段必须首尾连续，不能把未选择的间隙一并外发。单 cue 上限 4096 字符。字幕与配音按每个分段过滤并把时间归零，边界切入 cue 时拒绝，空 B-roll 段使用本地静音，保留原声时固定压到 22% 后混音。应用重启时，只有 canonical profile 已预授权且域恢复证明为原始、尚未 dispatch 的 queued AI/render/upload 会重新校验并续跑；手动流程、所有 retry、running/canceling、账本 dispatched/unknown 与上传 unknown 都停下。远程调用账本不保存 provider request ID，人工 reconciliation 也不能把未知结果改写成可静默重试。
 - Workflow 冻结每个上传账号的 `session_revision`。待确认的账号若重新登录则以 `account_session_changed` 停下；上传重试只沿账号、来源和平台不变的唯一 retry leaf 对账，分叉、循环或身份变化失败关闭。远端 `unknown` 永远要求先查平台后台，不能自动重发。
 - `/workflows` 顶部的“自动执行就绪度”分别读取本次托管下载 Worker 心跳、AI runtime/三项 authorization、上传 runtime/当前 scheduler，以及 `active + ready` 的所选账号。四项探针相互独立；“可执行”只表示创建前本地条件通过，不证明 URL、provider 或平台会接受。页面状态有时间差，创建、worker 领取和实际执行仍由服务端重新校验；详见[就绪度界面记录](../validation/iteration-0.28.0-workflow-readiness-ui.md)。
 

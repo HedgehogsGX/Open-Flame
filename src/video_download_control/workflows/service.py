@@ -57,6 +57,27 @@ _AI_LEDGER_REVIEW_CODES = frozenset(
         "ai_remote_abandoned",
     }
 )
+_AUTO_AI_REVIEW_CODES = frozenset(
+    {
+        "",
+        "ai_transcription_confirmation_required",
+        "ai_transcription_review_required",
+        "ai_translation_confirmation_required",
+        "ai_translation_review_required",
+        "ai_restart_confirmation_required",
+    }
+)
+_AUTO_EDIT_REVIEW_CODES = frozenset(
+    {
+        "",
+        "edit_confirmation_required",
+        "edit_review_confirmation_required",
+        "explicit_confirmation_required",
+        "restart_confirmation_required",
+        "edit_restart_confirmation_required",
+    }
+)
+_AUTO_UPLOAD_REVIEW_CODES = frozenset({"", "upload_restart_confirmation_required"})
 _PREFLIGHT_RETRY_CODES = frozenset(
     {
         "download_worker_unobserved",
@@ -871,15 +892,11 @@ class WorkflowService:
                         self._record_upload_outcome(workflow_id, snapshot)
                         return self.get(workflow_id)
                     if snapshot.status == "waiting":
-                        confirmation_codes = {
-                            "upload_restart_confirmation_required",
-                            "upload_retry_confirmation_required",
-                        }
                         self._transition(
                             workflow_id,
                             (
                                 "awaiting_upload_confirmation"
-                                if snapshot.code in confirmation_codes
+                                if snapshot.code
                                 else "uploading"
                             ),
                             snapshot.code,
@@ -1211,10 +1228,10 @@ class WorkflowService:
             if not record["edit_project_id"] or record["profile"]["ai"] is None:
                 self._attention(workflow_id, "workflow_data_invalid")
                 return False
-            if record["code"] in {
-                "ai_restart_confirmation_required",
-                "ai_retry_confirmation_required",
-            }:
+            if record["code"] and (
+                not record["auto_confirm_edit"]
+                or record["code"] not in _AUTO_AI_REVIEW_CODES
+            ):
                 return False
             snapshot = self.adapter.advance_ai(
                 workflow_id,
@@ -1249,17 +1266,14 @@ class WorkflowService:
                 return False
             snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
             if snapshot.status == "waiting":
+                if record["code"] not in _AUTO_EDIT_REVIEW_CODES:
+                    return False
                 code = snapshot.code or record["code"]
                 if code and code != record["code"]:
                     self._transition(workflow_id, state, code)
                 if (
                     not record["auto_confirm_edit"]
-                    or code
-                    in {
-                        "restart_confirmation_required",
-                        "edit_restart_confirmation_required",
-                        "render_retry_confirmation_required",
-                    }
+                    or code not in _AUTO_EDIT_REVIEW_CODES
                 ):
                     return False
             if snapshot.status == "failed" or snapshot.status == "attention":
@@ -1270,6 +1284,9 @@ class WorkflowService:
                     return False
                 self._transition(workflow_id, "preparing_upload", "")
                 return True
+            if snapshot.status != "waiting":
+                self._attention(workflow_id, "workflow_domain_data_invalid")
+                return False
             self.adapter.confirm_edit(record["edit_plan_id"])
             self._transition(workflow_id, "rendering", "")
             return True
@@ -1283,7 +1300,11 @@ class WorkflowService:
                     self._transition(
                         workflow_id,
                         "awaiting_edit_confirmation",
-                        "edit_restart_confirmation_required",
+                        (
+                            "edit_restart_confirmation_required"
+                            if snapshot.code == "restart_confirmation_required"
+                            else snapshot.code
+                        ),
                     )
                 return False
             if snapshot.status != "ready":
@@ -1353,20 +1374,16 @@ class WorkflowService:
                 return False
             if snapshot.status == "ready":
                 return self._record_upload_outcome(workflow_id, snapshot)
+            if snapshot.status != "waiting":
+                self._attention(workflow_id, "workflow_domain_data_invalid")
+                return False
+            if record["code"] not in _AUTO_UPLOAD_REVIEW_CODES:
+                return False
             if snapshot.code and snapshot.code != record["code"]:
                 self._transition(workflow_id, state, snapshot.code)
             if (
                 not record["auto_confirm_upload"]
-                or snapshot.code
-                in {
-                    "upload_restart_confirmation_required",
-                    "upload_retry_confirmation_required",
-                }
-                or record["code"]
-                in {
-                    "upload_restart_confirmation_required",
-                    "upload_retry_confirmation_required",
-                }
+                or snapshot.code not in _AUTO_UPLOAD_REVIEW_CODES
             ):
                 return False
             self.adapter.confirm_uploads(
@@ -1379,10 +1396,7 @@ class WorkflowService:
             snapshot = self._inspect_upload(record)
             self._sync_upload_job_ids(record, snapshot)
             if snapshot.status == "waiting":
-                if snapshot.code in {
-                    "upload_restart_confirmation_required",
-                    "upload_retry_confirmation_required",
-                }:
+                if snapshot.code:
                     self._transition(
                         workflow_id,
                         "awaiting_upload_confirmation",
@@ -1648,7 +1662,14 @@ class WorkflowService:
         normalized_profile, encoded, profile_digest = _profile(
             profile, bound_accounts=True
         )
-        if encoded != row["profile_json"] or profile_digest != row["profile_sha256"]:
+        if (
+            encoded != row["profile_json"]
+            or profile_digest != row["profile_sha256"]
+            or row["auto_confirm_edit"]
+            != int(normalized_profile["auto_confirm_edit"])
+            or row["auto_confirm_upload"]
+            != int(normalized_profile["auto_confirm_upload"])
+        ):
             raise WorkflowError("workflow_data_invalid")
         outputs = _workflow_outputs(raw_outputs, normalized_profile)
         outputs_json = json.dumps(
@@ -1712,7 +1733,7 @@ class WorkflowService:
         )
         public["edit_output_count"] = len(edit_output_ids)
         public["upload_job_count"] = len(upload_job_ids)
-        public["auto_confirm_edit"] = bool(row["auto_confirm_edit"])
-        public["auto_confirm_upload"] = bool(row["auto_confirm_upload"])
+        public["auto_confirm_edit"] = normalized_profile["auto_confirm_edit"]
+        public["auto_confirm_upload"] = normalized_profile["auto_confirm_upload"]
         public["schema_version"] = SCHEMA_VERSION
         return public

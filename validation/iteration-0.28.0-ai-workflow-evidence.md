@@ -7,6 +7,8 @@
 
 T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标准库 OpenAI provider、持久化听写/翻译任务与可审核时间轴、segment-local 字幕/标准音色配音，以及独立 Workflow Schema 1；发布后源码已向前迁移至 Editing Schema 4，保存脱敏远程调用账本与 unknown 人工 reconciliation。`/workflows` 可以把一个 URL 串接到下载、编辑、AI 和所选 Bilibili、抖音、视频号上传草稿，并在保存的预授权范围内推进。
 
+2026-09-09 发布后更正：本记录原始冻结候选把所有 restart 与 retry 都停在人工确认。当前未发行源码只放宽一个可证明安全的子集：若下层域把**原始、已预授权、尚未领取或 dispatch 的 queued 工作**撤回，WorkflowManager 会重新执行既有 authorization/runtime/source/账号 session/平台参数检查并自动重新确认。手动流程、所有 retry 后继、running/canceling 以及 unknown 仍停止。当前行为与独立验证见[预授权重启续跑记录](iteration-0.28.0-workflow-restart-continuation.md)；下表中的“重启重新确认”仅描述原冻结候选。
+
 本轮没有提供 `OPEN_FLAME_AI_OPENAI_API_KEY`。没有执行真实 OpenAI 听写、Responses 翻译或 Speech 配音请求，也没有执行 Bilibili、抖音、视频号的真实登录、媒体传输、定时发布、审核或公开发布。所有 workflow/provider 替身、synthetic 视频、本地 FFmpeg 和 runtime 完整性检查都只证明对应源码与本机工程合同，不代表云模型质量、账号权限、费用、平台接受或最终发布。
 
 ## 2. 已实现的安全与一致性边界
@@ -20,10 +22,10 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 - 翻译保持 cue ID、数量、顺序、整数毫秒时间和来源关系；听写/翻译结果先停在 `review`，整份批准后才能进入下一步。render plan 冻结批准译文、父字幕和两份摘要。
 - AI 渲染按每个已选分段过滤 cue 并把时间归零，分别生成 segment-local VTT 和配音视频。分段边界切入 cue 时以 `ai_segment_boundary_splits_cue` 拒绝；没有 cue 的 B-roll 段生成空 VTT 与本地静音，不调用 Speech API。
 - 每个 cue 的 Speech WAV 单独校验并对齐时间槽；溢出以 `ai_speech_timing_overflow` 失败，不截断文字或推迟后续 cue。保留原声时原声固定为 22%，`amix` 禁止自动归一化并在输出前限幅。
-- AI task、编辑计划和上传 retry/restart 均须重新确认。当前不保存可对账的远程 request/job ID，也不复用已完成的远程批次或 cue；因此页面明确提示重试可能重复计费。
+- 冻结候选中的 AI task、编辑计划和上传 retry/restart 均须重新确认。当前未发行源码仍要求所有 retry 人工确认；仅允许上述原始预授权、可证明未 dispatch 的 queued restart 在重新校验后续跑。远程调用账本只保存脱敏 invocation identity 与状态，不复用已完成的远程批次或 cue；因此页面继续明确提示重试可能重复计费。
 - 普通 Windows Start 只让 control child 继承精确的 `OPEN_FLAME_AI_OPENAI_API_KEY`，并在进程边界先执行与 `AiTaskExecutor` 一致的非空、字符和长度校验。下载 Worker 仍剔除该密钥，未声明 AI 变量和通用 token/secret 也不进入任一 child。
 - Workflow 建立时冻结每个上传账号的 `{account_id, platform, session_revision}`。待确认草稿若经历重新登录会以 `account_session_changed` 停止；已进入 queued/running/terminal 的任务不会因后来登录被改写。
-- 上传对账沿每个任务的唯一 retry leaf 继续，只接受账号、来源和平台不变的最多 32 代后继链；分叉、循环、重复 leaf 或身份漂移失败关闭。leaf 为 draft 或因重启退回 draft 时仍须再次确认。批量确认在同一事务内先验证全部待确认任务，再一次性排队。
+- 上传对账沿每个任务的唯一 retry leaf 继续，只接受账号、来源和平台不变的最多 32 代后继链；分叉、循环、重复 leaf 或身份漂移失败关闭。普通 draft 与所有 retry leaf 仍须再次确认；因重启退回 draft 的原始、预授权、未 dispatch leaf 可由上层 WorkflowManager 重新校验并确认。批量确认在同一事务内先验证全部待确认任务，再一次性排队。
 - 仓库现有 `tests/` 只供本地与 CI；源码 ZIP、sdist 和 wheel 均排除测试。0.28.0 功能提交不得新增或修改测试文件，临时脚本/日志/结果只放在 ignored `validation/local/`。
 
 ## 3. AI runtime 候选身份
@@ -49,7 +51,7 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 | `git diff --check` | PASS | exit 0；工作树相关文档已按仓库规则统一为 LF |
 | `uv lock --check --offline` / `uv pip check` | PASS | 锁文件离线解析 25 个包；已安装 24 个包均兼容 |
 | 全量既有回归 `pytest -q` | QUALIFIED | 2438 passed、8 skipped、12 failed，413.44 秒；12 项均是下述历史固定断言，不是当前实现异常 |
-| Workflow synthetic 状态机 | PASS | URL→下载→编辑→上传、幂等、编辑/上传重启重新确认、AI 外发同意、账号 session revision 失效均通过 |
+| Workflow synthetic 状态机 | PASS | 冻结候选验证 URL→下载→编辑→上传、幂等、编辑/上传重启人工确认、AI 外发同意、账号 session revision 失效；当前窄化的预授权重启续跑另见独立记录 |
 | 本地真实 FFmpeg clip/dub smoke | PASS | 选择片段、源时间回映、segment-local VTT/音轨、22% 混音与源文件不变均通过 |
 | AI operation egress 合同 | PASS | 错误声明在任务校验和 worker 网络调用前失败；HTTP TTS 只声明 `text` 时可执行请求构造 |
 | AI runtime rebuild + `--check` | PASS | manifest `598ad64ecf005daa7ed2f9007280dc560212d98daa633f5afa1fac2703260378`；`ready=true`；应用显示 `integrity=verified / provider_health=unverified`，三能力均 `blocked / ai_provider_auth_missing` |
@@ -58,7 +60,7 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 | 普通 Start 的 AI 密钥边界 | PASS | ignored validator 从已核对的 CPython ZIP 本地重建 runtime；sentinel 只进入 control，Worker/未声明变量仍剔除；三能力由 `blocked / ai_provider_auth_missing` 变为 `unverified / provider_health_required`；网络入口强制拒绝，输出不含 sentinel |
 | Chromium 浏览器 QA | PASS | `/workflows` 与 `/edits` 连接成功；四页导航、0.28.0、Schema 1、缺凭据提示、22% 混音说明及 `audio / text / text` 外发范围可见 |
 | HTTP route logging | PASS | 当前应用 102 个实际路由全部属于固定 allowlist；TestClient 17 个页面/API 请求与浏览器进程 263 个请求均被接受，`runtime_log.event_rejected=0` |
-| release-files 清单 | PASS | 251 个唯一且存在的条目；无 `tests/`；AI、Workflow 与本记录均已列入 |
+| release-files 清单 | PASS | 257 个唯一且存在的条目；无 `tests/`；AI、Workflow 与本记录、预授权重启续跑记录均已列入 |
 | source ZIP / sdist / wheel 与独立安装 | 包外记录 | 提交后对 clean commit 构建并用 verifier 复验；文件身份、报告和结果写入 `release-receipt.json` |
 | 真实 OpenAI / 真人试听 / 费用 | NOT RUN | 需另行授权的真实账号与样本证据 |
 | 三平台真实投稿与发布 | NOT RUN | 每个平台后台结果与同一冻结构建身份 |
@@ -67,7 +69,7 @@ T19 冻结源码接入独立 Editing Schema 3、隔离 AI runtime builder、标�
 
 2026-09-09 Setup 追加定向复验：`validation/local/validate_source_setup_ai_runtime.py` PASS，覆盖首次构建、ready 字节与 mtime 不变复用、坏/旧目标拒绝、固定 SHA-256 负向、同 app-root 运行锁、runner exception、孤立 `--app-root`、非目标不变和输出脱敏；build/check 子解释器的常见 socket/HTTP 入口强制拒绝，没有调用 provider。14 个既有 Setup、source lock、release、local app、launcher、诊断与 AI 合同测试文件合计 **354 passed**；相关生产模块 `py_compile`、`uv lock --check --offline` 与 `uv pip check` 均通过。验证只使用 ignored 临时 app-root；默认应用 runtime 实测仍不存在。
 
-2026-09-09 上传 Setup 追加定向复验：`validation/local/validate_source_setup_upload_runtime.py` 的 16 项检查 PASS；child probe 强制拒绝 socket/HTTP，未下载第三方组件，未登录、扫码、上传或发布。AI Setup validator 同批复跑 PASS；15 个 Setup、进程树、诊断、source/app 锁、上传 runtime/后端、本地启动和发行清单相关既有测试文件合计 **462 passed**。validator 只写 ignored 临时 app-root，并对默认实际 `data-uploads` 的顶层集合、上传库和 runtime manifest 做前后摘要核对；现有 runtime 仍为 `runtime_upgrade_required`，没有移动、重建或改写。115 个生产 Python 文件 AST、251 条唯一存在且排除 `tests/` 的 release-files、`uv lock --check --offline`、`uv pip check` 与 diffcheck 均通过；源码实现复用已有上传 installer，未新增核心依赖或常驻服务。
+2026-09-09 上传 Setup 追加定向复验：`validation/local/validate_source_setup_upload_runtime.py` 的 16 项检查 PASS；child probe 强制拒绝 socket/HTTP，未下载第三方组件，未登录、扫码、上传或发布。AI Setup validator 同批复跑 PASS；15 个 Setup、进程树、诊断、source/app 锁、上传 runtime/后端、本地启动和发行清单相关既有测试文件合计 **462 passed**。validator 只写 ignored 临时 app-root，并对默认实际 `data-uploads` 的顶层集合、上传库和 runtime manifest 做前后摘要核对；现有 runtime 仍为 `runtime_upgrade_required`，没有移动、重建或改写。115 个生产 Python 文件 AST、257 条唯一存在且排除 `tests/` 的 release-files、`uv lock --check --offline`、`uv pip check` 与 diffcheck 均通过；源码实现复用已有上传 installer，未新增核心依赖或常驻服务。
 
 全量回归中的 12 项历史固定断言为：5 项仍要求产品版本 `0.27.0`；3 项仍要求 Editing Schema 1；3 项只允许旧的下载/编辑/上传三项导航；1 项仍要求 sdist exclude 列表中没有 `/tests/**`。当前合同分别是 0.28.0、Editing Schema 4、增加 `/workflows` 和所有发行格式排除 `tests/`。本轮遵循用户要求，没有修改测试文件，也没有为旧断言回退产品。
 

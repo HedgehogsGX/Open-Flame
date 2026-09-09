@@ -54,7 +54,7 @@ git diff --check: PASS
 
 在现存 3,498 文件、984,153,133 bytes 的 Schema 2 本地 runtime 上，冷 workflow admission 为 34.413 秒，紧接的 identity-bound admission 为 2.841 秒；OS cache 已热但进程摘要缓存为空时另测 8.970 秒，完全无缓存检查为 8.798～10.049 秒。生产路径因此不会连续冷散列两次，同时仍在下载前做一次完整内容校验。首次冷 admission 已移出 WorkflowService 的全局 mutation lock；同进程并发 admission 会串行复用逐文件缓存，同一幂等键仍在插入事务内二次核对。
 
-完整真实域离线整链再次通过：一个 URL 依次进入真实 `LocalWorkflowAdapter`、下载 Worker、隔离 AI worker、FFmpeg 编辑、三个本地平台任务和重启后批量再确认；听写 1 次、翻译 1 次、provider health 1 次、逐 cue 配音 2 次，最终为 synthetic `submission_acknowledged`。网络 guard 保持启用，平台后端为替身。
+完整真实域离线整链再次通过：一个 URL 依次进入真实 `LocalWorkflowAdapter`、下载 Worker、隔离 AI worker、FFmpeg 编辑和三个本地平台任务；重启时上传域先撤回旧 queued 确认，随后 WorkflowManager 重新校验并消费原流程保存的上传预授权，无需人工调用批量确认。听写 1 次、翻译 1 次、provider health 1 次、逐 cue 配音 2 次，最终为 synthetic `submission_acknowledged`。网络 guard 保持启用，平台后端为替身；重启语义的专项证据见[预授权重启续跑记录](iteration-0.28.0-workflow-restart-continuation.md)。
 
 相关回归集合在保留历史测试文件不变的情况下得到 `568 passed, 1 failed, 3 deselected`。失败和三个明确排除项均为当前 HEAD 已存在的旧身份断言：`tests/test_api.py` 仍期望版本 `0.27.0`，`tests/test_editing_api.py` 与 `tests/test_editing_schema.py` 仍期望 Editing Schema 1，而生产代码已为 `0.28.0` / Schema 4。本轮没有修改或提交 `tests/`。上传轮询资源预算在组合运行中两次出现 Windows handle `818 → 819` 的单句柄抖动，隔离重跑通过；该用例不经过本次 workflow preflight 路径。
 

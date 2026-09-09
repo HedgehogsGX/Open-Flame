@@ -38,6 +38,7 @@ from .contracts import (
     UploadBackend,
     UploadError,
     UploadRequest,
+    is_tencent_short_title_output,
     normalize_tencent_short_title,
 )
 from .login_progress import validate_update
@@ -2163,7 +2164,8 @@ class UploadService:
         return landscape, portrait
 
     def _normalize_target(self, *, db, account, base: dict, override: dict,
-                          verify_assets: bool = True, enforce_schedule: bool = True) -> dict:
+                          verify_assets: bool = True, enforce_schedule: bool = True,
+                          accept_normalized_short_title: bool = False) -> dict:
         platform = account["platform"]
         if platform != "bilibili" and any(
             key in override for key in ("category_id", "copyright", "source_credit")
@@ -2226,8 +2228,14 @@ class UploadService:
             raise UploadError("draft_schedule_unsupported")
         options = self._normalize_platform_options(platform, raw.get("platform_options"))
         if platform == "tencent":
-            options["short_title"] = normalize_tencent_short_title(
-                options["short_title"] if options["short_title"] is not None else title
+            short_title = options["short_title"]
+            options["short_title"] = (
+                short_title
+                if accept_normalized_short_title
+                and is_tencent_short_title_output(short_title)
+                else normalize_tencent_short_title(
+                    short_title if short_title is not None else title
+                )
             )
         return {
             "account_id": account["id"], "platform": platform, "title": title,
@@ -2653,7 +2661,7 @@ class UploadService:
         if not self.backend.inspect().get("ready"):
             raise UploadError("runtime_missing")
         account = db.execute(
-            "SELECT auth_state,lifecycle_state FROM accounts WHERE id=?",
+            "SELECT * FROM accounts WHERE id=?",
             (job["account_id"],),
         ).fetchone()
         if account is None:
@@ -2662,6 +2670,33 @@ class UploadService:
             raise UploadError("account_disconnected")
         if account["auth_state"] != "ready":
             raise UploadError("account_not_ready")
+        # A draft may survive an application upgrade or be restored from an
+        # older database.  Re-run the current per-platform contract before
+        # queueing so a pre-authorized restart cannot dispatch metadata that
+        # the running build would no longer accept.  Exact equality also makes
+        # non-canonical or no-longer-supported persisted values fail closed.
+        persisted_target = {
+            "account_id": job["account_id"],
+            **{
+                key: job[key]
+                for key in _TARGET_OVERRIDE_KEYS
+                if key != "account_id"
+            },
+        }
+        normalized_target = self._normalize_target(
+            db=db,
+            account=account,
+            base=persisted_target,
+            override={},
+            verify_assets=False,
+            enforce_schedule=False,
+            accept_normalized_short_title=True,
+        )
+        if normalized_target != {
+            "platform": job["platform"],
+            **persisted_target,
+        }:
+            raise UploadError("invalid_metadata")
         self._validate_schedule(
             job["platform"],
             job["publish_at_unix"],
