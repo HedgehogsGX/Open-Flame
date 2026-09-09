@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import hmac
 import re
-import secrets
 import sqlite3
 from typing import Any, Annotated
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
 from .manager import WorkflowManager
 from .presets import WorkflowPresetError, WorkflowPresetStore
@@ -53,28 +51,6 @@ class ConfirmWorkflowRequest(BaseModel):
 
     expected_revision: int = Field(ge=1, strict=True)
     expected_profile_sha256: Sha256Digest | None = None
-
-
-def _origin(value: str) -> tuple[str, str, int] | None:
-    try:
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path not in {"", "/"}
-            or parsed.query
-            or parsed.fragment
-            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
-        ):
-            return None
-        return (
-            parsed.scheme,
-            parsed.hostname,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
-        )
-    except ValueError:
-        return None
 
 
 def _safe_error(exc: WorkflowError) -> HTTPException:
@@ -133,50 +109,17 @@ def _safe_error(exc: WorkflowError) -> HTTPException:
 def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
     """Install a lazy workflow surface without initializing its database."""
 
-    nonce = secrets.token_urlsafe(32)
+    nonce = install_local_http_guard(
+        app,
+        protects_path=lambda path: path == "/workflows"
+        or path == "/api/v1/workflows"
+        or path.startswith("/api/v1/workflows/"),
+        csrf_header="x-workflow-csrf",
+        forbidden_detail="workflow_request_forbidden",
+        requires_csrf=lambda method, _path: method not in {"GET", "HEAD"},
+    )
     app.state.workflow_manager = manager
     preset_store = WorkflowPresetStore(manager.root)
-
-    @app.middleware("http")
-    async def workflow_boundary(request: Request, call_next):
-        path = request.url.path
-        if (
-            path != "/workflows"
-            and path != "/api/v1/workflows"
-            and not path.startswith("/api/v1/workflows/")
-        ):
-            return await call_next(request)
-        hosts = request.headers.getlist("host")
-        expected = (
-            _origin(request.url.scheme + "://" + hosts[0]) if len(hosts) == 1 else None
-        )
-        origins = request.headers.getlist("origin")
-        fetch_sites = request.headers.getlist("sec-fetch-site")
-        safe = (
-            expected is not None
-            and len(origins) <= 1
-            and len(fetch_sites) <= 1
-            and (not origins or _origin(origins[0]) == expected)
-            and (not fetch_sites or fetch_sites[0] in {"same-origin", "none"})
-        )
-        if request.method not in {"GET", "HEAD"}:
-            tokens = request.headers.getlist("x-workflow-csrf")
-            safe = (
-                safe
-                and len(tokens) == 1
-                and tokens[0].isascii()
-                and hmac.compare_digest(tokens[0], nonce)
-            )
-        if not safe:
-            return JSONResponse(
-                {"detail": "workflow_request_forbidden"}, status_code=403
-            )
-        response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["X-Frame-Options"] = "DENY"
-        return response
 
     async def invoke(method: str, *args, **kwargs):
         try:

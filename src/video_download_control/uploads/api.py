@@ -2,25 +2,23 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 import sqlite3
 import tempfile
 from pathlib import Path
 from threading import RLock
 from typing import Annotated, Callable, Literal
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
-from .contracts import UploadError
+from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
+from .contracts import UploadError
 from .web import UPLOAD_HTML
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
@@ -320,19 +318,6 @@ def _safe_error(exc: UploadError) -> HTTPException:
     return HTTPException(status_code=404 if code.endswith("not_found") else 409, detail=code)
 
 
-def _origin(value: str) -> tuple[str, str, int] | None:
-    try:
-        parsed = urlsplit(value)
-        if (parsed.scheme not in {"http", "https"} or parsed.username is not None
-                or parsed.password is not None or parsed.path not in {"", "/"}
-                or parsed.query or parsed.fragment
-                or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}):
-            return None
-        return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
-    except ValueError:
-        return None
-
-
 def _default_factory(root: Path):
     from .service import UploadService
     return UploadService(root)
@@ -394,33 +379,17 @@ def install_upload_routes(
     """Install routes without touching upload directories, workers or accounts."""
     root = data_root.with_name(data_root.name + "-uploads")
     manager = _LazyUploads(app, root)
-    nonce = secrets.token_urlsafe(32)
+    nonce = install_local_http_guard(
+        app,
+        protects_path=lambda path: path == "/uploads"
+        or path.startswith("/api/v1/uploads/"),
+        csrf_header="x-upload-csrf",
+        forbidden_detail="upload_request_forbidden",
+        requires_csrf=lambda method, path: method not in {"GET", "HEAD"}
+        or path.endswith("/qr"),
+    )
     app.state.upload_service_factory = _default_factory
     app.state.upload_manager = manager
-
-    @app.middleware("http")
-    async def upload_boundary(request: Request, call_next):
-        path = request.url.path
-        if path != "/uploads" and not path.startswith("/api/v1/uploads/"):
-            return await call_next(request)
-        hosts = request.headers.getlist("host")
-        expected = _origin(request.url.scheme + "://" + hosts[0]) if len(hosts) == 1 else None
-        origins = request.headers.getlist("origin")
-        fetch_sites = request.headers.getlist("sec-fetch-site")
-        safe = (expected is not None and len(origins) <= 1 and len(fetch_sites) <= 1
-                and (not origins or _origin(origins[0]) == expected)
-                and (not fetch_sites or fetch_sites[0] in {"same-origin", "none"}))
-        if request.method not in {"GET", "HEAD"} or path.endswith("/qr"):
-            tokens = request.headers.getlist("x-upload-csrf")
-            safe = safe and len(tokens) == 1 and tokens[0].isascii() and hmac.compare_digest(tokens[0], nonce)
-        if not safe:
-            return JSONResponse({"detail": "upload_request_forbidden"}, status_code=403)
-        response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["X-Frame-Options"] = "DENY"
-        return response
 
     async def run_guarded(work):
         try:

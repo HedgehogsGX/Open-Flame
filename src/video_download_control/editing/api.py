@@ -1,23 +1,21 @@
 """Loopback editing UI/API with a single local media worker."""
 from __future__ import annotations
 
-import hmac
 import mimetypes
 import re
-import secrets
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from threading import Condition, Event, RLock, Thread, current_thread
 from time import monotonic
 from typing import Annotated, Any, BinaryIO, Literal
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
 from ..uploads.activity_lock import UploadActivityBusy, UploadActivityLease
 from .ai import default_capabilities
@@ -204,28 +202,6 @@ class ReviewTimelineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approved", "rejected"]
     expected_review_version: int = Field(ge=0, le=1, strict=True)
-
-
-def _origin(value: str) -> tuple[str, str, int] | None:
-    try:
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path not in {"", "/"}
-            or parsed.query
-            or parsed.fragment
-            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
-        ):
-            return None
-        return (
-            parsed.scheme,
-            parsed.hostname,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
-        )
-    except ValueError:
-        return None
 
 
 def _safe_error(error: EditingError) -> HTTPException:
@@ -976,41 +952,15 @@ def install_editing_routes(
         processor_factory,
         ai_runtime_root=default_ai_runtime_root(data_root),
     )
-    nonce = secrets.token_urlsafe(32)
+    nonce = install_local_http_guard(
+        app,
+        protects_path=lambda path: path == "/edits"
+        or path.startswith("/api/v1/edits/"),
+        csrf_header="x-editing-csrf",
+        forbidden_detail="editing_request_forbidden",
+        requires_csrf=lambda method, _path: method not in {"GET", "HEAD"},
+    )
     app.state.editing_manager = manager
-
-    @app.middleware("http")
-    async def editing_boundary(request: Request, call_next):
-        path = request.url.path
-        if path != "/edits" and not path.startswith("/api/v1/edits/"):
-            return await call_next(request)
-        hosts = request.headers.getlist("host")
-        expected = _origin(request.url.scheme + "://" + hosts[0]) if len(hosts) == 1 else None
-        origins = request.headers.getlist("origin")
-        fetch_sites = request.headers.getlist("sec-fetch-site")
-        safe = (
-            expected is not None
-            and len(origins) <= 1
-            and len(fetch_sites) <= 1
-            and (not origins or _origin(origins[0]) == expected)
-            and (not fetch_sites or fetch_sites[0] in {"same-origin", "none"})
-        )
-        if request.method not in {"GET", "HEAD"}:
-            tokens = request.headers.getlist("x-editing-csrf")
-            safe = (
-                safe
-                and len(tokens) == 1
-                and tokens[0].isascii()
-                and hmac.compare_digest(tokens[0], nonce)
-            )
-        if not safe:
-            return JSONResponse({"detail": "editing_request_forbidden"}, status_code=403)
-        response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["X-Frame-Options"] = "DENY"
-        return response
 
     async def invoke(method: str, *args, **kwargs):
         def work():
