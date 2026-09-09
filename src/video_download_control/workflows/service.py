@@ -35,7 +35,12 @@ from .profile import (
     normalize_workflow_text,
 )
 from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
-from .snapshots import AiSnapshotDisposition, classify_ai_snapshot
+from .snapshots import (
+    AiSnapshotDisposition,
+    UploadSnapshotClassification,
+    classify_ai_snapshot,
+    classify_upload_snapshot,
+)
 
 
 _REQUEST_KEY = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -457,23 +462,34 @@ class WorkflowService:
                     )
                     continue
                 if state == "attention_required" and record["upload_job_ids"]:
-                    snapshot = self._inspect_upload(record)
-                    self._sync_upload_job_ids(record, snapshot)
-                    if snapshot.status == "ready":
+                    snapshot, classification, _ = self._observe_upload(record)
+                    if classification.disposition == "ready":
                         self._record_upload_outcome(record, snapshot)
                         return self.get(workflow_id)
-                    if snapshot.status == "waiting":
+                    if classification.disposition in {
+                        "waiting_confirmation",
+                        "waiting_active",
+                    }:
+                        needs_confirmation = (
+                            classification.disposition == "waiting_confirmation"
+                        )
                         self._transition(
                             workflow_id,
                             (
                                 "awaiting_upload_confirmation"
-                                if snapshot.needs_confirmation
+                                if needs_confirmation
                                 else "uploading"
                             ),
-                            snapshot.code if snapshot.needs_confirmation else "",
+                            classification.code if needs_confirmation else "",
                             expected=record,
                         )
                         continue
+                    if classification.disposition == "invalid":
+                        return self._attention(
+                            workflow_id,
+                            "workflow_domain_data_invalid",
+                            expected=record,
+                        )
                     return self.get(workflow_id)
                 if (
                     state == "attention_required"
@@ -693,20 +709,27 @@ class WorkflowService:
             record = self._expected(workflow_id, expected_revision)
             if record["state"] != "awaiting_upload_confirmation":
                 raise WorkflowError("workflow_state_conflict")
-            original_job_ids = tuple(record["upload_job_ids"])
-            snapshot = self._inspect_upload(record)
-            self._sync_upload_job_ids(record, snapshot)
-            if snapshot.job_ids is not None and snapshot.job_ids != original_job_ids:
+            snapshot, classification, job_ids_changed = self._observe_upload(record)
+            if job_ids_changed:
                 return self.get(workflow_id)
-            if snapshot.status in {"failed", "attention"}:
+            if classification.disposition == "attention":
                 return self._attention(
                     workflow_id,
-                    snapshot.code or "upload_attention_required",
+                    classification.code,
                     expected=record,
                 )
-            if snapshot.status == "ready":
+            if classification.disposition == "ready":
                 self._record_upload_outcome(record, snapshot)
                 return self.get(workflow_id)
+            if classification.disposition == "invalid":
+                return self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
+            if classification.disposition == "waiting_active":
+                self._transition(workflow_id, "uploading", "", expected=record)
+                return self.advance(workflow_id)
             try:
                 self.adapter.confirm_uploads(
                     record["upload_job_ids"],
@@ -1151,36 +1174,35 @@ class WorkflowService:
             )
             return True
         if state == "awaiting_upload_confirmation":
-            snapshot = self._inspect_upload(record)
-            self._sync_upload_job_ids(record, snapshot)
-            if snapshot.status == "failed" or snapshot.status == "attention":
+            snapshot, classification, _ = self._observe_upload(record)
+            if classification.disposition == "attention":
                 self._attention(
                     workflow_id,
-                    snapshot.code or "upload_attention_required",
+                    classification.code,
                     expected=record,
                 )
                 return False
-            if snapshot.status == "ready":
+            if classification.disposition == "ready":
                 return self._record_upload_outcome(record, snapshot)
-            if snapshot.status != "waiting":
+            if classification.disposition == "invalid":
                 self._attention(
                     workflow_id,
                     "workflow_domain_data_invalid",
                     expected=record,
                 )
                 return False
-            if not snapshot.needs_confirmation:
+            if classification.disposition == "waiting_active":
                 self._transition(workflow_id, "uploading", "", expected=record)
                 return True
             if record["code"] not in _AUTO_UPLOAD_REVIEW_CODES:
                 return False
-            if snapshot.code and snapshot.code != record["code"]:
+            if classification.code and classification.code != record["code"]:
                 record = self._transition(
-                    workflow_id, state, snapshot.code, expected=record
+                    workflow_id, state, classification.code, expected=record
                 )
             if (
                 not record["auto_confirm_upload"]
-                or snapshot.code not in _AUTO_UPLOAD_REVIEW_CODES
+                or classification.code not in _AUTO_UPLOAD_REVIEW_CODES
             ):
                 return False
             self.adapter.confirm_uploads(
@@ -1190,21 +1212,28 @@ class WorkflowService:
             self._transition(workflow_id, "uploading", "", expected=record)
             return True
         if state == "uploading":
-            snapshot = self._inspect_upload(record)
-            self._sync_upload_job_ids(record, snapshot)
-            if snapshot.status == "waiting":
-                if snapshot.needs_confirmation:
-                    self._transition(
-                        workflow_id,
-                        "awaiting_upload_confirmation",
-                        snapshot.code,
-                        expected=record,
-                    )
+            snapshot, classification, _ = self._observe_upload(record)
+            if classification.disposition == "waiting_confirmation":
+                self._transition(
+                    workflow_id,
+                    "awaiting_upload_confirmation",
+                    classification.code,
+                    expected=record,
+                )
                 return False
-            if snapshot.status != "ready":
+            if classification.disposition == "waiting_active":
+                return False
+            if classification.disposition == "attention":
                 self._attention(
                     workflow_id,
-                    snapshot.code or "upload_attention_required",
+                    classification.code,
+                    expected=record,
+                )
+                return False
+            if classification.disposition == "invalid":
+                self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
                     expected=record,
                 )
                 return False
@@ -1456,6 +1485,21 @@ class WorkflowService:
         return self.adapter.inspect_upload(
             record["upload_job_ids"], expected_targets=expected_targets
         )
+
+    def _observe_upload(
+        self, record: dict[str, Any]
+    ) -> tuple[UploadSnapshot, UploadSnapshotClassification, bool]:
+        """Inspect upload facts and checkpoint current retry-leaf identities."""
+
+        original_job_ids = tuple(record["upload_job_ids"])
+        snapshot = self._inspect_upload(record)
+        self._sync_upload_job_ids(record, snapshot)
+        classification = classify_upload_snapshot(snapshot)
+        job_ids_changed = (
+            snapshot.job_ids is not None
+            and snapshot.job_ids != original_job_ids
+        )
+        return snapshot, classification, job_ids_changed
 
     def _sync_upload_job_ids(
         self, record: dict[str, Any], snapshot: UploadSnapshot
