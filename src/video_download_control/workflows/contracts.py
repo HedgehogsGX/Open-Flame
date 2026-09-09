@@ -97,6 +97,9 @@ class EditSnapshot:
     # closed instead of silently selecting the first item from a multi-output
     # render.
     output_ids: tuple[str, ...] = ()
+    # True only while the current plan is still a local review that may be
+    # confirmed. Older adapters default to the conservative confirmation gate.
+    needs_confirmation: bool = True
 
 
 @dataclass(frozen=True, slots=True)

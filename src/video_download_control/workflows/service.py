@@ -19,6 +19,7 @@ from weakref import WeakValueDictionary
 from .contracts import (
     AiSnapshot,
     CancellationSnapshot,
+    EditSnapshot,
     MAX_WORKFLOW_ACCOUNTS,
     MAX_WORKFLOW_SEGMENTS,
     MAX_WORKFLOW_UPLOAD_JOBS,
@@ -37,8 +38,11 @@ from .profile import (
 from .schema import SCHEMA_VERSION, WorkflowSchemaError, ensure_workflow_schema
 from .snapshots import (
     AiSnapshotDisposition,
+    EditSnapshotClassification,
+    EditSnapshotDisposition,
     UploadSnapshotClassification,
     classify_ai_snapshot,
+    classify_edit_snapshot,
     classify_upload_snapshot,
 )
 
@@ -91,6 +95,14 @@ _AUTO_EDIT_REVIEW_CODES = frozenset(
         "edit_restart_confirmation_required",
     }
 )
+
+
+def _edit_confirmation_code(code: str) -> str:
+    if code == "restart_confirmation_required":
+        return "edit_restart_confirmation_required"
+    return code
+
+
 _AUTO_UPLOAD_REVIEW_CODES = frozenset({"", "upload_restart_confirmation_required"})
 _SOURCE_METADATA_RETRY_CODE = "workflow_source_metadata_unavailable"
 _PREFLIGHT_RETRY_CODES = frozenset(
@@ -520,37 +532,28 @@ class WorkflowService:
                     and record["edit_project_id"]
                 ):
                     if record["edit_plan_id"]:
-                        snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
-                        if snapshot.status in {"failed", "attention"}:
-                            code = snapshot.code or "edit_attention_required"
-                            if code != record["code"]:
-                                return self._attention(
-                                    workflow_id, code, expected=record
-                                )
-                            return record
-                        if snapshot.status == "waiting":
-                            self._transition(
-                                workflow_id,
-                                "awaiting_edit_confirmation",
-                                snapshot.code or "",
-                                expected=record,
-                            )
+                        classification, disposition = self._observe_edit(
+                            record, context="reconcile"
+                        )
+                        if disposition in {"failed", "attention", "invalid"}:
+                            return self.get(workflow_id)
+                        if disposition == "ready":
                             continue
-                        if snapshot.status == "ready":
-                            if not self._record_edit_outputs(record, snapshot):
-                                return self.get(workflow_id)
-                            self._transition(
-                                workflow_id,
-                                "preparing_upload",
-                                "",
-                                expected=record,
-                            )
-                            continue
-                        return self._attention(
+                        self._transition(
                             workflow_id,
-                            "workflow_domain_data_invalid",
+                            (
+                                "awaiting_edit_confirmation"
+                                if disposition == "waiting_confirmation"
+                                else "rendering"
+                            ),
+                            (
+                                classification.code
+                                if disposition == "waiting_confirmation"
+                                else ""
+                            ),
                             expected=record,
                         )
+                        continue
                     if record["profile"]["ai"] is None:
                         return self._attention(
                             workflow_id,
@@ -654,6 +657,25 @@ class WorkflowService:
                 raise WorkflowError("workflow_profile_confirmation_required")
             if record["state"] != "awaiting_edit_confirmation" or not record["edit_plan_id"]:
                 raise WorkflowError("workflow_state_conflict")
+            classification, disposition = self._observe_edit(
+                record, context="observe"
+            )
+            if disposition in {"failed", "attention", "invalid"}:
+                return self.get(workflow_id)
+            if disposition == "ready":
+                return self.advance(workflow_id)
+            if disposition == "waiting_active":
+                self._transition(workflow_id, "rendering", "", expected=record)
+                return self.advance(workflow_id)
+            observed_code = _edit_confirmation_code(classification.code)
+            persisted_code = _edit_confirmation_code(record["code"])
+            if observed_code and observed_code != persisted_code:
+                return self._transition(
+                    workflow_id,
+                    "awaiting_edit_confirmation",
+                    observed_code,
+                    expected=record,
+                )
             try:
                 self.adapter.confirm_edit(record["edit_plan_id"])
             except WorkflowError as error:
@@ -756,18 +778,33 @@ class WorkflowService:
             if record["edit_plan_id"] is not None:
                 if record["edit_output_ids"] or record["upload_job_ids"]:
                     raise WorkflowError("workflow_retry_not_available")
-                snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
-                if snapshot.status == "waiting" and snapshot.code in {
-                    "explicit_confirmation_required",
-                    "restart_confirmation_required",
-                }:
+                classification, disposition = self._observe_edit(
+                    record, context="retry"
+                )
+                if disposition in {"ready", "attention", "invalid"}:
+                    return self.get(workflow_id)
+                if disposition == "waiting_active":
+                    self._transition(
+                        workflow_id, "rendering", "", expected=record
+                    )
+                    return self.get(workflow_id)
+                if disposition == "waiting_confirmation":
+                    review_code = classification.code
+                    if review_code in _AUTO_EDIT_REVIEW_CODES:
+                        review_code = "render_retry_confirmation_required"
                     self._transition(
                         workflow_id,
                         "awaiting_edit_confirmation",
-                        "render_retry_confirmation_required",
+                        review_code,
                         expected=record,
                     )
                     return self.get(workflow_id)
+                if disposition != "failed":
+                    raise WorkflowError("workflow_retry_not_available")
+                if classification.code != record["code"]:
+                    return self._attention(
+                        workflow_id, classification.code, expected=record
+                    )
                 try:
                     plan_id = self.adapter.retry_edit(
                         workflow_id, record["edit_plan_id"]
@@ -1034,40 +1071,29 @@ class WorkflowService:
                     workflow_id, "workflow_data_invalid", expected=record
                 )
                 return False
-            snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
-            if snapshot.status == "waiting":
-                if record["code"] not in _AUTO_EDIT_REVIEW_CODES:
-                    return False
-                code = snapshot.code or record["code"]
-                if code and code != record["code"]:
-                    record = self._transition(
-                        workflow_id, state, code, expected=record
-                    )
-                if (
-                    not record["auto_confirm_edit"]
-                    or code not in _AUTO_EDIT_REVIEW_CODES
-                ):
-                    return False
-            if snapshot.status == "failed" or snapshot.status == "attention":
-                self._attention(
-                    workflow_id,
-                    snapshot.code or "edit_attention_required",
-                    expected=record,
-                )
+            classification, disposition = self._observe_edit(
+                record, context="observe"
+            )
+            if disposition in {"failed", "attention", "invalid"}:
                 return False
-            if snapshot.status == "ready":
-                if not self._record_edit_outputs(record, snapshot):
-                    return False
-                self._transition(
-                    workflow_id, "preparing_upload", "", expected=record
-                )
+            if disposition == "ready":
                 return True
-            if snapshot.status != "waiting":
-                self._attention(
-                    workflow_id,
-                    "workflow_domain_data_invalid",
-                    expected=record,
+            if disposition == "waiting_active":
+                self._transition(workflow_id, "rendering", "", expected=record)
+                return True
+            if record["code"] not in _AUTO_EDIT_REVIEW_CODES:
+                return False
+            code = _edit_confirmation_code(
+                classification.code or record["code"]
+            )
+            if code and code != record["code"]:
+                record = self._transition(
+                    workflow_id, state, code, expected=record
                 )
+            if (
+                not record["auto_confirm_edit"]
+                or code not in _AUTO_EDIT_REVIEW_CODES
+            ):
                 return False
             self.adapter.confirm_edit(record["edit_plan_id"])
             self._transition(workflow_id, "rendering", "", expected=record)
@@ -1078,33 +1104,22 @@ class WorkflowService:
                     workflow_id, "workflow_data_invalid", expected=record
                 )
                 return False
-            snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
-            if snapshot.status == "waiting":
-                if snapshot.code:
-                    self._transition(
-                        workflow_id,
-                        "awaiting_edit_confirmation",
-                        (
-                            "edit_restart_confirmation_required"
-                            if snapshot.code == "restart_confirmation_required"
-                            else snapshot.code
-                        ),
-                        expected=record,
-                    )
+            classification, disposition = self._observe_edit(
+                record, context="observe"
+            )
+            if disposition in {"failed", "attention", "invalid"}:
                 return False
-            if snapshot.status != "ready":
-                self._attention(
-                    workflow_id,
-                    snapshot.code or "edit_attention_required",
-                    expected=record,
-                )
-                return False
-            if not self._record_edit_outputs(record, snapshot):
+            if disposition == "ready":
+                return True
+            if disposition == "waiting_active" or not classification.code:
                 return False
             self._transition(
-                workflow_id, "preparing_upload", "", expected=record
+                workflow_id,
+                "awaiting_edit_confirmation",
+                _edit_confirmation_code(classification.code),
+                expected=record,
             )
-            return True
+            return False
         if state == "preparing_upload":
             outputs = record["outputs"]
             if not outputs:
@@ -1423,6 +1438,66 @@ class WorkflowService:
             expected=updated,
         )
         return "ready"
+
+    def _apply_edit_snapshot(
+        self,
+        record: dict[str, Any],
+        snapshot: EditSnapshot,
+        classification: EditSnapshotClassification,
+        *,
+        context: Literal["observe", "reconcile", "retry"],
+    ) -> EditSnapshotDisposition:
+        """Apply safe edit facts while the caller retains mutation authority."""
+
+        disposition = classification.disposition
+        if disposition == "invalid":
+            self._attention(
+                record["id"], "workflow_domain_data_invalid", expected=record
+            )
+            return disposition
+        if classification.code in _AI_LEDGER_REVIEW_CODES:
+            if (
+                record["state"] != "attention_required"
+                or record["code"] != classification.code
+            ):
+                self._attention(record["id"], classification.code, expected=record)
+            return "attention"
+        if disposition in {"failed", "attention"}:
+            if context == "retry" and disposition == "failed":
+                return disposition
+            if (
+                record["state"] != "attention_required"
+                or record["code"] != classification.code
+            ):
+                self._attention(record["id"], classification.code, expected=record)
+            return disposition
+        if disposition == "ready":
+            if not self._record_edit_outputs(record, snapshot):
+                return "invalid"
+            self._transition(
+                record["id"], "preparing_upload", "", expected=record
+            )
+        return disposition
+
+    def _observe_edit(
+        self,
+        record: dict[str, Any],
+        *,
+        context: Literal["observe", "reconcile", "retry"],
+    ) -> tuple[EditSnapshotClassification, EditSnapshotDisposition]:
+        """Inspect and apply one canonical editing-domain observation."""
+
+        try:
+            snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
+        except WorkflowError as error:
+            if error.code not in _AI_LEDGER_REVIEW_CODES:
+                raise
+            snapshot = EditSnapshot("attention", code=error.code)
+        classification = classify_edit_snapshot(snapshot)
+        disposition = self._apply_edit_snapshot(
+            record, snapshot, classification, context=context
+        )
+        return classification, disposition
 
     def _record_upload_outcome(
         self, record: Mapping[str, Any], snapshot: UploadSnapshot

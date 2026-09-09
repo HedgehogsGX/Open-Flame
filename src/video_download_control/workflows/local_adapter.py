@@ -1460,9 +1460,10 @@ class LocalWorkflowAdapter:
             return EditSnapshot(
                 "waiting",
                 code=code,
+                needs_confirmation=True,
             )
         if state in _EDIT_WAITING_STATES:
-            return EditSnapshot("waiting")
+            return EditSnapshot("waiting", needs_confirmation=False)
         if state in {"failed", "canceled"}:
             code = plan.get("code")
             if not isinstance(code, str) or _SAFE_CODE.fullmatch(code) is None:
