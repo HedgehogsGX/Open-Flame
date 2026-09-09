@@ -30,7 +30,7 @@ INDEX_HTML = """<!doctype html>
   <main class="of-shell">
     <header class="page-header">
       <p class="eyebrow">本地媒体工作台</p>
-      <h1>下载并整理视频</h1>
+      <h1 aria-label="下载并整理视频">下载并整理<em>视频</em></h1>
       <p class="lede">创建批次、跟踪真实处理阶段，并从同一处取得原件、缩略图和字幕。上传工作台继续使用独立账号与逐项确认。</p>
       <p class="notice page-note">普通 Windows 应用同时管理控制面与本机 Worker，本次运行状态由应用心跳报告。页面不会启动进程；单独启动控制面时，外部 Worker 状态保持未知。</p>
     </header>

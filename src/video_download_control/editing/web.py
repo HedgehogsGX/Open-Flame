@@ -26,7 +26,7 @@ EDITING_HTML = r'''<!doctype html>
   <main class="of-shell">
     <header class="page-header">
       <p class="eyebrow">非破坏性媒体工作台</p>
-      <h1>从原片生成可核对的编辑版本</h1>
+      <h1 aria-label="从原片生成可核对的编辑版本">从原片生成<em>可核对</em>的编辑版本</h1>
       <p class="lede">设置多个分段并抽取封面；处理计划保存后仍需单独确认。下载原件不会被覆盖，编辑成品进入上传器时还会再次复制并校验。</p>
       <p class="notice page-note">AI 翻译与配音使用独立能力状态。模型、凭据或数据外发条件不满足时不会静默调用远程服务；AI 成品必须先在这里核对。</p>
     </header>

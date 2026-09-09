@@ -30,7 +30,7 @@ UPLOAD_HTML = r'''<!doctype html>
   <main class="of-shell">
     <header class="page-header">
       <p class="eyebrow">本地媒体工作台</p>
-      <h1>核对后再上传</h1>
+      <h1 aria-label="核对后再上传">核对后再<em>上传</em></h1>
       <p class="lede">将本地视频或下载成品发送到 Bilibili、抖音和视频号。视频号还可选择保存平台草稿。</p>
       <p class="notice page-note">先创建本地草稿并核对内容，再逐个确认执行。上传账号单独登录，不使用下载 Cookie。结果来自上游工具；审核和公开状态需在平台核对。</p>
     </header>

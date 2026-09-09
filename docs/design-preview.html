@@ -13,7 +13,7 @@
     }
     .preview-nav { margin-left: auto; }
     .brand-mark svg { width: 18px; height: 18px; }
-    .preview-header { max-width: 760px; }
+    .preview-header { max-width: none; }
     .hero-note {
       display: inline-flex;
       align-items: flex-start;
@@ -190,6 +190,7 @@
     .specimen section + section { margin-top: 1.35rem; padding-top: 1.35rem; border-top: 1px solid var(--of-border); }
     .specimen-label { margin: 0 0 .65rem; color: var(--of-text-secondary); font-size: .75rem; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
     .type-display { margin: 0; font-size: 2rem; line-height: 1.2; font-weight: 600; letter-spacing: 0; }
+    .type-display em { color: var(--of-accent); font-family: var(--of-font-editorial); font-style: normal; font-weight: 500; }
     .type-body { margin: .45rem 0 0; color: var(--of-text-secondary); }
     .type-detail { margin: .45rem 0 0; color: var(--of-text-secondary); font: 400 .8125rem/1.55 var(--of-font-mono); overflow-wrap: anywhere; }
     .swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; }
@@ -311,11 +312,11 @@
   <main id="preview" class="of-shell">
     <header class="page-header preview-header">
       <p class="eyebrow">设计预览 · 合成示例，不连接平台</p>
-      <h1>Open-Flame 工作台</h1>
-      <p class="lede">下载、整理、核对草稿。清晰的层级，让每一步操作都从容。</p>
-      <p class="hero-note">
+      <h1 aria-label="让媒体流程成为清晰叙事">让媒体流程成为<em>清晰叙事</em></h1>
+      <p class="lede">下载、编辑、核对与发布保持在同一套编辑式层级中；玻璃只承载导航、命令与明确反馈。</p>
+      <p class="notice page-note hero-note">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5v6M12 7.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <span>视觉基准 1.2 · 本页直接读取 T16 共享样式；操作仅演示界面反馈。真实页面浏览器矩阵已完成本地合成验收，精确制品仍以包外回执为准。</span>
+        <span>视觉基准 1.4 · 编辑式玻璃 · 本页直接读取四个生产页面共用的 CSS。所有数据与按钮均为合成预览，不代表真实平台状态。</span>
       </p>
     </header>
 
@@ -419,8 +420,8 @@
       <aside id="components" class="card specimen" aria-labelledby="components-title">
         <section>
           <p class="specimen-label" id="components-title">Typography</p>
-          <p class="type-display">安静而清晰</p>
-          <p class="type-body">系统字体、舒展正文与克制字重共同建立层级。</p>
+          <p class="type-display">安静而<em>清晰</em></p>
+          <p class="type-body">系统无衬线、短语衬线强调与舒展正文共同建立层级。</p>
           <p class="type-detail">SHA-256 · a3f2…9c10</p>
         </section>
         <section>

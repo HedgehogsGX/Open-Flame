@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、完整视频默认/生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检、三账号上传 fan-out、预授权 queued 重启续跑、整流程安全取消、重复下载 owner 恢复及配音语速端到端贯通已通过本地 synthetic/offline、浏览器或故障恢复验证；用户已选定方向 C“编辑式玻璃”作为整站生产风格，下一切片统一四页并完成浏览器 QA；真实模型、真人试听、三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、完整视频默认/生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检、三账号上传 fan-out、预授权 queued 重启续跑、整流程安全取消、重复下载 owner 恢复、配音语速端到端贯通及方向 C“编辑式玻璃”四页生产实现均已通过当前本地 synthetic/offline、浏览器或故障恢复验证；下一轻量代码切片是编辑草稿精确绑定所选 translation revision；真实模型、真人试听、三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 编辑式玻璃四页生产前端：用户选定的方向 C 已同步到共享 `open-flame.css`、下载 `/`、编辑 `/edits`、上传 `/uploads`、自动流程 `/workflows`、`DESIGN_SYSTEM.md` 1.4 与设计预览。四页使用暖纸/暖炭画布、编辑式大标题、双瓣品牌标记、浮动玻璃导航、选择性玻璃主命令区和实底正文卡；767px 以下顶栏把品牌/主题与导航分行，导航可随文字缩放继续换行，窄屏持续消息不再遮挡。四个生产模板除标题中的同文 `aria-label` 和无事件 `<em>` 外未改业务 DOM/JavaScript。当前 Chromium 覆盖四页 × 三视口 × 两主题、reduced-motion/transparency、桌面 200% 根字体及四页 × 320/768/1024px 的 200% 交叉场景，共 **44/44 PASS**，无整页横向溢出；浏览器侧未观测到非 loopback 请求、控制台/页面/请求或 HTTP 错误，见[编辑式玻璃四页生产前端证据](validation/iteration-0.28.0-editorial-glass-frontend.md)。ignored 候选、validator、报告与截图仍只在 `validation/local/`；本地视觉验证不证明真实 OpenAI、平台参数接受、审核或发布。
 
 2026-09-09 配音语速贯通：编辑页与自动流程页现在接受有限的 `0.88`～`1.12` 语速，旧 recipe/preset 缺失字段时继续使用 `1.0`，且默认值不写入 canonical JSON，历史 recipe/profile SHA 保持兼容。非默认值冻结到配方和 workflow profile，预设原样恢复，确认卡同时显示音色与实际语速；输入变化立即撤销 workflow 的旧外发同意。渲染器把冻结值传入既有 `SpeechOptions`，协议、bridge、worker 与 OpenAI provider 沿既有路径把它映射为 `speed`，脱敏 request fingerprint 随值变化，而 authorization SHA 保持不变。非法类型、布尔、NaN/Inf、超大整数和越界值在 Python/API 边界稳定失败；轻微溢出可由操作者明确提高语速处理，较大溢出仍以 `ai_speech_timing_overflow` 停止，不自动发起第二次付费调用。冻结基线复现为 8 RED/2 PASS，当前 ignored validator 为 10/10 PASS；页面脚本、预设/API 往返、provider 转发和现有溢出边界均已覆盖，见[配音语速验证](validation/iteration-0.28.0-speech-rate.md)。没有新增 Schema、数据库、runtime、服务、线程、队列或依赖，也没有新增或修改已跟踪测试文件。真实 OpenAI 质量、费用、真人试听和平台发布仍待外部验收。
 
@@ -27,7 +29,7 @@
 
 2026-09-09 自动执行就绪度：`/workflows` 在创建前分别显示本次托管下载 Worker 心跳、AI runtime/三项精确 authorization、上传 runtime/当前 scheduler，以及 `active + ready` 的所选账号。页面按当前是否启用 AI 汇总必需条件；单个探针失败只标记对应项未知，下载状态的两秒轮询不重建表单，并保留输入、账号选区和焦点。实现只复用现有同源 GET 和共享组件，没有新增 API、数据库、线程或服务；前端即时状态不替代服务端创建/领取/执行校验，也不证明远端接受。ignored Chromium 验证覆盖 ready、未选账号、暂停、503、live region 和 320 px；证据见[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)。
 
-2026-09-09 前端视觉准备：已按本地 `huashu-design`、`apple-design` 与 `emil-design-eng` 生成三套可运行液态玻璃候选，分别侧重雾面工具台、极光工作区和编辑式玻璃排版。用户已明确选定方向 C“编辑式玻璃”作为下载、编辑、上传和自动流程四页的整体生产风格；当前提交前生产 CSS/页面尚未采用该方向。候选位于 ignored 的 `validation/local/liquid-glass-directions-20260909/`，本机比较页为 `http://127.0.0.1:18832/validation/local/liquid-glass-directions-20260909/compare.html`。下一切片应同步设计规范、共享 token/组件与四页结构，并验证窄屏、键盘、文字缩放、减少动态和减少透明度。
+2026-09-09 前端视觉候选历史：本地 `huashu-design`、`apple-design` 与 `emil-design-eng` 产生的三套液态玻璃候选分别侧重雾面工具台、极光工作区和编辑式玻璃排版，用户随后选定方向 C。候选与比较页保存在 ignored 的 `validation/local/liquid-glass-directions-20260909/`，只记录选型过程；生产实现和验收以本交接入口顶部的当前记录为准。
 
 2026-09-09 复核更正：`b240392` 的旧整链脚本跳过了 AI，仅走一个合成 Bilibili 任务，不能证明 AI/三平台/重启。当前已用真实下载 Worker、LocalWorkflowAdapter、编辑/上传服务、隔离 AI worker 和 FFmpeg 替换验证，实际听写/翻译/配音各一次，输出音频与三平台任务均有断言；真实模型响应和平台网络仍是替身。此前“只剩运行环境”的完成结论撤回。预设还修复了未恢复 AI/音色/定时字段、配音授权摘要缺失和嵌套参数未校验问题。当前证据见[预设记录](validation/iteration-0.28.0-workflow-presets.md)与[整链更正记录](validation/iteration-0.28.0-full-chain-smoke.md)。验证覆盖不足、当前发行冻结和真实平台验收仍是后续工作，目标尚未完成。
 
@@ -51,7 +53,7 @@
 | T07 停机备份/恢复 | 上传备份格式 2 / Upload Schema 3 保存受管封面、定时值和平台参数；格式 1 / Schema 2 只读输入经 staging 迁移，并撤回需要复核的旧确认 | 仅是本机 synthetic/offline 工程范围；真实容量、异机/offsite、NAS 与人工灾备演练未做 |
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
 | T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
-| T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
+| T10、T16 与当前方向 C | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；当前“编辑式玻璃”共享主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面，并完成当前四页 Chromium 44/44 复验 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
 | T17 投稿参数 | 0.26.0 本地 G7 保留为历史；当前 `/uploads` 与 `/workflows` 均可设置 Bilibili/抖音/视频号的标题、简介、标签、受管/生成封面、发布时间和平台字段；Workflow 同平台多账号可保留 preset 差异或明确统一面板 | Workflow 同一平台仍以一个可显式统一的面板编辑，不提供每个账号并排表单；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
 | T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 与生产页面保存/配置最多 10 个有序输出，并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；原始预授权 queued AI/render/upload 可在重启后重新校验并续跑，手动、retry、running 与 unknown 仍停下；服务端在保存 workflow 与建立下载前复核下载 Worker、FFmpeg、三项 AI authorization/音色、上传 runtime/调度器及账号绑定；发布后还收敛真实 upload outcome、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 与执行预检完成 synthetic/offline 适配、迁移、恢复和浏览器验证；重启续跑完成策略/Manager/域恢复及真实上传域 graceful reopen，尚无 abrupt power-loss、浏览器重启链或真实三域网络 E2E。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
@@ -62,7 +64,7 @@
 
 上传数据一致性使用上传根旁的 `.<root-name>.activity.lock`：当前应用 lifespan、运行中的 active/standby `UploadService` 及短事务持共享锁；上传备份在源根、恢复在目标根持排他锁至完成。创建上传备份前仍须正常停止使用该上传根的**所有**应用和 standby 实例。这个新锁只能协调采用该合同的当前代码；旧版本应用、自写脚本或手工 SQLite/file writer 不受其完整协调，必须由操作者另行停止。下载与上传各有独立备份格式，任一命令成功都不代表另一域已经备份。
 
-当前 0.28.0 本地范围见[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[生产多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
+当前 0.28.0 本地范围见[编辑式玻璃四页生产前端证据](validation/iteration-0.28.0-editorial-glass-frontend.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[生产多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)、[AI 与自动流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)、[自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)与[编辑指南](docs/EDITOR.md)；冻结全量、最终 commit、制品 identity/hash 与独立安装结果只记录在同批包外 receipt。此前 [0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录只保留各自历史，不能证明 0.28.0。本轮未执行真实登录、扫码、OpenAI 调用、真实下载或上传。
 
 [0.24.3 最终源码审查](validation/iteration-0.24.3-final-review.md)与[此前八项修复记录](validation/iteration-0.24.3-debug-fixes.md)保留各自冻结/候选范围，不能借给当前工作树。旧上传 Schema 1 先按精确结构迁移为 Schema 2，再迁移到 Schema 3；旧标签会规范化，抖音/视频号旧版上游隐式 AI 参数会显式保存，受影响的活动任务必须重新核对，原 running 结果仍保持 unknown。未知、损坏或更高版本失败关闭。旧 runtime Schema 1 是另一套运行时 manifest 概念，仍按[升级说明](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，不能修改 manifest 伪造通过。
 
@@ -186,7 +188,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 | 短链 | 逐跳 DNS/numeric TLS/peer 校验 | 0.19 Windows local-app 的直连明确确认同时接通控制面短链；普通 control 仍默认关闭，只支持既有 POSIX UDS 配置；不监听新端口，不声称隔离 |
 | 凭证 | 本次运行显式平台默认与匿名模式；网页不编辑秘密 | 0.19 config v2、事务内新任务/重试绑定、API平台可用性及UI已接通；v1不自动默认；仅 synthetic source 已验证，真实 Cookie 未挂载 |
 | 资产 | 不可变下载原件 + 独立编辑源/成品 + 独立上传媒体 | ready 下载列表含 thumbnail/caption DTO；原件、辅助产物和编辑成品分别由严格端点重验；编辑输出须显式复制进上传域，API 不暴露本机路径或用户标题 |
-| 前端/API | 下载、编辑、自动流程及 Bilibili/抖音/视频号上传四页 | 0.28.0 四页共用 Apple 风格语义 token、组件基础、系统/浅/深主题、本地静态资源、响应式与无障碍降级；编辑/自动流程页显示 provider、模型、标准音色、数据外发和费用边界，云调用与配音计划分别要求明确确认；runtime 或凭据缺失时保持 blocked |
+| 前端/API | 下载、编辑、自动流程及 Bilibili/抖音/视频号上传四页 | 0.28.0 四页共用“编辑式玻璃”语义 token、选择性玻璃组件、系统/浅/深主题、本地静态资源、响应式与无障碍降级；当前 Chromium 44/44 通过；编辑/自动流程页显示 provider、模型、标准音色、数据外发和费用边界，云调用与配音计划分别要求明确确认；runtime 或凭据缺失时保持 blocked |
 | 运行日志 | supervisor/控制面/Worker allowlist JSONL + 近期事件 API/UI；0.22 独立启动故障日志 | 三进程共享同一 `run_id`；业务日志不写原始 stdout/stderr、URL、source ID、标题、文件名、argv、Cookie 或本机路径；独立诊断仅记录固定代码和上下文，256 KiB × 3 备份，明确 saved/unavailable，正常关闭持久化不等于断电保证 |
 | 部署 | Windows 一体化本机应用；高级手动 Worker；Docker Compose 单机候选 | 本机 supervisor/直连 Worker 已真实验收，但明确不提供网络隔离；Linux 隔离 Worker/Compose 未 build/cold-start/full acceptance |
 | 备份 | 下载与上传使用两套独立格式；编辑与 Workflow 域尚无备份/恢复；秘密不混入 | `video-download-backup` 保存下载 Schema 11/已发布资产；`video-upload-backup` 以格式 2 保存 Upload Schema 3、登记 present 媒体及非秘密关系。上传 create/restore 使用 sibling shared/exclusive activity lock并要求所有 active/standby 实例停机；旧版本/手工 writer 仍需人工停止。Editing Schema 4、Workflow Schema 2、导入源和编辑成品当前不在这两套备份中 |
@@ -437,7 +439,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读[配音语速验证](validation/iteration-0.28.0-speech-rate.md)、[重复下载 owner 验证](validation/iteration-0.28.0-workflow-duplicate-download-owner.md)、[预授权重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[整流程取消证据](validation/iteration-0.28.0-workflow-cancellation.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。预授权 queued 工作安全重启续跑、三平台参数卡、封面预检、服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设、真实域离线整链、整流程安全取消、重复下载 owner 恢复及配音语速均已重新验证。下一代码切片按用户选定的方向 C“编辑式玻璃”同步设计规范、共享 CSS 和下载、编辑、上传、自动流程四页，再做真实浏览器 QA；同时可只读核对实际启动数据根/runtime，并准备同一冻结提交上的真实 OpenAI、真人试听及 Bilibili、抖音、视频号逐平台验收。编辑页草稿仍需在后续轻量切片中显式绑定所选 translation revision，避免同语言/provider/model 存在多个已批准修订时重载选择歧义。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读[编辑式玻璃四页生产前端证据](validation/iteration-0.28.0-editorial-glass-frontend.md)、[配音语速验证](validation/iteration-0.28.0-speech-rate.md)、[重复下载 owner 验证](validation/iteration-0.28.0-workflow-duplicate-download-owner.md)、[预授权重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[整流程取消证据](validation/iteration-0.28.0-workflow-cancellation.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。预授权 queued 工作安全重启续跑、三平台参数卡、封面预检、服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设、真实域离线整链、整流程安全取消、重复下载 owner 恢复、配音语速及编辑式玻璃四页均已重新验证。下一轻量代码切片是让编辑页草稿显式绑定所选 translation revision，避免同语言/provider/model 存在多个已批准修订时重载选择歧义；同时可只读核对实际启动数据根/runtime，并准备新 clean commit/receipt 及同一冻结提交上的真实 OpenAI、真人试听和 Bilibili、抖音、视频号逐平台验收。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 
@@ -612,13 +614,13 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
 7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、当前内联 JS、依赖一致性和本机浏览器检查已通过；当前相关既有回归 263 passed，文档/发行回归 102 passed，测试文件保持未改。`tests/test_api.py` 当前另为 19 passed、1 failed：既有版本断言仍期待 `0.27.0`，而项目已是 `0.28.0`；按仓库策略不修改测试，因此完整 CI 尚不能标绿。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产自动流程页现可完整恢复 0–10 段，并显示最多 30 个投稿任务的 fan-out。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
-9. 用户已授权关键开发步骤完成后直接创建本地 Git commit，并要求本轮验证后正常合并远端历史、直接 push 到 `origin/main`；禁止 force push。真实平台操作、云端 AI 调用、GitHub Release 与第三方二进制再分发仍未授权。液态玻璃三套 ignored 本地候选已经生成，用户已选定方向 C“编辑式玻璃”，生产四页从下一切片按该方向实施。
+9. 用户已授权关键开发步骤完成后直接创建本地 Git commit，并要求本轮验证后正常合并远端历史、直接 push 到 `origin/main`；禁止 force push。真实平台操作、云端 AI 调用、GitHub Release 与第三方二进制再分发仍未授权。方向 C“编辑式玻璃”已用于生产四页并完成当前 44/44 Chromium 复验；后续新增控件继续沿用 `DESIGN_SYSTEM.md` 1.4。
 
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 
 ## 8. 迭代历史
 
-- **0.28.0 — 2026-09-08 至 2026-09-09**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账；发布后开发又收敛 upload outcome，加入逐操作 AI authorization、输入/调用硬上限、Editing Schema 4 脱敏远程调用账本、Workflow Schema 2 多输出及生产 1–10 段界面。unknown 结果只能人工 reconciliation，完成与重试按账本失败关闭。本地 runtime/synthetic 工程证据不代表真实 OpenAI 质量、实际费用、三平台发布或新的发行冻结；以各轮证据和包外 receipt 为准。
+- **0.28.0 — 2026-09-08 至 2026-09-09**：完成 T19 隔离 OpenAI runtime、持久化听写/翻译与时间轴审核、segment-local 字幕/标准音色配音、URL 自动流程、上传批次原子确认、账号登录 revision 绑定和 retry leaf 对账；发布后开发又收敛 upload outcome，加入逐操作 AI authorization、输入/调用硬上限、Editing Schema 4 脱敏远程调用账本、Workflow Schema 2 多输出及生产 1–10 段界面，并将用户选定的方向 C“编辑式玻璃”落入四张生产页后完成当前 Chromium 44/44 复验。unknown 结果只能人工 reconciliation，完成与重试按账本失败关闭。本地 runtime/synthetic/浏览器工程证据不代表真实 OpenAI 质量、实际费用、三平台发布或新的发行冻结；以各轮证据和包外 receipt 为准。
 
 - **0.27.0 — 2026-09-07**：以 `d358f2a338129a9eec81e4055249b968b0068fbd` 为起始基线，完成 T18 非破坏性编辑工作台、分段与封面、下载→编辑→上传显式复制链路，以及 AI provider/capability/timeline 合同。AI runtime、模型、推理、试听、真实素材范围、真实平台与最终 release receipt 仍未完成。
 
