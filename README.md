@@ -4,11 +4,13 @@
 
 > 当前开发版本为 **0.28.0**，下载数据库仍为 **Schema 11**，编辑库独立使用 **Schema 4**，上传库独立使用 **Schema 3**，自动流程使用独立 **Workflow Schema 2**。除分段和封面外，编辑域现在支持隔离 runtime 驱动的 OpenAI `whisper-1` 听写、`gpt-5.6-luna` 翻译和 `gpt-4o-mini-tts` 标准音色配音；时间轴须审核，处理计划冻结已批准修订。`/workflows` 可把一个 URL 串接到下载、编辑、AI 和所选 Bilibili、抖音、视频号上传草稿，并按用户预先授权或逐步确认继续。应用重启后，只有原始预授权且域记录证明尚未 dispatch 的 queued AI、渲染和上传工作会重新校验并续跑；手动流程、retry、running 和 unknown 仍停下。一个流程可保存最多 10 个有序视频输出，并向最多 3 个账号建立不超过 30 个上传草稿；页面在创建前分别显示下载 Worker、AI runtime/凭据、上传 runtime/调度器和所选账号的即时就绪度，并可分别设置三平台的标题、简介、标签、定时和专属投稿参数。服务端会在保存流程与建立下载前重新核对真实执行依赖、冻结账号会话及受管封面。AI runtime 和密钥不随包提供，三平台真实投稿、定时发布和审核结果仍需外部测试员分别验收。Windows 源码版仍需已安装的 64 位 CPython，不是免 Python EXE。
 
-自动流程入口为 `/workflows`；编辑入口为 `/edits`，也可从 ready 下载成品点击“进入编辑”。具体流程见[编辑工作台指南](docs/EDITOR.md)与[可选 AI Runtime](docs/AI_RUNTIME.md)。外部上传测试入口仍为[三平台上传快速开始、测试计划与回报模板](docs/UPLOADER_TEST_PLAN.md)。
+自动流程入口为 `/workflows`；编辑入口为 `/edits`，也可从 ready 下载成品点击“进入编辑”。具体流程见[编辑工作台指南](docs/EDITOR.md)与[可选 AI Runtime](docs/AI_RUNTIME.md)。受委托开发者和测试员从[完整外部测试手册](TESTING.md)开始，三平台细项见[上传器测试计划](docs/UPLOADER_TEST_PLAN.md)，失败定位见[完整 Debug 指南](docs/DEBUG_GUIDE.md)，测试完成后按[回传与后续开发模板](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)提交独立记录。
 
 2026-09-05 的八项 Debug 发现已进入 0.24.3 修复：上传异常恢复、完整运行时校验、原件完整性与类型、Worker 状态、历史列表、上传库结构和运维文档。当前提交前复验及追加边界修复见[最终源码审查](validation/iteration-0.24.3-final-review.md)；[此前修复记录](validation/iteration-0.24.3-debug-fixes.md)和[原始核验报告](validation/full-debug-20260905.md)保留各自历史构建，[后续执行计划](docs/FOLLOW_UP_EXECUTION_PLAN.md)跟踪剩余工作。旧上传运行时须按[升级步骤](docs/UPLOAD_RUNTIME.md#从旧运行时升级)重建，账号和上传数据保留。
 
 0.28.0 在 0.27.0 的 T18 本地编辑切片上完成 T19 AI runtime 与 URL 自动流程；发布后开发进一步把自动流程迁移到 Workflow Schema 2，加入有序多输出上传 fan-out，并在生产 `/workflows` 页面暴露 1–10 个分段、完整预设回填、四项运行就绪度及 Bilibili/抖音/视频号独立投稿参数。服务端执行预检会在落库和建立下载前核对 Worker、FFmpeg、AI authorization/音色、上传 runtime/调度器、账号会话与既有封面资产；自动生成封面和预设受管封面冲突、无效比例及 Bilibili 竖向封面会提前失败。原始预授权 queued 工作的安全重启续跑见[重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)；其余证据见[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[服务端执行预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[多分段界面记录](validation/iteration-0.28.0-workflow-multisegment-ui.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)与[0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)。此前[编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)、[上传参数与 Schema 3 记录](validation/iteration-0.26.0-upload-parameters-evidence.md)及更早记录保留各自历史范围。Workflow Schema 1、Editing Schema 1/2/3 与 Upload Schema 1/2 只在精确匹配时分别向前迁移；未知、损坏或更高版本保持原样并拒绝启动。固定 Git commit、制品 identity、五个发行文件和独立安装的实际结果由包外 release receipt 绑定，不能写回被打包源码自证。
+
+当前发布后源码还提供 revision-fenced 的整流程取消：取消意图会持久化，并从最远的已创建下载、AI、渲染或上传任务开始停止；只有全部安全停止才写入 `canceled/workflow_canceled`。若域对象已创建但 workflow 引用尚未写回，下载、编辑与逐段上传会按稳定请求键发现；Editing 与 Upload 在对应稳定请求缺失时，会在各自的单一写事务中写入取消占位，阻止并发 stable-key 创建。编辑同时核对来源、配方、请求摘要与重试叶并取消，上传按完整标题、标签、封面、发布时间及平台参数的 v2 摘要核对。只有完整 fan-out 已写回且全批任务已提交或已保存平台草稿时才按原 outcome 完成；未写回的待处理 slot、部分平台成功、远端结果未知或任务身份不匹配会停在精确的人工核对状态。服务、域适配、API 与页面的本地 synthetic/offline 验证已完成；真实运行中远端取消仍待外部验收。下一代码切片处理重复 URL 的 owner 仍运行时等待、owner ready 后复用资产及 owner 终态失败传播。
 
 下载、编辑、上传和自动流程四页共用[设计规范](docs/DESIGN_SYSTEM.md)、语义 token、主题脚本和固定本地资源路由；[交互式视觉基准](docs/design-preview.html)直接读取同一生产 CSS。
 
@@ -29,7 +31,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 | 项目 | 当前状态 |
 |---|---|
 | 编辑工作台 | `/edits`；下载成品只读复制到独立 `data-edits`；版本化草稿、多个分段、封面、AI 听写/翻译任务、可审核时间轴、标准音色配音、绑定时间轴的不可变处理计划、取消与显式重试、成品哈希和导入上传；AI runtime 缺失或无凭据时明确阻塞 |
-| 自动流程 | `/workflows`；页面可输入或从预设恢复 1–10 个有序分段，分别设置三平台的内容、模式、定时与专属参数，并在创建前显示下载 Worker、AI runtime/凭据、上传 runtime/调度器和所选账号的即时状态；服务端在保存 workflow 与建立下载前复核真实执行依赖、账号 session revision 和受管封面；随后持久化串接 URL 下载、AI 审核/确认，以及每段向最多 3 个账号建立上传草稿。最多 30 个任务在一次批量确认中共同通过或共同停止；逐段准备以稳定幂等键和 prefix checkpoint 恢复，重试 leaf 只在原 segment/source/account/platform 位置更新，未知远端结果停下人工核对 |
+| 自动流程 | `/workflows`；页面可输入或从预设恢复 1–10 个有序分段，分别设置三平台的内容、模式、定时与专属参数，并在创建前显示下载 Worker、AI runtime/凭据、上传 runtime/调度器和所选账号的即时状态；服务端在保存 workflow 与建立下载前复核真实执行依赖、账号 session revision 和受管封面；随后持久化串接 URL 下载、AI 审核/确认，以及每段向最多 3 个账号建立上传草稿。最多 30 个任务在一次批量确认中共同通过或共同停止；逐段准备以稳定幂等键和 prefix checkpoint 恢复，重试 leaf 只在原 segment/source/account/platform 位置更新；整流程取消持久化意图并保守停止最远下游，未知远端结果停下人工核对 |
 | 上传器 | `/uploads`；Bilibili、抖音、视频号的独立账号与任务；先本地草稿、后明确确认；支持逐平台文案/标签/封面/发布时间及平台参数、本地账号墓碑、媒体与封面占用/显式删除、视频精确恢复；开源工具运行环境独立安装；真实平台投稿与定时发布未验收 |
 | Windows 一体化应用 | `video-download-local-app` 可独立启动控制面、Worker 与浏览器；固定 app/data/database 布局、抢占前预检、严格握手、单实例、异常子进程回收及结构化日志继续保留；Schema 11 的 two-phase run claim gate 将“允许领取”和停机关闭在 SQLite 写事务中线性化，旧 run 不能因 Pipe 检查竞态领取新 Job |
 | Web UI / FastAPI 控制面 | 可由一体化入口启动，也保留开发用单独入口；下载/编辑/上传页共用本地语义样式、系统/浅/深主题、响应式布局与 CSP；显示每个 Job 的中文阶段与估算进度，列出 ready 原件及其缩略图/字幕；无认证，代码强制绑定 loopback |

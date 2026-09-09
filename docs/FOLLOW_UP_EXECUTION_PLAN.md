@@ -1,6 +1,6 @@
 # Open-Flame 后续执行计划
 
-路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 2、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定以及普通源码 Setup 的可选 AI/上传 runtime 入口均已在禁网临时根验证；Workflow Schema 2 的多分段、多输出上传 fan-out 已完成本地 synthetic 故障恢复验证，生产 `/workflows` 页面也已接通完整视频默认、可选 1–10 段输入、完整预设回填、fan-out 状态、四项运行就绪度和三平台独立投稿参数。服务端现于保存 workflow 和建立下载前两次核对下载 Worker、FFmpeg、AI authorization/音色、上传 runtime/调度器、冻结账号绑定及既有封面资产，首次失败保持 workflow/event/download 为零；原始预授权且可证明尚未 dispatch 的 queued AI/render/upload 也已完成安全重启续跑，手动、retry、running 与 unknown 仍停下。下一步先补齐整条 Workflow 的安全取消语义，再处理重复下载 owner 仍运行时的等待恢复；用户选定液态玻璃候选后完成四页统一实现，并行核对实际应用根 runtime 和当前冻结候选，随后进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
+路线制定：2026-09-05；进度更新：2026-09-09。依据：[本轮完整 Debug 核验](../validation/full-debug-20260905.md)。原执行基线为 `f12749f1dc8d0a2ebbb805669004e69ce33666a7`、v0.24.2。当前开发版本为 v0.28.0：下载 Schema 11、编辑 Schema 4、上传 Schema 3、Workflow Schema 2、上传备份格式 2。T18 的分段/封面编辑保留为 0.27.0 历史阶段；T19 已接入隔离 AI runtime、自动听写、中文与 English 翻译、标准音色配音以及 URL→编辑→所选三平台上传的持久化编排。`0592b6f` 的 0.28.0 五件制品已有有效包外 receipt；当前发布后开发在 T20 已收敛无人值守结果语义、逐操作 AI 精确授权和输入/调用硬上限，并完成 Schema 4 脱敏远程调用账本及 unknown 人工 reconciliation。预设回填、三项 AI 摘要绑定以及普通源码 Setup 的可选 AI/上传 runtime 入口均已在禁网临时根验证；Workflow Schema 2 的多分段、多输出上传 fan-out 已完成本地 synthetic 故障恢复验证，生产 `/workflows` 页面也已接通完整视频默认、可选 1–10 段输入、完整预设回填、fan-out 状态、四项运行就绪度和三平台独立投稿参数。服务端现于保存 workflow 和建立下载前两次核对下载 Worker、FFmpeg、AI authorization/音色、上传 runtime/调度器、冻结账号绑定及既有封面资产，首次失败保持 workflow/event/download 为零；原始预授权且可证明尚未 dispatch 的 queued AI/render/upload 已完成安全重启续跑，整流程取消也已用 revision-fenced 持久意图、最远下游停止、批量上传身份核对及保守远端 outcome 完成本地验证。下一代码切片处理重复下载 owner 仍运行时的等待恢复；用户选定液态玻璃候选后完成四页统一实现，并行核对实际应用根 runtime 和当前冻结候选，随后进入真实 OpenAI、真人试听与三平台实测。每份 receipt 只证明其绑定的 clean commit，不能覆盖之后的开发提交。
 
 ## 1. 目标、边界与完成定义
 
@@ -25,13 +25,13 @@
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |
 | T18 / G8（0.27.0 历史阶段） | 独立 Editing Schema 1、版本化草稿、多个分段、封面、确认/取消/重试、真实本地 FFmpeg 与显式导入上传完成 | 由 0.28.0 T19 接续；该阶段证据不证明 AI 或真实平台 |
 | T19 / G9（0.28.0 当前阶段） | 当前 Editing Schema 4（T19 冻结时为 Schema 3）、隔离 AI runtime builder、OpenAI 标准库 provider、segment-local 字幕/配音、Workflow Schema 2、域级重启撤回、显式 retry 再确认、账号 login revision 与三平台上传 retry leaf/批次原子确认已实现；T20 仅让原始预授权且可证明未 dispatch 的 queued 工作在重启后重新校验续跑。生产页可配置/恢复最多 10 个输出，乘以最多 3 个账号形成 30 个精确 slot，逐段准备可从 prefix checkpoint 恢复，全部草稿只经一次批量确认 | 真实 OpenAI 调用、真人试听、费用核对、三平台真实发布及最终发行制品仍待外部验收 |
-| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递；普通源码 Setup 已可选构建/复用 AI runtime，并复用既有上传安装器准备 upload runtime；`/workflows` 已在创建前显示四项即时状态，服务端在写 workflow 与建下载前用真实域合同复核并冻结账号 session revision；原始预授权 queued AI/render/upload 可安全重启续跑，retry 与 unknown 仍阻断 | 预设边界/API/生产页面浏览器、服务端零副作用预检、重启续跑、真实域离线整链和两个 Setup runtime 入口已通过本地禁网验证；默认应用根的 AI runtime 仍缺失、upload runtime 仍是 Schema 1；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
+| T20（0.28.0 发布后开发） | 已区分投稿接收、草稿保存和合法混合 outcome；账号失效撤回同账号 queued 确认；成功响应后轮换浏览器幂等键；workflow reconciliation 有界退避；逐操作 AI authorization 与输入硬上限已完成；Editing Schema 4 已保存脱敏远程调用状态，unknown 只能经三项固定结论人工 reconciliation；普通 Start 的 OpenAI 密钥已按 control-only 边界传递；普通源码 Setup 已可选构建/复用 AI runtime，并复用既有上传安装器准备 upload runtime；`/workflows` 已在创建前显示四项即时状态，服务端在写 workflow 与建下载前用真实域合同复核并冻结账号 session revision；原始预授权 queued AI/render/upload 可安全重启续跑；整流程取消会持久停止意图、按最远下游调用域取消，对 checkpoint gap 以稳定请求键发现，并核对 Editing 配方与 Upload v2 完整发布参数摘要；pending upload slot 的成功证据保持人工核对，running/unknown/部分远端成功同样保守等待或核对 | 预设边界/API/生产页面浏览器、服务端零副作用预检、重启续跑、整流程取消、真实域离线整链和两个 Setup runtime 入口已通过本地禁网验证；默认应用根的 AI runtime 仍缺失、upload runtime 仍是 Schema 1；`request_units` 是本地 envelope 估算，不是价格、精确 HTTP 数或 usage receipt |
 | T11 / T12 | **NOT RUN** | 三平台真实上传与当前六平台下载必须绑定最终 0.28.0 receipt 后的同一构建分别执行 |
 | T15 | **NOT RUN** | Linux、Docker 与 NAS 仍需目标环境独立验收；Windows 本地 UI 结果不能替代 |
 
 以下是 0.24.4 冻结准备阶段的历史定向结果，不能单独替代 T10，也不能借给 0.25.0：上传相关精确集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份/发行/CI/验证/部署/API 组合为 **287 passed、4 skipped in 44.13s**，其中 4 个 skip 是 Windows 上的 root/POSIX/getfacl 环境合同。0.25.0 冻结 commit 的全量结果和源码/制品身份只记录在本轮新生成的包外 release receipt。
 
-0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12、T15 与 GitHub hosted CI 当前均未运行；后续真实动作仍按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项由测试员决定并执行。
+0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12、T15 与 GitHub hosted CI 当前均未运行；外部开发者和测试员先按[完整测试手册](../TESTING.md)固定身份与执行边界，再按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项决定真实动作，并用[回传模板](EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)留下后续开发入口。
 
 ## 2. 执行顺序与阶段门槛
 
@@ -70,6 +70,10 @@ K2. 普通源码 Setup 的 AI runtime 安装（T20 已复验；仅临时 app-roo
             ↓ capability 驱动限制、逐平台内容/定时/选项、账号级预设差异保留及受管封面在下载前失败关闭
   K4d. 原始预授权 queued 工作安全重启续跑（本地 synthetic/真实上传域整链已通过）
             ↓ 只有未 dispatch 原始 leaf 可重新校验排队；手动、retry、running、canceling 与 unknown 继续停下
+  K4e. 整流程安全取消（本地 synthetic/offline、API 与页面验证已通过）
+            ↓ 持久取消意图从最远下游继续；只有全部安全停止才取消，远端 outcome 与身份异常保持人工核对
+  K4f. 重复下载 owner 等待恢复（下一代码切片）
+            ↓ active owner 继续等待，owner ready 后复用资产，failed/canceled 传播精确终态
   K5. 液态玻璃四页生产视觉（等待用户从三套真实候选中选定）
             ↓ 统一 token、响应式、键盘、减少动态/透明度与浏览器 QA
   L. 三平台上传与下载实测（T11、T12；当前 NOT RUN）
@@ -377,14 +381,14 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 
 T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的工作量中。
 
-当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation、预设、真实域离线 smoke、Workflow Schema 2 多输出 fan-out、服务端执行预检与预授权重启续跑已分别按[预设回归](../validation/iteration-0.28.0-workflow-presets.md)、[整链更正](../validation/iteration-0.28.0-full-chain-smoke.md)、[多分段记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[预检记录](../validation/iteration-0.28.0-workflow-server-preflight.md)和[重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。下一步先按用户选定的液态玻璃候选完成生产四页及浏览器 QA，再由操作者在实际 app-root 用固定本地归档构建并复核 runtime、扩展多 cue 与失败恢复集成范围，并准备当前冻结候选；不得把默认目录不存在推断为本机所有配置均无 runtime。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
+当前既有 0.28.0 release receipt 只绑定 `0592b6f`，不覆盖 T20 发布后源码。Schema 4 ledger/unknown reconciliation、预设、真实域离线 smoke、Workflow Schema 2 多输出 fan-out、服务端执行预检与预授权重启续跑已分别按[预设回归](../validation/iteration-0.28.0-workflow-presets.md)、[整链更正](../validation/iteration-0.28.0-full-chain-smoke.md)、[多分段记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[预检记录](../validation/iteration-0.28.0-workflow-server-preflight.md)和[重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)复验；源码 Setup 的 AI runtime 路径也已在 ignored 临时根禁网通过。下一代码切片先处理重复下载 owner：owner active 时等待，ready 后复用资产，并精确传播 failed/canceled 终态。液态玻璃生产四页仍等待用户从 A/B/C 候选中选定方向；选定后再统一实现并完成浏览器 QA。随后由操作者在实际 app-root 用固定本地归档构建并复核 runtime、扩展多 cue 与失败恢复集成范围，并准备当前冻结候选；不得把默认目录不存在推断为本机所有配置均无 runtime。若要形成新发行候选，仍须从最终源码取得 clean commit，再执行冻结全量、source snapshot、detached 构建及源码/wheel 两类独立验收，并由新的包外 receipt 绑定同一提交、身份和五件制品后，才交给 T11/T12。T11、T12、T15 与 GitHub hosted CI 均仍为 **NOT RUN**。
 
-上传 Setup 的独立 ignored validator 也已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变、输出脱敏及默认实际 Schema 1 runtime 前后不变。Workflow Schema 2 已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账、原始 queued 预授权续跑和一次完整批量确认。进入外部验收前的下一工程切片是按用户选定的液态玻璃方向落地生产四页；随后冻结当前候选并准备实际 runtime。
+上传 Setup 的独立 ignored validator 也已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变、输出脱敏及默认实际 Schema 1 runtime 前后不变。Workflow Schema 2 已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账、原始 queued 预授权续跑和一次完整批量确认。进入外部验收前的下一工程切片是重复下载 owner 的等待、ready 资产复用和失败/取消终态传播。液态玻璃生产四页继续等待用户选定 A/B/C 方向；选定后再实施并完成浏览器 QA，随后冻结当前候选并准备实际 runtime。
 
 ## 5. 每个工作包统一交付检查
 
 1. 在基线环境复现其具体问题，记录触发条件与安全错误码。
-2. 新增真正覆盖调用链的回归，先观察失败；只为明确问题增加测试。
+2. 复用 `tests/` 中既有回归，并在 ignored `validation/local/` 增加真正覆盖调用链的临时 validator，先观察失败；不得新增或修改提交中的测试文件。
 3. 实现局部修改，确认原复现已消失，运行相关回归。
 4. 进入阶段门槛时运行必要全量与集成检查；不在没有新风险时无限重复全量。
 5. 更新当前说明和证据边界，保留历史提交/包 hash；清理或保留在明确 ignored 目录的临时调试材料。

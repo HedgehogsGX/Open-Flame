@@ -14,6 +14,7 @@ NOTICE
 README.md
 Setup-Open-Flame.cmd
 Start-Open-Flame.cmd
+TESTING.md
 THIRD_PARTY_NOTICES.md
 compliance/python-license-files.sha256
 deployment/.env.candidate.example
@@ -32,9 +33,11 @@ deployment/requirements.runtime.lock
 deployment/run-linux-acceptance.sh
 deployment/validate_tool_bundle.py
 docs/AI_RUNTIME.md
+docs/CI.md
+docs/DEBUG_GUIDE.md
 docs/DESIGN_SYSTEM.md
 docs/EDITOR.md
-docs/CI.md
+docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md
 docs/FOLLOW_UP_EXECUTION_PLAN.md
 docs/OPEN_SOURCE_DOWNLOADER_REVIEW.md
 docs/OPEN_SOURCE_UPLOADER_REVIEW.md
@@ -248,6 +251,7 @@ validation/iteration-0.28.0-workflow-readiness-ui.md
 validation/iteration-0.28.0-workflow-server-preflight.md
 validation/iteration-0.28.0-workflow-restart-continuation.md
 validation/iteration-0.28.0-workflow-full-video-default.md
+validation/iteration-0.28.0-workflow-cancellation.md
 validation/iteration-0.6-graph-v2-offline-evidence.md
 validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md
 validation/iteration-0.7.1-debug-use-license-evidence.md

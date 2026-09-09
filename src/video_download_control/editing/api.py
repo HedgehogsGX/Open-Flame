@@ -6,7 +6,7 @@ import mimetypes
 import re
 import secrets
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from threading import Condition, Event, RLock, Thread, current_thread
 from time import monotonic
@@ -245,6 +245,7 @@ def _safe_error(error: EditingError) -> HTTPException:
         "ai_task_not_reviewable",
         "ai_task_state_conflict",
         "ai_task_retry_not_allowed",
+        "ai_task_retry_lineage_changed",
         "source_timeline_invalid",
         "timeline_review_conflict",
         "timeline_parent_not_approved",
@@ -265,8 +266,12 @@ def _safe_error(error: EditingError) -> HTTPException:
         "ai_invocation_owner_changed",
         "ai_invocation_owner_inactive",
         "ai_invocation_state_conflict",
+        "ai_remote_result_unknown",
         "ai_remote_reconciliation_required",
         "ai_remote_retry_blocked",
+        "ai_remote_accepted_without_result",
+        "ai_remote_abandoned",
+        "render_retry_lineage_changed",
     }:
         status = 409
     elif code in {
@@ -619,20 +624,78 @@ class EditingManager:
         finally:
             self._finish_operation()
 
-    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
+    def cancel_ai_tasks(self, task_ids: Sequence[str]) -> list[dict[str, Any]]:
         service = self._begin_operation()
         try:
-            result = service.cancel_ai_task(task_id)
-            with self._lock:
-                if (
-                    self._current_ai_task_id == task_id
-                    and self._current_ai_cancel is not None
-                ):
-                    self._current_ai_cancel.set()
-            self._wake.set()
+            result = service.cancel_ai_tasks(task_ids)
+            self._signal_ai_cancellations(result)
             return result
         finally:
             self._finish_operation()
+
+    def cancel_ai_project_tasks(self, project_id: str) -> list[dict[str, Any]]:
+        service = self._begin_operation()
+        try:
+            result = service.cancel_ai_project_tasks(project_id)
+            self._signal_ai_cancellations(result)
+            return result
+        finally:
+            self._finish_operation()
+
+    def cancel_workflow_request_artifacts(
+        self,
+        project_request_key: str,
+        plan_request_key: str,
+        *,
+        expected_project_id: str | None,
+        expected_name: str,
+        expected_source_asset_id: str,
+        expected_recipe: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically discover workflow editing artifacts and signal active workers."""
+
+        service = self._begin_operation()
+        try:
+            result = service.cancel_workflow_request_artifacts(
+                project_request_key,
+                plan_request_key,
+                expected_project_id=expected_project_id,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+                expected_recipe=expected_recipe,
+            )
+            plan = result.get("plan")
+            if isinstance(plan, Mapping):
+                plan_id = plan.get("id")
+                with self._lock:
+                    if (
+                        self._current_plan_id == plan_id
+                        and self._current_cancel is not None
+                    ):
+                        self._current_cancel.set()
+            tasks = result.get("ai_tasks")
+            if isinstance(tasks, Sequence) and not isinstance(tasks, (str, bytes)):
+                self._signal_ai_cancellations(tasks)
+            else:
+                self._wake.set()
+            return result
+        finally:
+            self._finish_operation()
+
+    def _signal_ai_cancellations(self, result: Sequence[Mapping[str, Any]]) -> None:
+        result_ids = {
+            task.get("id") for task in result if isinstance(task, Mapping)
+        }
+        with self._lock:
+            if (
+                self._current_ai_task_id in result_ids
+                and self._current_ai_cancel is not None
+            ):
+                self._current_ai_cancel.set()
+        self._wake.set()
+
+    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
+        return self.cancel_ai_tasks((task_id,))[0]
 
     def _worker(self) -> None:
         try:

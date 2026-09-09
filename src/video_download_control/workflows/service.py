@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Iterator
 from uuid import UUID, uuid4
+from weakref import WeakValueDictionary
 
 from ..editing.ai_authorization import (
     AiAuthorizationError,
@@ -22,6 +24,7 @@ from ..editing.ai_authorization import (
 )
 from ..editing.contracts import EditingError, recipe_from_mapping
 from .contracts import (
+    CancellationSnapshot,
     MAX_WORKFLOW_ACCOUNTS,
     MAX_WORKFLOW_SEGMENTS,
     MAX_WORKFLOW_UPLOAD_JOBS,
@@ -37,6 +40,9 @@ _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _WORKFLOW_PROGRESS_LIMIT = MAX_WORKFLOW_SEGMENTS * 2 + 12
+_CANCELLATION_REQUESTED = "workflow_cancellation_requested"
+_SERVICE_LOCKS_GUARD = RLock()
+_SERVICE_LOCKS: WeakValueDictionary[str, Any] = WeakValueDictionary()
 _ACTIVE_STATES = {
     "created",
     "downloading",
@@ -48,6 +54,7 @@ _ACTIVE_STATES = {
     "awaiting_upload_confirmation",
     "uploading",
 }
+_CANCELLABLE_STATES = _ACTIVE_STATES | {"attention_required"}
 _AI_LEDGER_REVIEW_CODES = frozenset(
     {
         "ai_remote_result_unknown",
@@ -662,6 +669,21 @@ def _unprepared_outputs(output_ids: Sequence[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _service_lock(database_path: Path) -> Any:
+    """Share one in-process mutation lock for every view of a workflow store."""
+
+    try:
+        key = os.path.normcase(str(database_path.resolve(strict=False)))
+    except (OSError, RuntimeError):
+        raise WorkflowError("workflow_database_unavailable") from None
+    with _SERVICE_LOCKS_GUARD:
+        lock = _SERVICE_LOCKS.get(key)
+        if lock is None:
+            lock = RLock()
+            _SERVICE_LOCKS[key] = lock
+        return lock
+
+
 class WorkflowService:
     """Own one small state machine; domain media and secrets stay in adapters."""
 
@@ -669,14 +691,15 @@ class WorkflowService:
         self.root = Path(root)
         self.database_path = self.root / "workflows.sqlite3"
         self.adapter = adapter
-        self._lock = RLock()
-        try:
-            ensure_workflow_schema(
-                self.database_path,
-                legacy_profile_validator=_migration_profile_is_valid,
-            )
-        except WorkflowSchemaError:
-            raise WorkflowError("workflow_database_unavailable") from None
+        self._lock = _service_lock(self.database_path)
+        with self._lock:
+            try:
+                ensure_workflow_schema(
+                    self.database_path,
+                    legacy_profile_validator=_migration_profile_is_valid,
+                )
+            except WorkflowSchemaError:
+                raise WorkflowError("workflow_database_unavailable") from None
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -836,8 +859,11 @@ class WorkflowService:
         placeholders = ",".join("?" for _ in states)
 
         def fetch(cursor: tuple[str, str] | None) -> list[sqlite3.Row]:
-            query = f"SELECT * FROM workflows WHERE state IN ({placeholders})"
-            values: list[object] = list(states)
+            query = (
+                f"SELECT * FROM workflows WHERE (state IN ({placeholders}) OR "
+                "(state='attention_required' AND code=?))"
+            )
+            values: list[object] = [*states, _CANCELLATION_REQUESTED]
             if cursor is not None:
                 query += " AND (created_at>? OR (created_at=? AND id>?))"
                 values.extend((cursor[0], cursor[0], cursor[1]))
@@ -871,6 +897,11 @@ class WorkflowService:
             for _ in range(_WORKFLOW_PROGRESS_LIMIT):
                 record = self.get(workflow_id)
                 state = record["state"]
+                if record["code"] == _CANCELLATION_REQUESTED:
+                    progressed = self._advance_once(record)
+                    if not progressed:
+                        return self.get(workflow_id)
+                    continue
                 if (
                     state == "attention_required"
                     and record["outputs"]
@@ -883,13 +914,15 @@ class WorkflowService:
                     # advance may safely replay the first unfinished segment by
                     # its stable idempotency key; already checkpointed segments
                     # stay drafts until the complete fan-out is confirmed.
-                    self._transition(workflow_id, "preparing_upload", "")
+                    self._transition(
+                        workflow_id, "preparing_upload", "", expected=record
+                    )
                     continue
                 if state == "attention_required" and record["upload_job_ids"]:
                     snapshot = self._inspect_upload(record)
                     self._sync_upload_job_ids(record, snapshot)
                     if snapshot.status == "ready":
-                        self._record_upload_outcome(workflow_id, snapshot)
+                        self._record_upload_outcome(record, snapshot)
                         return self.get(workflow_id)
                     if snapshot.status == "waiting":
                         self._transition(
@@ -900,6 +933,7 @@ class WorkflowService:
                                 else "uploading"
                             ),
                             snapshot.code,
+                            expected=record,
                         )
                         continue
                     return self.get(workflow_id)
@@ -911,7 +945,7 @@ class WorkflowService:
                     # Environment setup, credentials, or a selected account may
                     # have been repaired after the zero-side-effect preflight.
                     # Only an explicit advance reaches inactive attention rows.
-                    self._transition(workflow_id, "created", "")
+                    self._transition(workflow_id, "created", "", expected=record)
                     continue
                 if (
                     state == "attention_required"
@@ -923,26 +957,38 @@ class WorkflowService:
                         if snapshot.status in {"failed", "attention"}:
                             code = snapshot.code or "edit_attention_required"
                             if code != record["code"]:
-                                return self._attention(workflow_id, code)
+                                return self._attention(
+                                    workflow_id, code, expected=record
+                                )
                             return record
                         if snapshot.status == "waiting":
                             self._transition(
                                 workflow_id,
                                 "awaiting_edit_confirmation",
                                 snapshot.code or "",
+                                expected=record,
                             )
                             continue
                         if snapshot.status == "ready":
-                            if not self._record_edit_outputs(workflow_id, snapshot):
+                            if not self._record_edit_outputs(record, snapshot):
                                 return self.get(workflow_id)
-                            self._transition(workflow_id, "preparing_upload", "")
+                            self._transition(
+                                workflow_id,
+                                "preparing_upload",
+                                "",
+                                expected=record,
+                            )
                             continue
                         return self._attention(
-                            workflow_id, "workflow_domain_data_invalid"
+                            workflow_id,
+                            "workflow_domain_data_invalid",
+                            expected=record,
                         )
                     if record["profile"]["ai"] is None:
                         return self._attention(
-                            workflow_id, "workflow_domain_data_invalid"
+                            workflow_id,
+                            "workflow_domain_data_invalid",
+                            expected=record,
                         )
                     snapshot = self.adapter.advance_ai(
                         workflow_id,
@@ -955,13 +1001,16 @@ class WorkflowService:
                     if snapshot.status in {"failed", "attention"}:
                         code = snapshot.code or "ai_review_required"
                         if code != record["code"]:
-                            return self._attention(workflow_id, code)
+                            return self._attention(
+                                workflow_id, code, expected=record
+                            )
                         return record
                     if snapshot.status in {"waiting", "review"}:
                         self._transition(
                             workflow_id,
                             "awaiting_ai_review",
                             snapshot.code or "",
+                            expected=record,
                         )
                         continue
                     if (
@@ -970,15 +1019,21 @@ class WorkflowService:
                         or snapshot.draft_version is None
                     ):
                         return self._attention(
-                            workflow_id, "workflow_domain_data_invalid"
+                            workflow_id,
+                            "workflow_domain_data_invalid",
+                            expected=record,
                         )
-                    self._set_refs(
+                    record = self._set_refs(
                         workflow_id,
+                        expected=record,
                         edit_draft_version=snapshot.draft_version,
                         edit_plan_id=snapshot.plan_id,
                     )
                     self._transition(
-                        workflow_id, "awaiting_edit_confirmation", ""
+                        workflow_id,
+                        "awaiting_edit_confirmation",
+                        "",
+                        expected=record,
                     )
                     continue
                 if state not in _ACTIVE_STATES:
@@ -986,7 +1041,68 @@ class WorkflowService:
                 progressed = self._advance_once(record)
                 if not progressed:
                     return self.get(workflow_id)
-            return self._attention(workflow_id, "workflow_progress_limit")
+            record = self.get(workflow_id)
+            if record["code"] == _CANCELLATION_REQUESTED:
+                return record
+            return self._attention(
+                workflow_id, "workflow_progress_limit", expected=record
+            )
+
+    def cancel(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
+        """Persist cancellation intent, then reconcile the furthest domain seam."""
+
+        workflow_id = self._identifier(workflow_id)
+        if (
+            isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision < 1
+        ):
+            raise WorkflowError("invalid_revision")
+        with self._lock:
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT * FROM workflows WHERE id=?", (workflow_id,)
+                ).fetchone()
+                if row is None:
+                    raise WorkflowError("workflow_not_found")
+                record = self._public(row)
+                if record["state"] == "canceled":
+                    return record
+                if record["state"] == "completed":
+                    raise WorkflowError("workflow_state_conflict")
+                if record["code"] != _CANCELLATION_REQUESTED:
+                    if record["revision"] != expected_revision:
+                        raise WorkflowError("workflow_revision_conflict")
+                    if record["state"] not in _CANCELLABLE_STATES:
+                        raise WorkflowError("workflow_state_conflict")
+                    now = _now()
+                    changed = db.execute(
+                        "UPDATE workflows SET code=?,revision=revision+1,updated_at=?,"
+                        "finished_at=? WHERE id=? AND revision=? AND state=? AND code=?",
+                        (
+                            _CANCELLATION_REQUESTED,
+                            now,
+                            now if record["state"] == "attention_required" else None,
+                            workflow_id,
+                            record["revision"],
+                            record["state"],
+                            record["code"],
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise WorkflowError("workflow_revision_conflict")
+                    self._event(
+                        db,
+                        workflow_id,
+                        record["state"],
+                        record["state"],
+                        _CANCELLATION_REQUESTED,
+                        now,
+                    )
+                elif record["state"] not in _CANCELLABLE_STATES:
+                    raise WorkflowError("workflow_state_conflict")
+            return self.advance(workflow_id)
 
     def confirm_edit(
         self,
@@ -1007,9 +1123,11 @@ class WorkflowService:
                 self.adapter.confirm_edit(record["edit_plan_id"])
             except WorkflowError as error:
                 if error.code in _AI_LEDGER_REVIEW_CODES:
-                    return self._attention(workflow_id, error.code)
+                    return self._attention(
+                        workflow_id, error.code, expected=record
+                    )
                 raise
-            self._transition(workflow_id, "rendering", "")
+            self._transition(workflow_id, "rendering", "", expected=record)
             return self.advance(workflow_id)
 
     def confirm_ai(
@@ -1040,23 +1158,40 @@ class WorkflowService:
                 )
             except WorkflowError as error:
                 if error.code in _AI_LEDGER_REVIEW_CODES:
-                    return self._attention(workflow_id, error.code)
+                    return self._attention(
+                        workflow_id, error.code, expected=record
+                    )
                 raise
             if snapshot.status in {"failed", "attention"}:
                 return self._attention(
-                    workflow_id, snapshot.code or "ai_review_required"
+                    workflow_id,
+                    snapshot.code or "ai_review_required",
+                    expected=record,
                 )
             if snapshot.status == "ready":
                 if not snapshot.plan_id or snapshot.draft_version is None:
-                    return self._attention(workflow_id, "workflow_data_invalid")
-                self._set_refs(
+                    return self._attention(
+                        workflow_id, "workflow_data_invalid", expected=record
+                    )
+                record = self._set_refs(
                     workflow_id,
+                    expected=record,
                     edit_draft_version=snapshot.draft_version,
                     edit_plan_id=snapshot.plan_id,
                 )
-                self._transition(workflow_id, "awaiting_edit_confirmation", "")
+                self._transition(
+                    workflow_id,
+                    "awaiting_edit_confirmation",
+                    "",
+                    expected=record,
+                )
             else:
-                self._transition(workflow_id, "awaiting_ai_review", snapshot.code)
+                self._transition(
+                    workflow_id,
+                    "awaiting_ai_review",
+                    snapshot.code,
+                    expected=record,
+                )
             return self.advance(workflow_id)
 
     def confirm_upload(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
@@ -1071,10 +1206,12 @@ class WorkflowService:
                 return self.get(workflow_id)
             if snapshot.status in {"failed", "attention"}:
                 return self._attention(
-                    workflow_id, snapshot.code or "upload_attention_required"
+                    workflow_id,
+                    snapshot.code or "upload_attention_required",
+                    expected=record,
                 )
             if snapshot.status == "ready":
-                self._record_upload_outcome(workflow_id, snapshot)
+                self._record_upload_outcome(record, snapshot)
                 return self.get(workflow_id)
             try:
                 self.adapter.confirm_uploads(
@@ -1083,9 +1220,11 @@ class WorkflowService:
                 )
             except WorkflowError as error:
                 if error.code == "account_session_changed":
-                    return self._attention(workflow_id, error.code)
+                    return self._attention(
+                        workflow_id, error.code, expected=record
+                    )
                 raise
-            self._transition(workflow_id, "uploading", "")
+            self._transition(workflow_id, "uploading", "", expected=record)
             return self.advance(workflow_id)
 
     def retry(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
@@ -1109,6 +1248,7 @@ class WorkflowService:
                         workflow_id,
                         "awaiting_edit_confirmation",
                         "render_retry_confirmation_required",
+                        expected=record,
                     )
                     return self.get(workflow_id)
                 try:
@@ -1117,13 +1257,18 @@ class WorkflowService:
                     )
                 except WorkflowError as error:
                     if error.code in _AI_LEDGER_REVIEW_CODES:
-                        return self._attention(workflow_id, error.code)
+                        return self._attention(
+                            workflow_id, error.code, expected=record
+                        )
                     raise
-                self._set_refs(workflow_id, edit_plan_id=plan_id)
+                record = self._set_refs(
+                    workflow_id, expected=record, edit_plan_id=plan_id
+                )
                 self._transition(
                     workflow_id,
                     "awaiting_edit_confirmation",
                     "render_retry_confirmation_required",
+                    expected=record,
                 )
                 return self.get(workflow_id)
             if record["profile"]["ai"] is None:
@@ -1137,12 +1282,15 @@ class WorkflowService:
                 )
             except WorkflowError as error:
                 if error.code in _AI_LEDGER_REVIEW_CODES:
-                    return self._attention(workflow_id, error.code)
+                    return self._attention(
+                        workflow_id, error.code, expected=record
+                    )
                 raise
             self._transition(
                 workflow_id,
                 "awaiting_ai_review",
                 "ai_retry_confirmation_required",
+                expected=record,
             )
             return self.get(workflow_id)
 
@@ -1161,12 +1309,50 @@ class WorkflowService:
                 if expected_revision is None
                 else self._expected(workflow_id, expected_revision)
             )
+            if record["code"] == _CANCELLATION_REQUESTED:
+                return record
             if record["state"] not in _ACTIVE_STATES:
                 return record
-            return self._attention(record["id"], code)
+            return self._attention(record["id"], code, expected=record)
 
     def _advance_once(self, record: dict[str, Any]) -> bool:
         workflow_id, state = record["id"], record["state"]
+        if record["code"] == _CANCELLATION_REQUESTED:
+            try:
+                snapshot = self._cancel_furthest_domain(record)
+            except WorkflowError as error:
+                self._attention(
+                    workflow_id,
+                    error.code or "workflow_domain_data_invalid",
+                    expected=record,
+                )
+                return False
+            if snapshot is None or snapshot.status == "stopped":
+                self._transition(
+                    workflow_id,
+                    "canceled",
+                    "workflow_canceled",
+                    expected=record,
+                )
+                return True
+            if snapshot.status == "waiting":
+                return False
+            if snapshot.status == "attention":
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "workflow_domain_data_invalid",
+                    expected=record,
+                )
+                return False
+            if snapshot.status == "upload_completed":
+                return self._record_upload_outcome(
+                    record,
+                    UploadSnapshot("ready", outcome=snapshot.outcome),
+                )
+            self._attention(
+                workflow_id, "workflow_domain_data_invalid", expected=record
+            )
+            return False
         if state == "created":
             try:
                 self._preflight(
@@ -1177,42 +1363,61 @@ class WorkflowService:
                 )
             except WorkflowError as error:
                 if error.code in _PREFLIGHT_WAIT_CODES:
-                    self._transition(workflow_id, "created", error.code)
+                    self._transition(
+                        workflow_id, "created", error.code, expected=record
+                    )
                 else:
-                    self._attention(workflow_id, error.code)
+                    self._attention(workflow_id, error.code, expected=record)
                 return False
             batch_id = self.adapter.create_download(
                 workflow_id,
                 record["source_url"],
                 record["profile"]["download_credential_mode"],
             )
-            self._set_refs(workflow_id, batch_id=batch_id)
-            self._transition(workflow_id, "downloading", "")
+            record = self._set_refs(
+                workflow_id, expected=record, batch_id=batch_id
+            )
+            self._transition(workflow_id, "downloading", "", expected=record)
             return True
         if state == "downloading":
             if not record["batch_id"]:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             snapshot = self.adapter.inspect_download(record["batch_id"])
             if snapshot.status == "waiting":
                 return False
             if snapshot.status != "ready" or not snapshot.asset_id:
-                self._attention(workflow_id, snapshot.code or "download_attention_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "download_attention_required",
+                    expected=record,
+                )
                 return False
-            self._set_refs(workflow_id, download_asset_id=snapshot.asset_id)
-            self._transition(workflow_id, "preparing_edit", "")
+            record = self._set_refs(
+                workflow_id,
+                expected=record,
+                download_asset_id=snapshot.asset_id,
+            )
+            self._transition(
+                workflow_id, "preparing_edit", "", expected=record
+            )
             return True
         if state == "preparing_edit":
             if not record["download_asset_id"]:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             prepared = self.adapter.prepare_edit(
                 workflow_id,
                 record["download_asset_id"],
                 record["profile"]["edit_recipe"],
             )
-            self._set_refs(
+            record = self._set_refs(
                 workflow_id,
+                expected=record,
                 edit_project_id=prepared.project_id,
                 edit_draft_version=prepared.draft_version,
                 edit_plan_id=prepared.plan_id,
@@ -1222,11 +1427,13 @@ class WorkflowService:
                 if prepared.awaiting_ai_review
                 else "awaiting_edit_confirmation"
             )
-            self._transition(workflow_id, next_state, "")
+            self._transition(workflow_id, next_state, "", expected=record)
             return True
         if state == "awaiting_ai_review":
             if not record["edit_project_id"] or record["profile"]["ai"] is None:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             if record["code"] and (
                 not record["auto_confirm_edit"]
@@ -1244,25 +1451,42 @@ class WorkflowService:
             if snapshot.status in {"waiting", "review"}:
                 if snapshot.code != record["code"]:
                     self._transition(
-                        workflow_id, "awaiting_ai_review", snapshot.code
+                        workflow_id,
+                        "awaiting_ai_review",
+                        snapshot.code,
+                        expected=record,
                     )
                 return False
             if snapshot.status != "ready":
-                self._attention(workflow_id, snapshot.code or "ai_review_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "ai_review_required",
+                    expected=record,
+                )
                 return False
             if not snapshot.plan_id or snapshot.draft_version is None:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
-            self._set_refs(
+            record = self._set_refs(
                 workflow_id,
+                expected=record,
                 edit_draft_version=snapshot.draft_version,
                 edit_plan_id=snapshot.plan_id,
             )
-            self._transition(workflow_id, "awaiting_edit_confirmation", "")
+            self._transition(
+                workflow_id,
+                "awaiting_edit_confirmation",
+                "",
+                expected=record,
+            )
             return True
         if state == "awaiting_edit_confirmation":
             if not record["edit_plan_id"]:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
             if snapshot.status == "waiting":
@@ -1270,29 +1494,43 @@ class WorkflowService:
                     return False
                 code = snapshot.code or record["code"]
                 if code and code != record["code"]:
-                    self._transition(workflow_id, state, code)
+                    record = self._transition(
+                        workflow_id, state, code, expected=record
+                    )
                 if (
                     not record["auto_confirm_edit"]
                     or code not in _AUTO_EDIT_REVIEW_CODES
                 ):
                     return False
             if snapshot.status == "failed" or snapshot.status == "attention":
-                self._attention(workflow_id, snapshot.code or "edit_attention_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "edit_attention_required",
+                    expected=record,
+                )
                 return False
             if snapshot.status == "ready":
-                if not self._record_edit_outputs(workflow_id, snapshot):
+                if not self._record_edit_outputs(record, snapshot):
                     return False
-                self._transition(workflow_id, "preparing_upload", "")
+                self._transition(
+                    workflow_id, "preparing_upload", "", expected=record
+                )
                 return True
             if snapshot.status != "waiting":
-                self._attention(workflow_id, "workflow_domain_data_invalid")
+                self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
                 return False
             self.adapter.confirm_edit(record["edit_plan_id"])
-            self._transition(workflow_id, "rendering", "")
+            self._transition(workflow_id, "rendering", "", expected=record)
             return True
         if state == "rendering":
             if not record["edit_plan_id"]:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             snapshot = self.adapter.inspect_edit(record["edit_plan_id"])
             if snapshot.status == "waiting":
@@ -1305,25 +1543,39 @@ class WorkflowService:
                             if snapshot.code == "restart_confirmation_required"
                             else snapshot.code
                         ),
+                        expected=record,
                     )
                 return False
             if snapshot.status != "ready":
-                self._attention(workflow_id, snapshot.code or "edit_attention_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "edit_attention_required",
+                    expected=record,
+                )
                 return False
-            if not self._record_edit_outputs(workflow_id, snapshot):
+            if not self._record_edit_outputs(record, snapshot):
                 return False
-            self._transition(workflow_id, "preparing_upload", "")
+            self._transition(
+                workflow_id, "preparing_upload", "", expected=record
+            )
             return True
         if state == "preparing_upload":
             outputs = record["outputs"]
             if not outputs:
-                self._attention(workflow_id, "workflow_data_invalid")
+                self._attention(
+                    workflow_id, "workflow_data_invalid", expected=record
+                )
                 return False
             pending = next(
                 (item for item in outputs if item["upload_source_id"] is None), None
             )
             if pending is None:
-                self._transition(workflow_id, "awaiting_upload_confirmation", "")
+                self._transition(
+                    workflow_id,
+                    "awaiting_upload_confirmation",
+                    "",
+                    expected=record,
+                )
                 return True
             try:
                 prepared = self.adapter.prepare_upload(
@@ -1334,14 +1586,18 @@ class WorkflowService:
                     segment_ordinal=pending["segment_ordinal"],
                 )
             except WorkflowError as error:
-                self._attention(workflow_id, error.code)
+                self._attention(workflow_id, error.code, expected=record)
                 return False
             job_ids = tuple(prepared.job_ids)
             account_ids = record["profile"]["upload"]["account_ids"]
             bindings = record["profile"]["upload"]["account_bindings"]
             platforms = {item["account_id"]: item["platform"] for item in bindings}
             if len(job_ids) != len(account_ids):
-                self._attention(workflow_id, "workflow_domain_data_invalid")
+                self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
                 return False
             replacement = [dict(item) for item in outputs]
             index = pending["segment_ordinal"] - 1
@@ -1358,10 +1614,15 @@ class WorkflowService:
                 ],
             }
             if record["upload_cover_id"] not in {None, prepared.cover_id}:
-                self._attention(workflow_id, "workflow_domain_data_invalid")
+                self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
                 return False
             self._set_refs(
                 workflow_id,
+                expected=record,
                 outputs=replacement,
                 upload_cover_id=prepared.cover_id,
             )
@@ -1370,17 +1631,27 @@ class WorkflowService:
             snapshot = self._inspect_upload(record)
             self._sync_upload_job_ids(record, snapshot)
             if snapshot.status == "failed" or snapshot.status == "attention":
-                self._attention(workflow_id, snapshot.code or "upload_attention_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "upload_attention_required",
+                    expected=record,
+                )
                 return False
             if snapshot.status == "ready":
-                return self._record_upload_outcome(workflow_id, snapshot)
+                return self._record_upload_outcome(record, snapshot)
             if snapshot.status != "waiting":
-                self._attention(workflow_id, "workflow_domain_data_invalid")
+                self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
                 return False
             if record["code"] not in _AUTO_UPLOAD_REVIEW_CODES:
                 return False
             if snapshot.code and snapshot.code != record["code"]:
-                self._transition(workflow_id, state, snapshot.code)
+                record = self._transition(
+                    workflow_id, state, snapshot.code, expected=record
+                )
             if (
                 not record["auto_confirm_upload"]
                 or snapshot.code not in _AUTO_UPLOAD_REVIEW_CODES
@@ -1390,7 +1661,7 @@ class WorkflowService:
                 record["upload_job_ids"],
                 record["profile"]["upload"]["account_bindings"],
             )
-            self._transition(workflow_id, "uploading", "")
+            self._transition(workflow_id, "uploading", "", expected=record)
             return True
         if state == "uploading":
             snapshot = self._inspect_upload(record)
@@ -1401,16 +1672,126 @@ class WorkflowService:
                         workflow_id,
                         "awaiting_upload_confirmation",
                         snapshot.code,
+                        expected=record,
                     )
                 return False
             if snapshot.status != "ready":
-                self._attention(workflow_id, snapshot.code or "upload_attention_required")
+                self._attention(
+                    workflow_id,
+                    snapshot.code or "upload_attention_required",
+                    expected=record,
+                )
                 return False
-            return self._record_upload_outcome(workflow_id, snapshot)
+            return self._record_upload_outcome(record, snapshot)
         return False
 
+    def _cancel_furthest_domain(
+        self, record: Mapping[str, Any]
+    ) -> CancellationSnapshot | None:
+        pending_upload = next(
+            (
+                output
+                for output in record["outputs"]
+                if output["upload_source_id"] is None
+            ),
+            None,
+        )
+        if pending_upload is not None:
+            snapshot = self._cancel_via_discovery(
+                "cancel_uploads_for_workflow",
+                "upload_discovery_unavailable",
+                record["id"],
+                pending_upload["edit_output_id"],
+                pending_upload["segment_ordinal"],
+                record["upload_job_ids"],
+                expected_targets=self._upload_targets(record),
+                expected_account_ids=record["profile"]["upload"]["account_ids"],
+                expected_account_bindings=record["profile"]["upload"][
+                    "account_bindings"
+                ],
+                expected_upload=record["profile"]["upload"],
+                expected_cover_id=record["edit_cover_id"],
+            )
+            if snapshot.status == "upload_completed":
+                return CancellationSnapshot(
+                    "attention", code="upload_partially_completed"
+                )
+            return snapshot
+        if record["upload_job_ids"]:
+            return self.adapter.cancel_uploads(
+                record["upload_job_ids"],
+                expected_targets=self._upload_targets(record),
+                expected_account_bindings=record["profile"]["upload"][
+                    "account_bindings"
+                ],
+            )
+        if record["edit_plan_id"]:
+            if not record["edit_project_id"] or not record["download_asset_id"]:
+                return CancellationSnapshot(
+                    "attention", code="workflow_domain_data_invalid"
+                )
+            return self.adapter.cancel_edit(
+                record["edit_plan_id"],
+                expected_project_id=record["edit_project_id"],
+                expected_name=f"Open-Flame workflow {record['id']}",
+                expected_source_asset_id=record["download_asset_id"],
+            )
+        if record["edit_project_id"]:
+            if not record["download_asset_id"]:
+                return CancellationSnapshot(
+                    "attention", code="workflow_domain_data_invalid"
+                )
+            return self._cancel_via_discovery(
+                "cancel_edit_for_workflow",
+                "edit_discovery_unavailable",
+                record["id"],
+                expected_project_id=record["edit_project_id"],
+                expected_name=f"Open-Flame workflow {record['id']}",
+                expected_source_asset_id=record["download_asset_id"],
+                expected_recipe=record["profile"]["edit_recipe"],
+            )
+        if record["download_asset_id"]:
+            return self._cancel_via_discovery(
+                "cancel_edit_for_workflow",
+                "edit_discovery_unavailable",
+                record["id"],
+                expected_project_id=None,
+                expected_name=f"Open-Flame workflow {record['id']}",
+                expected_source_asset_id=record["download_asset_id"],
+                expected_recipe=record["profile"]["edit_recipe"],
+            )
+        if record["batch_id"]:
+            return self.adapter.cancel_download(
+                record["batch_id"],
+                expected_name=record["batch_name"],
+                expected_source_url=record["source_url"],
+            )
+        if not record["download_asset_id"]:
+            return self._cancel_via_discovery(
+                "cancel_download_for_workflow",
+                "download_discovery_unavailable",
+                record["id"],
+                expected_name=record["batch_name"],
+                expected_source_url=record["source_url"],
+            )
+        return CancellationSnapshot(
+            "attention", code="workflow_domain_data_invalid"
+        )
+
+    def _cancel_via_discovery(
+        self,
+        method_name: str,
+        unavailable_code: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> CancellationSnapshot:
+        method = getattr(self.adapter, method_name, None)
+        if not callable(method):
+            return CancellationSnapshot("attention", code=unavailable_code)
+        return method(*args, **kwargs)
+
     def _record_upload_outcome(
-        self, workflow_id: str, snapshot: UploadSnapshot
+        self, record: Mapping[str, Any], snapshot: UploadSnapshot
     ) -> bool:
         """Finish with the exact acknowledgement observed by the upload domain."""
 
@@ -1421,26 +1802,38 @@ class WorkflowService:
         }
         code = codes.get(snapshot.outcome or "")
         if code is None:
-            self._attention(workflow_id, "upload_outcome_missing")
+            self._attention(
+                record["id"], "upload_outcome_missing", expected=record
+            )
             return False
-        self._transition(workflow_id, "completed", code)
+        self._transition(record["id"], "completed", code, expected=record)
         return True
 
-    def _record_edit_outputs(self, workflow_id: str, snapshot: object) -> bool:
+    def _record_edit_outputs(
+        self, record: dict[str, Any], snapshot: object
+    ) -> bool:
         try:
             output_ids = _output_ids_from_snapshot(snapshot)
-            self._set_refs(
-                workflow_id,
+            updated = self._set_refs(
+                record["id"],
+                expected=record,
                 outputs=_unprepared_outputs(output_ids),
                 edit_cover_id=getattr(snapshot, "cover_id", None),
             )
         except WorkflowError:
-            self._attention(workflow_id, "workflow_domain_data_invalid")
+            self._attention(
+                record["id"],
+                "workflow_domain_data_invalid",
+                expected=record,
+            )
             return False
+        record.clear()
+        record.update(updated)
         return True
 
-    def _inspect_upload(self, record: Mapping[str, Any]) -> UploadSnapshot:
-        expected_targets = [
+    @staticmethod
+    def _upload_targets(record: Mapping[str, Any]) -> list[dict[str, str]]:
+        return [
             {
                 "job_id": target["job_id"],
                 "source_id": output["upload_source_id"],
@@ -1450,6 +1843,9 @@ class WorkflowService:
             for output in record["outputs"]
             for target in output["targets"]
         ]
+
+    def _inspect_upload(self, record: Mapping[str, Any]) -> UploadSnapshot:
+        expected_targets = self._upload_targets(record)
         if len(expected_targets) != len(record["upload_job_ids"]):
             raise WorkflowError("workflow_data_invalid")
         return self.adapter.inspect_upload(
@@ -1493,9 +1889,11 @@ class WorkflowService:
                 pass
             else:
                 raise WorkflowError("workflow_domain_data_invalid")
-            self._set_refs(record["id"], outputs=outputs)
-            record["outputs"] = outputs
-            record["upload_job_ids"] = list(replacement)
+            updated = self._set_refs(
+                record["id"], expected=record, outputs=outputs
+            )
+            record.clear()
+            record.update(updated)
 
     def _identifier(self, value: str) -> str:
         if not isinstance(value, str) or not _HEX_IDENTIFIER.fullmatch(value):
@@ -1512,6 +1910,8 @@ class WorkflowService:
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
             raise WorkflowError("invalid_revision")
         record = self.get(workflow_id)
+        if record["code"] == _CANCELLATION_REQUESTED:
+            raise WorkflowError("workflow_state_conflict")
         if record["revision"] != revision:
             raise WorkflowError("workflow_revision_conflict")
         if expected_profile_sha256 is not None:
@@ -1526,7 +1926,35 @@ class WorkflowService:
                 raise WorkflowError("workflow_profile_changed")
         return record
 
-    def _set_refs(self, workflow_id: str, **values: object) -> None:
+    @staticmethod
+    def _mutation_identity(
+        workflow_id: str, expected: Mapping[str, Any]
+    ) -> tuple[int, str, str]:
+        try:
+            expected_id = expected["id"]
+            revision = expected["revision"]
+            state = expected["state"]
+            code = expected["code"]
+        except (KeyError, TypeError):
+            raise WorkflowError("workflow_data_invalid") from None
+        if (
+            expected_id != workflow_id
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+            or not isinstance(state, str)
+            or not isinstance(code, str)
+        ):
+            raise WorkflowError("workflow_data_invalid")
+        return revision, state, code
+
+    def _set_refs(
+        self,
+        workflow_id: str,
+        *,
+        expected: Mapping[str, Any] | None = None,
+        **values: object,
+    ) -> dict[str, Any]:
         allowed = {
             "batch_id",
             "download_asset_id",
@@ -1567,12 +1995,19 @@ class WorkflowService:
         parameters: list[object] = []
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM workflows WHERE id=?", (workflow_id,)
+            ).fetchone()
+            if row is None:
+                raise WorkflowError("workflow_not_found")
+            identity = (
+                (row["revision"], row["state"], row["code"])
+                if expected is None
+                else self._mutation_identity(workflow_id, expected)
+            )
+            if (row["revision"], row["state"], row["code"]) != identity:
+                raise WorkflowError("workflow_revision_conflict")
             if "outputs" in values:
-                row = db.execute(
-                    "SELECT profile_json FROM workflows WHERE id=?", (workflow_id,)
-                ).fetchone()
-                if row is None:
-                    raise WorkflowError("workflow_not_found")
                 try:
                     profile = json.loads(row["profile_json"])
                 except (TypeError, ValueError):
@@ -1593,37 +2028,79 @@ class WorkflowService:
                 assignments.append(f"{column}=?")
                 parameters.append(value)
             assignments.extend(("revision=revision+1", "updated_at=?"))
-            parameters.extend((_now(), workflow_id))
+            parameters.extend((_now(), workflow_id, *identity))
             changed = db.execute(
-                f"UPDATE workflows SET {','.join(assignments)} WHERE id=?",
+                f"UPDATE workflows SET {','.join(assignments)} "
+                "WHERE id=? AND revision=? AND state=? AND code=?",
                 parameters,
             ).rowcount
-            if not changed:
-                raise WorkflowError("workflow_not_found")
+            if changed != 1:
+                raise WorkflowError("workflow_revision_conflict")
+            try:
+                return self._by_id(db, workflow_id)
+            except WorkflowError:
+                # Private fixture/setup callers may intentionally assemble a
+                # valid state across two writes. Production callers always
+                # supply ``expected`` and may not observe an invalid midpoint.
+                if expected is not None:
+                    raise
+                return {
+                    "id": workflow_id,
+                    "revision": identity[0] + 1,
+                    "state": identity[1],
+                    "code": identity[2],
+                }
 
-    def _transition(self, workflow_id: str, state: str, code: str) -> None:
+    def _transition(
+        self,
+        workflow_id: str,
+        state: str,
+        code: str,
+        *,
+        expected: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         now = _now()
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT state,code FROM workflows WHERE id=?", (workflow_id,)
+                "SELECT * FROM workflows WHERE id=?", (workflow_id,)
             ).fetchone()
             if row is None:
                 raise WorkflowError("workflow_not_found")
+            identity = (
+                (row["revision"], row["state"], row["code"])
+                if expected is None
+                else self._mutation_identity(workflow_id, expected)
+            )
+            if (row["revision"], row["state"], row["code"]) != identity:
+                raise WorkflowError("workflow_revision_conflict")
             previous = row["state"]
             if previous == state and row["code"] == code:
-                return
+                return self._public(row)
             finished = now if state in {"completed", "attention_required", "canceled"} else None
-            db.execute(
+            changed = db.execute(
                 "UPDATE workflows SET state=?,code=?,revision=revision+1,updated_at=?,"
-                "finished_at=? WHERE id=?",
-                (state, code, now, finished, workflow_id),
-            )
+                "finished_at=? WHERE id=? AND revision=? AND state=? AND code=?",
+                (state, code, now, finished, workflow_id, *identity),
+            ).rowcount
+            if changed != 1:
+                raise WorkflowError("workflow_revision_conflict")
             self._event(db, workflow_id, previous, state, code, now)
+            return self._by_id(db, workflow_id)
 
-    def _attention(self, workflow_id: str, code: str) -> dict[str, Any]:
-        self._transition(workflow_id, "attention_required", code)
-        return self.get(workflow_id)
+    def _attention(
+        self,
+        workflow_id: str,
+        code: str,
+        *,
+        expected: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._transition(
+            workflow_id,
+            "attention_required",
+            code,
+            expected=expected,
+        )
 
     def _event(
         self,

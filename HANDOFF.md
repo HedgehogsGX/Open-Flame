@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、完整视频默认/生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检与三账号上传 fan-out 已通过本地浏览器/故障恢复验证；原始预授权 queued 工作安全重启续跑已通过本地策略、Manager 启动扫描和真实域离线恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、完整视频默认/生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检、三账号上传 fan-out、预授权 queued 重启续跑及整流程安全取消已通过本地 synthetic/offline、浏览器或故障恢复验证；下一代码切片处理重复下载 owner 等待与恢复；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 整流程安全取消：`POST /api/v1/workflows/{id}/cancel` 以当前 revision 提交持久取消意图，`WorkflowManager` 重启后仍会从最远的已创建下游继续处理。下载、编辑 project/plan 或逐段上传已创建但 workflow 引用尚未写回时，会按稳定请求键发现；Editing 与 Upload 在对应稳定请求缺失时，会在各自的单一 `BEGIN IMMEDIATE` 中写入取消占位，阻止并发 stable-key 创建。Editing 同时核对来源、原始配方、请求摘要、完整 retry 图与当前 leaf，再取消 render 或全部 AI leaf。上传发现只接受完整标题、标签、封面、发布时间及平台参数一致的 v2 request digest，随后在原域事务内核对最多 30 个 job/source/account/platform slot。draft/queued 可安全停止，running/canceling 保持等待；只有完整 fan-out 已 checkpoint 且全部已提交或已保存平台草稿时才按原 outcome 完成，pending slot 即使已出现成功证据也进入 `upload_partially_completed` 人工核对。部分成功、未知远端结果、缺失/错配引用及身份漂移同样进入精确 attention code，不会伪装成取消。取消成功终态固定为 `canceled/workflow_canceled`，重复取消幂等，旧 revision 与已完成流程拒绝；旧 adapter 缺少 discovery seam 时失败关闭，不抛 500。相同数据库路径的 WorkflowService 共用进程内 mutation lock，引用/状态写入再以 revision/state/code CAS 防止旧推进覆盖取消。页面提供整流程取消按钮并在轮询重绘后保留输入、展开状态和焦点。本地 ignored service、checkpoint gap、并发、adapter、API、上传批量取消与页面脚本验证以及相关现有回归见[整流程取消证据](validation/iteration-0.28.0-workflow-cancellation.md)；没有新增 Schema、队列、服务、依赖或测试文件，真实 Worker/provider/平台 backend 运行中取消仍待外部验收。完整外部复验从[测试手册](TESTING.md)开始，失败按[Debug 指南](docs/DEBUG_GUIDE.md)定位并用[回传模板](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)交接。下一代码切片修复重复 URL 在原 owner 仍 active 时被误判 `download_no_ready_video`：duplicate 应等待 owner，owner ready 后复用同一资产，owner failed/canceled 时传播精确终态。
 
 2026-09-09 自动流程完整视频默认：`/workflows` 不再默认启用隐藏风险较高的 `0–60 秒` 分段；首次进入显示“完整视频 · 0 段”，AI 流程提交 `segments: []` 并复用既有完整源输出语义。操作者主动开启分段时仍取得一个可编辑的 60 秒起始模板，带分段预设继续精确恢复。真实 Chrome 已验证完整视频请求 body 与既有多分段/窄屏行为；真实下载 Worker、隔离合成 AI runtime、FFmpeg、编辑/上传服务的禁网整链对 2 秒完整源完成听写、翻译、两段配音并向三个合成平台提交同一完整成品。`LocalWorkflowAdapter` 同时把仅用于类型标注的 `EditingManager` 改为 `TYPE_CHECKING` 导入，避免工作流适配器运行时连带载入 FastAPI/Pydantic。没有新增服务、线程、队列、数据库、Schema 或依赖；证据见[完整视频默认记录](validation/iteration-0.28.0-workflow-full-video-default.md)。真实网络、模型质量与平台发布仍未运行。
 
@@ -431,7 +433,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读 [预授权重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。预授权 queued 工作安全重启续跑、三平台参数卡、封面预检、服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设和真实域离线整链均已重新验证。下一步等待用户在液态玻璃 A/B/C 候选中选定方向，然后统一实现下载、编辑、上传和自动流程四页并做实际浏览器 QA；并行可核对实际启动数据根/runtime 条件与准备当前冻结候选。仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读 [预授权重启续跑记录](validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[整流程取消证据](validation/iteration-0.28.0-workflow-cancellation.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。预授权 queued 工作安全重启续跑、三平台参数卡、封面预检、服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设、真实域离线整链及整流程安全取消均已重新验证。下一代码切片先处理重复下载 owner：owner active 时等待，ready 后复用资产，并精确传播 failed/canceled 终态。液态玻璃生产四页仍等待用户从 A/B/C 候选中选定方向；选定后再统一实现下载、编辑、上传和自动流程四页并做实际浏览器 QA。并行可核对实际启动数据根/runtime 条件与准备当前冻结候选。仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 
@@ -606,7 +608,7 @@ uv run video-download-local-app --tool-root $ToolRoot --allow-direct-network
 6. 原始下载、编辑源、每次 render staging、ready 编辑成品与上传媒体保持不同受管副本；不得覆盖下载原件。媒体输入按受管后缀固定 `mov`/`matroska` demuxer、只允许 `file` protocol，并严格复核 format name，不能恢复为内容自动探测。
 7. Editing Schema 4 的远端调用 ledger 已冻结可脱敏 request identity，并用 `reserved`、`dispatched`、`responded`、`released`、`unknown`、`reconciled` 表达本地状态；unknown 只允许三项固定人工结论。阻断会递归覆盖已经存在的 retry 后继，自动流程在人工核对后重新检查 owner，只有 `not_accepted` 恢复原有显式重试。ledger 与多分段 ignored validator、compileall、当前内联 JS、依赖一致性和本机浏览器检查已通过；当前相关既有回归 263 passed，文档/发行回归 102 passed，测试文件保持未改。`tests/test_api.py` 当前另为 19 passed、1 failed：既有版本断言仍期待 `0.27.0`，而项目已是 `0.28.0`；按仓库策略不修改测试，因此完整 CI 尚不能标绿。预设已追加配音授权摘要、严格嵌套参数/文件摘要校验；生产自动流程页现可完整恢复 0–10 段，并显示最多 30 个投稿任务的 fan-out。真实域离线整链实际调用听写/翻译/配音各一次，并确认配音进入三平台上传的视频；网络与模型响应仍由合成替身提供。远端 alias 漂移、实际价格与平台结果仍须外部验收。
 8. 开发仍使用 `.venv\Scripts\python.exe`，依赖检查用 `uv pip check`。最终验证材料放在 ignored `validation/local/`，提交前运行 `scripts/verify_commit_scope.py --staged`；不得新增或修改 `tests/`。
-9. 用户已授权关键开发步骤完成后直接创建本地 Git commit；未授权 push、真实平台操作、云端 AI 调用、公开发布或第三方二进制再分发。液态玻璃三套 ignored 本地候选已经生成，生产四页必须在用户选定方向后实施。
+9. 用户已授权关键开发步骤完成后直接创建本地 Git commit，并要求本轮验证后正常合并远端历史、直接 push 到 `origin/main`；禁止 force push。真实平台操作、云端 AI 调用、GitHub Release 与第三方二进制再分发仍未授权。液态玻璃三套 ignored 本地候选已经生成，生产四页必须在用户选定方向后实施。
 
 建议技能：实现/故障回归用 `tdd` 与 `diagnose`；需要刷新交接时用 `handoff`，并保留本文件的历史证据边界。对应文件已有完整实现与测试说明，不必复制源码进入交接。
 

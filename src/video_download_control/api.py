@@ -1184,6 +1184,7 @@ def create_app(
         upload_manager=app.state.upload_manager,
         download_asset_resolver=upload_original_asset,
         download_runtime_probe=lambda: current_worker_runtime_status().model_dump(),
+        download_control=worker_repository,
     )
     workflow_manager = WorkflowManager(
         default_workflow_root(resolved_settings.data_root), workflow_adapter

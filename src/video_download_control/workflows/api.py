@@ -262,6 +262,14 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
         manager.wake()
         return result
 
+    @router.post("/{workflow_id}/cancel")
+    async def cancel(workflow_id: Identifier, payload: ConfirmWorkflowRequest):
+        result = await invoke(
+            "cancel", workflow_id, expected_revision=payload.expected_revision
+        )
+        manager.wake()
+        return result
+
     @router.post("/{workflow_id}/confirm-edit")
     async def confirm_edit(workflow_id: Identifier, payload: ConfirmWorkflowRequest):
         result = await invoke(

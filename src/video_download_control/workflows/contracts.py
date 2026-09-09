@@ -8,6 +8,9 @@ from typing import Any, Literal, Mapping, Protocol, Sequence
 
 StepStatus = Literal["waiting", "ready", "failed", "attention"]
 UploadOutcome = Literal["submitted", "draft_saved", "mixed"]
+CancellationStatus = Literal[
+    "stopped", "waiting", "attention", "upload_completed"
+]
 MAX_WORKFLOW_SEGMENTS = 10
 MAX_WORKFLOW_ACCOUNTS = 3
 MAX_WORKFLOW_UPLOAD_JOBS = MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
@@ -102,6 +105,15 @@ class UploadSnapshot:
     outcome: UploadOutcome | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CancellationSnapshot:
+    """Conservative result of stopping one workflow-owned domain operation."""
+
+    status: CancellationStatus
+    code: str = ""
+    outcome: UploadOutcome | None = None
+
+
 class WorkflowDomainAdapter(Protocol):
     """The complete cross-domain seam consumed by the workflow state machine."""
 
@@ -120,6 +132,22 @@ class WorkflowDomainAdapter(Protocol):
     ) -> str: ...
 
     def inspect_download(self, batch_id: str) -> DownloadSnapshot: ...
+
+    def cancel_download(
+        self,
+        batch_id: str,
+        *,
+        expected_name: str,
+        expected_source_url: str,
+    ) -> CancellationSnapshot: ...
+
+    def cancel_download_for_workflow(
+        self,
+        workflow_id: str,
+        *,
+        expected_name: str,
+        expected_source_url: str,
+    ) -> CancellationSnapshot: ...
 
     def prepare_edit(
         self,
@@ -147,11 +175,38 @@ class WorkflowDomainAdapter(Protocol):
         ai: Mapping[str, Any],
     ) -> None: ...
 
+    def cancel_ai(
+        self,
+        project_id: str,
+        *,
+        expected_name: str,
+        expected_source_asset_id: str,
+    ) -> CancellationSnapshot: ...
+
+    def cancel_edit_for_workflow(
+        self,
+        workflow_id: str,
+        *,
+        expected_project_id: str | None,
+        expected_name: str,
+        expected_source_asset_id: str,
+        expected_recipe: Mapping[str, Any],
+    ) -> CancellationSnapshot: ...
+
     def retry_edit(self, workflow_id: str, plan_id: str) -> str: ...
 
     def inspect_edit(self, plan_id: str) -> EditSnapshot: ...
 
     def confirm_edit(self, plan_id: str) -> None: ...
+
+    def cancel_edit(
+        self,
+        plan_id: str,
+        *,
+        expected_project_id: str,
+        expected_name: str,
+        expected_source_asset_id: str,
+    ) -> CancellationSnapshot: ...
 
     def prepare_upload(
         self,
@@ -174,3 +229,25 @@ class WorkflowDomainAdapter(Protocol):
         job_ids: Sequence[str],
         account_bindings: Sequence[Mapping[str, str]],
     ) -> None: ...
+
+    def cancel_uploads(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        expected_account_bindings: Sequence[Mapping[str, str]],
+    ) -> CancellationSnapshot: ...
+
+    def cancel_uploads_for_workflow(
+        self,
+        workflow_id: str,
+        output_id: str,
+        segment_ordinal: int,
+        existing_job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        expected_account_ids: Sequence[str],
+        expected_account_bindings: Sequence[Mapping[str, str]],
+        expected_upload: Mapping[str, Any],
+        expected_cover_id: str | None,
+    ) -> CancellationSnapshot: ...

@@ -8,6 +8,7 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 from uuid import UUID
@@ -18,6 +19,7 @@ from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
 from .contracts import (
     AiSnapshot,
+    CancellationSnapshot,
     DownloadSnapshot,
     EditPrepared,
     EditSnapshot,
@@ -56,6 +58,13 @@ _DOWNLOAD_JOB_STATES = {
 _EDIT_WAITING_STATES = {"review", "queued", "running", "canceling"}
 _UPLOAD_WAITING_STATES = {"draft", "queued", "running"}
 _UPLOAD_SUCCESS_STATES = {"submitted", "draft_saved"}
+_AI_UNCERTAIN_CODES = {
+    "ai_remote_result_unknown",
+    "ai_remote_retry_blocked",
+    "ai_remote_reconciliation_required",
+    "ai_remote_accepted_without_result",
+    "ai_remote_abandoned",
+}
 _UPLOAD_INPUT_KEYS = {
     "account_ids",
     "title",
@@ -84,6 +93,12 @@ class UploadManager(Protocol):
     """The small lazy-manager seam needed by the workflow adapter."""
 
     def get(self) -> Any: ...
+
+
+class DownloadControl(Protocol):
+    """The one download mutation needed by workflow cancellation."""
+
+    def request_cancel_input(self, input_record_id: str, *, now: datetime) -> object: ...
 
 
 DownloadAssetResolver = Callable[[str], tuple[Path, str]]
@@ -146,6 +161,26 @@ def _record_id(record: object) -> str:
     return _hex_identifier(record.get("id"))
 
 
+def _validate_retry_successors(
+    record_ids: Sequence[str],
+    successors: Mapping[str, str],
+    *,
+    error_code: str,
+) -> None:
+    """Reject cycles in a retry forest without limiting legitimate history."""
+
+    resolved: set[str] = set()
+    for start in record_ids:
+        current = start
+        path: set[str] = set()
+        while current in successors and current not in resolved:
+            if current in path:
+                raise WorkflowError(error_code)
+            path.add(current)
+            current = successors[current]
+        resolved.update(path)
+
+
 @dataclass(slots=True)
 class LocalWorkflowAdapter:
     """Connect the workflow state machine without sharing media ownership."""
@@ -155,6 +190,7 @@ class LocalWorkflowAdapter:
     upload_manager: UploadManager
     download_asset_resolver: DownloadAssetResolver
     download_runtime_probe: DownloadRuntimeProbe | None = None
+    download_control: DownloadControl | None = None
 
     def preflight(
         self,
@@ -409,6 +445,164 @@ class LocalWorkflowAdapter:
                 return DownloadSnapshot("attention", code="download_state_invalid")
             return DownloadSnapshot("waiting")
         return DownloadSnapshot("failed", code="download_no_ready_video")
+
+    def cancel_download(
+        self,
+        batch_id: str,
+        *,
+        expected_name: str,
+        expected_source_url: str,
+    ) -> CancellationSnapshot:
+        """Request cancellation for the workflow batch's sole input."""
+
+        batch_id = _download_identifier(batch_id)
+        if (
+            not isinstance(expected_name, str)
+            or not expected_name
+            or not isinstance(expected_source_url, str)
+            or not expected_source_url
+        ):
+            return CancellationSnapshot(
+                "attention", code="download_batch_mismatch"
+            )
+        batch = self.batch_service.get_batch(batch_id)
+        if not isinstance(batch, Mapping):
+            return CancellationSnapshot("attention", code="download_batch_not_found")
+        if (
+            batch.get("id") != batch_id
+            or batch.get("name") != expected_name
+        ):
+            return CancellationSnapshot(
+                "attention", code="download_batch_mismatch"
+            )
+        inputs = batch.get("inputs")
+        if (
+            not isinstance(inputs, Sequence)
+            or isinstance(inputs, (str, bytes))
+            or len(inputs) != 1
+            or not isinstance(inputs[0], Mapping)
+        ):
+            return CancellationSnapshot("attention", code="download_input_set_invalid")
+        try:
+            input_id = _download_identifier(inputs[0].get("id"))
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="download_input_set_invalid")
+        if (
+            inputs[0].get("batch_id") != batch_id
+            or inputs[0].get("raw_text") != expected_source_url
+        ):
+            return CancellationSnapshot("attention", code="download_input_set_invalid")
+        if self.download_control is None:
+            return CancellationSnapshot(
+                "attention", code="download_cancellation_unavailable"
+            )
+        try:
+            result = self.download_control.request_cancel_input(
+                input_id, now=datetime.now(UTC)
+            )
+        except Exception:
+            return CancellationSnapshot(
+                "attention", code="download_cancellation_failed"
+            )
+        if result is None:
+            return CancellationSnapshot("attention", code="download_input_not_found")
+
+        refreshed = self.batch_service.get_batch(batch_id)
+        if not isinstance(refreshed, Mapping):
+            return CancellationSnapshot("attention", code="download_batch_not_found")
+        if (
+            refreshed.get("id") != batch_id
+            or refreshed.get("name") != expected_name
+        ):
+            return CancellationSnapshot(
+                "attention", code="download_batch_mismatch"
+            )
+        refreshed_inputs = refreshed.get("inputs")
+        jobs = refreshed.get("jobs")
+        if (
+            not isinstance(refreshed_inputs, Sequence)
+            or isinstance(refreshed_inputs, (str, bytes))
+            or len(refreshed_inputs) != 1
+            or not isinstance(refreshed_inputs[0], Mapping)
+            or refreshed_inputs[0].get("id") != input_id
+            or refreshed_inputs[0].get("batch_id") != batch_id
+            or refreshed_inputs[0].get("raw_text") != expected_source_url
+            or not isinstance(jobs, Sequence)
+            or isinstance(jobs, (str, bytes))
+        ):
+            return CancellationSnapshot("attention", code="download_input_set_invalid")
+        states: list[str] = []
+        for job in jobs:
+            if (
+                not isinstance(job, Mapping)
+                or job.get("input_record_id") != input_id
+                or job.get("status") not in _DOWNLOAD_JOB_STATES
+            ):
+                return CancellationSnapshot(
+                    "attention", code="download_state_unknown"
+                )
+            states.append(job["status"])
+        if any(
+            state in {"probing", "downloading", "postprocessing", "verifying"}
+            for state in states
+        ):
+            return CancellationSnapshot(
+                "waiting", code="download_cancellation_pending"
+            )
+        if any(state == "queued" for state in states):
+            return CancellationSnapshot(
+                "attention", code="download_cancellation_failed"
+            )
+        input_state = refreshed_inputs[0].get("status")
+        if input_state not in _DOWNLOAD_STATES:
+            return CancellationSnapshot("attention", code="download_state_unknown")
+        return CancellationSnapshot("stopped")
+
+    def cancel_download_for_workflow(
+        self,
+        workflow_id: str,
+        *,
+        expected_name: str,
+        expected_source_url: str,
+    ) -> CancellationSnapshot:
+        """Discover and stop a workflow batch without creating a replacement."""
+
+        workflow_id = _hex_identifier(workflow_id)
+        if (
+            expected_name != f"Open-Flame workflow {workflow_id}"
+            or not isinstance(expected_source_url, str)
+            or not expected_source_url
+        ):
+            return CancellationSnapshot(
+                "attention", code="download_batch_mismatch"
+            )
+        try:
+            matches = self.batch_service.find_batches_by_name(expected_name)
+        except Exception:
+            return CancellationSnapshot(
+                "attention", code="download_discovery_failed"
+            )
+        if not isinstance(matches, Sequence) or isinstance(matches, (str, bytes)):
+            return CancellationSnapshot(
+                "attention", code="download_discovery_failed"
+            )
+        if not matches:
+            return CancellationSnapshot("stopped")
+        if len(matches) != 1:
+            return CancellationSnapshot(
+                "attention", code="download_batch_conflict"
+            )
+        try:
+            batch_id = self._matching_batch_id(
+                matches[0], expected_name, expected_source_url
+            )
+        except WorkflowError as error:
+            return CancellationSnapshot("attention", code=error.code)
+        return self.cancel_download(
+            batch_id,
+            expected_name=expected_name,
+            expected_source_url=expected_source_url,
+        )
 
     def prepare_edit(
         self,
@@ -765,7 +959,7 @@ class LocalWorkflowAdapter:
         current = task
         seen: set[str] = set()
         while task_id in successors:
-            if task_id in seen or len(seen) >= 16:
+            if task_id in seen:
                 raise WorkflowError("workflow_domain_data_invalid")
             seen.add(task_id)
             current = successors[task_id]
@@ -917,6 +1111,211 @@ class LocalWorkflowAdapter:
         except EditingError as error:
             _domain_failure(error, "ai_pipeline_failed")
 
+    def _workflow_edit_project(
+        self,
+        project_id: str,
+        *,
+        expected_name: str,
+        expected_source_asset_id: str,
+    ) -> Mapping[str, Any]:
+        project_id = _hex_identifier(project_id)
+        expected_source_asset_id = _download_identifier(expected_source_asset_id)
+        if not isinstance(expected_name, str) or not expected_name:
+            raise WorkflowError("edit_project_mismatch")
+        try:
+            project = self.editing_manager.invoke("project", project_id)
+        except EditingError as error:
+            _domain_failure(error, "editing_failed")
+        if (
+            not isinstance(project, Mapping)
+            or project.get("id") != project_id
+            or project.get("name") != expected_name
+            or project.get("source_asset_id") != expected_source_asset_id
+        ):
+            raise WorkflowError("edit_project_mismatch")
+        return project
+
+    def cancel_ai(
+        self,
+        project_id: str,
+        *,
+        expected_name: str,
+        expected_source_asset_id: str,
+    ) -> CancellationSnapshot:
+        """Atomically stop every AI leaf owned by a workflow editing project."""
+
+        project_id = _hex_identifier(project_id)
+        try:
+            self._workflow_edit_project(
+                project_id,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+            )
+        except WorkflowError as error:
+            return CancellationSnapshot("attention", code=error.code)
+        try:
+            canceled_tasks = self.editing_manager.cancel_ai_project_tasks(project_id)
+        except EditingError as error:
+            if error.code == "ai_task_retry_lineage_changed":
+                return CancellationSnapshot(
+                    "waiting", code="ai_task_retry_lineage_changed"
+                )
+            if error.code in {"ai_task_set_invalid", "editing_data_invalid"}:
+                return CancellationSnapshot("attention", code="ai_task_set_invalid")
+            if error.code in _AI_UNCERTAIN_CODES:
+                return CancellationSnapshot(
+                    "attention", code=error.code
+                )
+            _domain_failure(error, "ai_pipeline_failed")
+        return self._ai_cancellation_snapshot(project_id, canceled_tasks)
+
+    @staticmethod
+    def _ai_cancellation_snapshot(
+        project_id: str, canceled_tasks: object
+    ) -> CancellationSnapshot:
+        if not isinstance(canceled_tasks, list):
+            return CancellationSnapshot("attention", code="ai_task_set_invalid")
+        result_ids: set[str] = set()
+        for canceled in canceled_tasks:
+            if not isinstance(canceled, Mapping) or canceled.get("project_id") != project_id:
+                return CancellationSnapshot("attention", code="ai_task_set_invalid")
+            try:
+                task_id = _record_id(canceled)
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="ai_task_set_invalid")
+            if task_id in result_ids:
+                return CancellationSnapshot("attention", code="ai_task_set_invalid")
+            result_ids.add(task_id)
+        allowed_states = {
+            "review", "queued", "running", "canceling",
+            "succeeded", "failed", "canceled",
+        }
+        uncertain_codes = {
+            task.get("code")
+            for task in canceled_tasks
+            if task.get("code") in _AI_UNCERTAIN_CODES
+        }
+        states = {task.get("state") for task in canceled_tasks}
+        if any(state not in allowed_states for state in states):
+            return CancellationSnapshot("attention", code="ai_task_state_unknown")
+        if uncertain_codes:
+            code = (
+                next(iter(uncertain_codes))
+                if len(uncertain_codes) == 1
+                else "ai_remote_result_unknown"
+            )
+            return CancellationSnapshot("attention", code=code)
+        if states & {"running", "canceling"}:
+            return CancellationSnapshot("waiting", code="ai_cancellation_pending")
+        if not states or states <= {"succeeded", "failed", "canceled"}:
+            return CancellationSnapshot("stopped")
+        return CancellationSnapshot("attention", code="ai_task_state_unknown")
+
+    def cancel_edit_for_workflow(
+        self,
+        workflow_id: str,
+        *,
+        expected_project_id: str | None,
+        expected_name: str,
+        expected_source_asset_id: str,
+        expected_recipe: Mapping[str, Any],
+    ) -> CancellationSnapshot:
+        """Atomically discover and stop workflow editing artifacts."""
+
+        workflow_id = _hex_identifier(workflow_id)
+        try:
+            expected_source_asset_id = _download_identifier(
+                expected_source_asset_id
+            )
+            if expected_project_id is not None:
+                expected_project_id = _hex_identifier(expected_project_id)
+        except WorkflowError as error:
+            return CancellationSnapshot("attention", code=error.code)
+        if expected_name != f"Open-Flame workflow {workflow_id}":
+            return CancellationSnapshot("attention", code="edit_project_mismatch")
+        try:
+            normalized_recipe = recipe_from_mapping(expected_recipe).to_dict()
+        except EditingError:
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        try:
+            artifacts = self.editing_manager.cancel_workflow_request_artifacts(
+                f"wf-{workflow_id}-edit-project",
+                f"wf-{workflow_id}-edit-plan",
+                expected_project_id=expected_project_id,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+                expected_recipe=normalized_recipe,
+            )
+        except EditingError as error:
+            if error.code in {
+                "editing_request_invalid",
+                "invalid_idempotency_key",
+                "invalid_metadata",
+                "project_not_found",
+                "plan_not_found",
+            }:
+                return CancellationSnapshot("attention", code="edit_request_invalid")
+            if error.code in {"edit_project_mismatch", "invalid_source_asset_id"}:
+                return CancellationSnapshot("attention", code="edit_project_mismatch")
+            if error.code in {"edit_plan_set_invalid", "editing_data_invalid"}:
+                return CancellationSnapshot("attention", code="edit_plan_set_invalid")
+            if error.code == "edit_plan_mismatch":
+                return CancellationSnapshot("attention", code="edit_plan_mismatch")
+            if error.code == "render_retry_lineage_changed":
+                return CancellationSnapshot(
+                    "waiting", code="render_retry_lineage_changed"
+                )
+            if error.code in _AI_UNCERTAIN_CODES:
+                return CancellationSnapshot("attention", code=error.code)
+            _domain_failure(error, "editing_failed")
+        if not isinstance(artifacts, Mapping) or set(artifacts) != {
+            "kind", "project", "plan", "ai_tasks",
+        }:
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        kind = artifacts.get("kind")
+        project = artifacts.get("project")
+        plan = artifacts.get("plan")
+        tasks = artifacts.get("ai_tasks")
+        if kind == "none":
+            if project is not None or plan is not None or tasks != []:
+                return CancellationSnapshot("attention", code="edit_request_invalid")
+            return CancellationSnapshot("stopped")
+        if not isinstance(project, Mapping):
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        try:
+            project_id = _record_id(project)
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        if (
+            (expected_project_id is not None and project_id != expected_project_id)
+            or project.get("name") != expected_name
+            or project.get("source_asset_id") != expected_source_asset_id
+        ):
+            return CancellationSnapshot("attention", code="edit_project_mismatch")
+        if kind == "ai":
+            if plan is not None:
+                return CancellationSnapshot("attention", code="edit_request_invalid")
+            return self._ai_cancellation_snapshot(project_id, tasks)
+        if (
+            kind != "plan"
+            or tasks != []
+            or not isinstance(plan, Mapping)
+            or plan.get("project_id") != project_id
+        ):
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        try:
+            plan_id = _record_id(plan)
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="edit_request_invalid")
+        if plan.get("code") in _AI_UNCERTAIN_CODES:
+            return CancellationSnapshot("attention", code=plan["code"])
+        state = plan.get("state")
+        if state in {"running", "canceling"}:
+            return CancellationSnapshot("waiting", code="edit_cancellation_pending")
+        if state in {"ready", "failed", "canceled"}:
+            return CancellationSnapshot("stopped")
+        return CancellationSnapshot("attention", code="edit_state_unknown")
+
     def inspect_edit(self, plan_id: str) -> EditSnapshot:
         plan_id = _hex_identifier(plan_id)
         try:
@@ -1063,6 +1462,113 @@ class LocalWorkflowAdapter:
             )
         except EditingError as error:
             _domain_failure(error, "editing_failed")
+
+    def _latest_edit_plan(
+        self, plan_id: str, project_id: str
+    ) -> Mapping[str, Any]:
+        try:
+            plans = self.editing_manager.invoke("plans", project_id=project_id)
+        except EditingError as error:
+            _domain_failure(error, "editing_failed")
+        if not isinstance(plans, list):
+            raise WorkflowError("edit_plan_set_invalid")
+        records: dict[str, Mapping[str, Any]] = {}
+        successors: dict[str, str] = {}
+        for plan in plans:
+            if not isinstance(plan, Mapping) or plan.get("project_id") != project_id:
+                raise WorkflowError("edit_plan_set_invalid")
+            try:
+                current_id = _record_id(plan)
+            except WorkflowError:
+                raise WorkflowError("edit_plan_set_invalid") from None
+            if current_id in records:
+                raise WorkflowError("edit_plan_set_invalid")
+            records[current_id] = plan
+        if plan_id not in records:
+            raise WorkflowError("edit_plan_mismatch")
+        for current_id, plan in records.items():
+            retry_of = plan.get("retry_of")
+            if retry_of is None:
+                continue
+            try:
+                parent_id = _hex_identifier(retry_of)
+            except WorkflowError:
+                raise WorkflowError("edit_plan_set_invalid") from None
+            if (
+                parent_id not in records
+                or parent_id in successors
+                or parent_id == current_id
+            ):
+                raise WorkflowError("edit_plan_set_invalid")
+            parent = records[parent_id]
+            if any(
+                plan.get(field) != parent.get(field)
+                for field in (
+                    "draft_version",
+                    "recipe_sha256",
+                    "timeline_revision_id",
+                )
+            ):
+                raise WorkflowError("edit_plan_set_invalid")
+            successors[parent_id] = current_id
+        _validate_retry_successors(
+            tuple(records), successors, error_code="edit_plan_set_invalid"
+        )
+        current_id = plan_id
+        while current_id in successors:
+            current_id = successors[current_id]
+        return records[current_id]
+
+    def cancel_edit(
+        self,
+        plan_id: str,
+        *,
+        expected_project_id: str,
+        expected_name: str,
+        expected_source_asset_id: str,
+    ) -> CancellationSnapshot:
+        """Cancel one workflow-owned render plan without hiding uncertainty."""
+
+        plan_id = _hex_identifier(plan_id)
+        expected_project_id = _hex_identifier(expected_project_id)
+        try:
+            self._workflow_edit_project(
+                expected_project_id,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+            )
+            plan = self._latest_edit_plan(plan_id, expected_project_id)
+        except WorkflowError as error:
+            return CancellationSnapshot("attention", code=error.code)
+        leaf_id = _record_id(plan)
+        if plan.get("code") in _AI_UNCERTAIN_CODES:
+            return CancellationSnapshot("attention", code=plan["code"])
+        try:
+            plan = self.editing_manager.cancel(leaf_id)
+        except EditingError as error:
+            if error.code == "render_retry_lineage_changed":
+                return CancellationSnapshot(
+                    "waiting", code="render_retry_lineage_changed"
+                )
+            if error.code in _AI_UNCERTAIN_CODES:
+                return CancellationSnapshot(
+                    "attention", code=error.code
+                )
+            _domain_failure(error, "editing_failed")
+        if (
+            not isinstance(plan, Mapping)
+            or plan.get("id") != leaf_id
+            or plan.get("project_id") != expected_project_id
+        ):
+            return CancellationSnapshot("attention", code="edit_state_invalid")
+        if plan.get("code") in _AI_UNCERTAIN_CODES:
+            return CancellationSnapshot("attention", code=plan["code"])
+        state = plan.get("state")
+        if state in {"running", "canceling"}:
+            return CancellationSnapshot("waiting", code="edit_cancellation_pending")
+        if state in {"ready", "failed", "canceled"}:
+            return CancellationSnapshot("stopped")
+        return CancellationSnapshot("attention", code="edit_state_unknown")
 
     def retry_edit(self, workflow_id: str, plan_id: str) -> str:
         workflow_id = _hex_identifier(workflow_id)
@@ -1465,6 +1971,427 @@ class LocalWorkflowAdapter:
             or [row.get("id") for row in confirmed] != list(normalized)
         ):
             raise WorkflowError("workflow_domain_data_invalid")
+
+    def cancel_uploads(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        expected_account_bindings: Sequence[Mapping[str, str]],
+    ) -> CancellationSnapshot:
+        """Cancel a workflow fan-out only while every persisted identity matches."""
+
+        if (
+            not isinstance(job_ids, Sequence)
+            or isinstance(job_ids, (str, bytes))
+            or not 1 <= len(job_ids) <= MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS
+            or not isinstance(expected_targets, Sequence)
+            or isinstance(expected_targets, (str, bytes))
+            or len(expected_targets) != len(job_ids)
+            or not isinstance(expected_account_bindings, Sequence)
+            or isinstance(expected_account_bindings, (str, bytes))
+            or not 1 <= len(expected_account_bindings) <= MAX_WORKFLOW_ACCOUNTS
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        try:
+            normalized_ids = [_hex_identifier(job_id) for job_id in job_ids]
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        if len(set(normalized_ids)) != len(normalized_ids):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+
+        normalized_targets: list[dict[str, str]] = []
+        for index, target in enumerate(expected_targets):
+            if not isinstance(target, Mapping) or set(target) != {
+                "job_id", "source_id", "account_id", "platform",
+            }:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            try:
+                normalized = {
+                    "job_id": _hex_identifier(target.get("job_id")),
+                    "source_id": _hex_identifier(target.get("source_id")),
+                    "account_id": _hex_identifier(target.get("account_id")),
+                    "platform": target.get("platform"),
+                }
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            if (
+                normalized["job_id"] != normalized_ids[index]
+                or normalized["platform"] not in {"bilibili", "douyin", "tencent"}
+            ):
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            normalized_targets.append(normalized)
+
+        target_accounts: dict[str, str] = {}
+        for target in normalized_targets:
+            previous_platform = target_accounts.setdefault(
+                target["account_id"], target["platform"]
+            )
+            if previous_platform != target["platform"]:
+                return CancellationSnapshot(
+                    "attention", code="upload_job_set_invalid"
+                )
+        if len(target_accounts) > MAX_WORKFLOW_ACCOUNTS:
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        normalized_bindings: list[dict[str, str]] = []
+        seen_accounts: set[str] = set()
+        for binding in expected_account_bindings:
+            if not isinstance(binding, Mapping) or set(binding) != {
+                "account_id", "platform", "session_revision",
+            }:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            try:
+                account_id = _hex_identifier(binding.get("account_id"))
+                session_revision = _hex_identifier(binding.get("session_revision"))
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            platform = binding.get("platform")
+            if (
+                account_id in seen_accounts
+                or platform not in {"bilibili", "douyin", "tencent"}
+                or target_accounts.get(account_id) != platform
+            ):
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            seen_accounts.add(account_id)
+            normalized_bindings.append(
+                {
+                    "account_id": account_id,
+                    "platform": platform,
+                    "session_revision": session_revision,
+                }
+            )
+        if seen_accounts != set(target_accounts):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+
+        try:
+            service = self.upload_manager.get()
+            jobs = service.latest_jobs_by_ids(normalized_ids)
+        except UploadError as error:
+            if error.code in {"job_not_found", "invalid_job_ids"}:
+                return CancellationSnapshot("attention", code="upload_job_not_found")
+            _domain_failure(error, "upload_failed")
+        if not isinstance(jobs, list) or len(jobs) != len(normalized_ids):
+            return CancellationSnapshot("attention", code="upload_job_not_found")
+        leaf_targets: list[dict[str, str]] = []
+        leaf_ids: set[str] = set()
+        for job, expected in zip(jobs, normalized_targets, strict=True):
+            if not isinstance(job, Mapping):
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            try:
+                leaf_id = _record_id(job)
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            if leaf_id in leaf_ids or any(
+                job.get(field) != expected[field]
+                for field in ("source_id", "account_id", "platform")
+            ):
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            leaf_ids.add(leaf_id)
+            leaf_targets.append({**expected, "job_id": leaf_id})
+
+        try:
+            canceled = service.cancel_many(
+                [target["job_id"] for target in leaf_targets],
+                expected_targets=leaf_targets,
+                expected_account_bindings=normalized_bindings,
+            )
+        except UploadError as error:
+            if error.code in {
+                "invalid_job_batch", "invalid_account_bindings", "job_not_found",
+            }:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            if error.code == "job_retry_lineage_changed":
+                return CancellationSnapshot(
+                    "waiting", code="upload_retry_lineage_changed"
+                )
+            _domain_failure(error, "upload_failed")
+        if (
+            not isinstance(canceled, list)
+            or len(canceled) != len(leaf_targets)
+            or any(
+                not isinstance(job, Mapping)
+                or job.get("id") != expected["job_id"]
+                or any(
+                    job.get(field) != expected[field]
+                    for field in ("source_id", "account_id", "platform")
+                )
+                for job, expected in zip(canceled, leaf_targets, strict=True)
+            )
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        result = self._upload_cancellation_aggregate(
+            canceled, cancellation_requested=True
+        )
+        return result or CancellationSnapshot(
+            "attention", code="upload_cancellation_failed"
+        )
+
+    def cancel_uploads_for_workflow(
+        self,
+        workflow_id: str,
+        output_id: str,
+        segment_ordinal: int,
+        existing_job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        expected_account_ids: Sequence[str],
+        expected_account_bindings: Sequence[Mapping[str, str]],
+        expected_upload: Mapping[str, Any],
+        expected_cover_id: str | None,
+    ) -> CancellationSnapshot:
+        """Discover an uncheckpointed upload fan-out and cancel it with prior roots."""
+
+        try:
+            workflow_id = _hex_identifier(workflow_id)
+            output_id = _hex_identifier(output_id)
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        if (
+            isinstance(segment_ordinal, bool)
+            or not isinstance(segment_ordinal, int)
+            or not 1 <= segment_ordinal <= MAX_WORKFLOW_SEGMENTS
+            or not isinstance(existing_job_ids, Sequence)
+            or isinstance(existing_job_ids, (str, bytes))
+            or not isinstance(expected_targets, Sequence)
+            or isinstance(expected_targets, (str, bytes))
+            or len(existing_job_ids) != len(expected_targets)
+            or not isinstance(expected_account_ids, Sequence)
+            or isinstance(expected_account_ids, (str, bytes))
+            or not 1 <= len(expected_account_ids) <= MAX_WORKFLOW_ACCOUNTS
+            or not isinstance(expected_account_bindings, Sequence)
+            or isinstance(expected_account_bindings, (str, bytes))
+            or not isinstance(expected_upload, Mapping)
+            or set(expected_upload) != _UPLOAD_KEYS
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        try:
+            account_ids = [_hex_identifier(value) for value in expected_account_ids]
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        if len(set(account_ids)) != len(account_ids):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        binding_platforms: dict[str, str] = {}
+        binding_records: dict[str, dict[str, str]] = {}
+        for binding in expected_account_bindings:
+            if not isinstance(binding, Mapping) or set(binding) != {
+                "account_id", "platform", "session_revision",
+            }:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            try:
+                account_id = _hex_identifier(binding.get("account_id"))
+                session_revision = _hex_identifier(binding.get("session_revision"))
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            platform = binding.get("platform")
+            if (
+                account_id not in account_ids
+                or account_id in binding_platforms
+                or platform not in {"bilibili", "douyin", "tencent"}
+            ):
+                return CancellationSnapshot("attention", code="upload_job_set_invalid")
+            binding_platforms[account_id] = platform
+            binding_records[account_id] = {
+                "account_id": account_id,
+                "platform": platform,
+                "session_revision": session_revision,
+            }
+        if set(binding_platforms) != set(account_ids):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        profile_bindings = expected_upload.get("account_bindings")
+        if not isinstance(profile_bindings, Sequence) or isinstance(
+            profile_bindings, (str, bytes)
+        ):
+            return CancellationSnapshot("attention", code="upload_request_mismatch")
+        try:
+            profile_binding_records = {
+                _hex_identifier(binding.get("account_id")): dict(binding)
+                for binding in profile_bindings
+                if isinstance(binding, Mapping)
+            }
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="upload_request_mismatch")
+        if (
+            expected_upload.get("account_ids") != account_ids
+            or profile_binding_records != binding_records
+        ):
+            return CancellationSnapshot("attention", code="upload_request_mismatch")
+
+        request_key = (
+            f"wf-{workflow_id}-upload-jobs"
+            if segment_ordinal == 1
+            else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
+        )
+        try:
+            service = self.upload_manager.get()
+            output = self.editing_manager.invoke("asset", output_id)
+        except UploadError as error:
+            _domain_failure(error, "upload_failed")
+        except EditingError as error:
+            if error.code in {"asset_not_found", "invalid_identifier"}:
+                return CancellationSnapshot("attention", code="edit_output_mismatch")
+            _domain_failure(error, "editing_failed")
+        if (
+            not isinstance(output, Mapping)
+            or output.get("id") != output_id
+            or output.get("kind") not in {"segment", "dubbed_video"}
+        ):
+            return CancellationSnapshot("attention", code="edit_output_mismatch")
+        try:
+            output_sha256 = _sha256(output.get("sha256"))
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="edit_output_mismatch")
+        source_id = _managed_import_id(
+            workflow_id, "edit_video", output_id, output_sha256
+        )
+
+        cover_record: Mapping[str, Any] | None = None
+        imported_cover_id = None
+        if expected_cover_id is not None:
+            try:
+                expected_cover_id = _hex_identifier(expected_cover_id)
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="edit_output_mismatch")
+            try:
+                candidate = self.editing_manager.invoke("asset", expected_cover_id)
+            except EditingError as error:
+                if error.code in {"asset_not_found", "invalid_identifier"}:
+                    return CancellationSnapshot(
+                        "attention", code="edit_output_mismatch"
+                    )
+                _domain_failure(error, "editing_failed")
+            if (
+                not isinstance(candidate, Mapping)
+                or candidate.get("id") != expected_cover_id
+                or candidate.get("kind") != "cover"
+            ):
+                return CancellationSnapshot("attention", code="edit_output_mismatch")
+            try:
+                cover_sha256 = _sha256(candidate.get("sha256"))
+            except WorkflowError:
+                return CancellationSnapshot("attention", code="edit_output_mismatch")
+            cover_record = candidate
+            imported_cover_id = _managed_import_id(
+                workflow_id,
+                "edit_cover",
+                expected_cover_id,
+                cover_sha256,
+            )
+
+        try:
+            overrides = self._upload_overrides(
+                expected_upload.get("target_overrides"),
+                account_ids,
+                binding_platforms,
+                cover_record,
+                imported_cover_id,
+            )
+            request_jobs = service.claim_workflow_request_for_cancellation(
+                request_key,
+                expected_request={
+                    "source_id": source_id,
+                    "account_ids": account_ids,
+                    "title": expected_upload.get("title"),
+                    "description": expected_upload.get("description"),
+                    "tags": expected_upload.get("tags"),
+                    "category_id": expected_upload.get("category_id"),
+                    "mode": expected_upload.get("mode"),
+                    "copyright": expected_upload.get("copyright"),
+                    "source_credit": expected_upload.get("source_credit"),
+                    "target_overrides": overrides,
+                },
+            )
+        except WorkflowError:
+            return CancellationSnapshot("attention", code="upload_request_mismatch")
+        except UploadError as error:
+            if error.code in {
+                "invalid_idempotency_key", "upload_request_invalid", "job_not_found",
+            }:
+                return CancellationSnapshot("attention", code="upload_request_invalid")
+            if error.code in {"upload_request_mismatch", "idempotency_conflict"}:
+                return CancellationSnapshot("attention", code="upload_request_mismatch")
+            _domain_failure(error, "upload_failed")
+
+        combined_ids = list(existing_job_ids)
+        combined_targets = list(expected_targets)
+        if request_jobs is not None:
+            if not isinstance(request_jobs, list) or len(request_jobs) != len(account_ids):
+                return CancellationSnapshot("attention", code="upload_request_invalid")
+            discovered_ids: set[str] = set()
+            for account_id, job in zip(account_ids, request_jobs, strict=True):
+                if not isinstance(job, Mapping):
+                    return CancellationSnapshot("attention", code="upload_request_invalid")
+                try:
+                    job_id = _record_id(job)
+                except WorkflowError:
+                    return CancellationSnapshot("attention", code="upload_request_invalid")
+                if (
+                    job_id in discovered_ids
+                    or job_id in combined_ids
+                    or job.get("source_id") != source_id
+                    or job.get("account_id") != account_id
+                    or job.get("platform") != binding_platforms[account_id]
+                ):
+                    return CancellationSnapshot("attention", code="upload_request_mismatch")
+                discovered_ids.add(job_id)
+                combined_ids.append(job_id)
+                combined_targets.append(
+                    {
+                        "job_id": job_id,
+                        "source_id": source_id,
+                        "account_id": account_id,
+                        "platform": binding_platforms[account_id],
+                    }
+                )
+        if not combined_ids:
+            return CancellationSnapshot("stopped")
+        return self.cancel_uploads(
+            combined_ids,
+            expected_targets=combined_targets,
+            expected_account_bindings=expected_account_bindings,
+        )
+
+    @staticmethod
+    def _upload_cancellation_aggregate(
+        jobs: Sequence[Mapping[str, Any]],
+        *,
+        cancellation_requested: bool = False,
+    ) -> CancellationSnapshot | None:
+        states = [job.get("state") for job in jobs]
+        allowed = {
+            "draft", "queued", "running", "canceling", "submitted",
+            "draft_saved", "failed", "canceled", "unknown",
+        }
+        if any(state not in allowed for state in states):
+            return CancellationSnapshot("attention", code="upload_state_unknown")
+        if cancellation_requested and any(
+            state in {"running", "canceling"} for state in states
+        ):
+            return CancellationSnapshot(
+                "waiting", code="upload_cancellation_pending"
+            )
+        if "unknown" in states:
+            return CancellationSnapshot("attention", code="upload_result_unknown")
+        succeeded = [state in _UPLOAD_SUCCESS_STATES for state in states]
+        if any(succeeded) and not all(succeeded):
+            return CancellationSnapshot(
+                "attention", code="upload_partially_completed"
+            )
+        if all(succeeded):
+            outcomes: set[str] = set()
+            for job in jobs:
+                if job.get("state") == "submitted" and job.get("mode") == "publish":
+                    outcomes.add("submitted")
+                elif job.get("state") == "draft_saved" and job.get("mode") == "draft":
+                    outcomes.add("draft_saved")
+                else:
+                    return CancellationSnapshot(
+                        "attention", code="upload_outcome_invalid"
+                    )
+            outcome = next(iter(outcomes)) if len(outcomes) == 1 else "mixed"
+            return CancellationSnapshot("upload_completed", outcome=outcome)
+        if all(state in {"failed", "canceled"} for state in states):
+            return CancellationSnapshot("stopped")
+        return None
 
     @staticmethod
     def _matching_batch_id(

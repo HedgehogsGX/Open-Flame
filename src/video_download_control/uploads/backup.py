@@ -67,6 +67,9 @@ UploadBackupError = _common.BackupRestoreError
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_WORKFLOW_UPLOAD_REQUEST = re.compile(
+    r"^wf-[0-9a-f]{32}-upload-jobs(?:-[0-9]{3})?$"
+)
 _SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"})
 _COVER_MIME_TYPES = {
     ".jpg": "image/jpeg",
@@ -1477,6 +1480,20 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             request_jobs = json.loads(row["job_ids"])
         except (TypeError, json.JSONDecodeError) as exc:
             raise UploadBackupError("upload request job list is invalid") from exc
+        if request_jobs == []:
+            # Whole-workflow cancellation reserves an otherwise absent stable
+            # upload request key with its exact v2 digest.  Preserve that
+            # fail-closed tombstone so a restored app cannot create the fan-out.
+            if (
+                schema_version != _schema.SCHEMA_VERSION
+                or not isinstance(row["id"], str)
+                or _WORKFLOW_UPLOAD_REQUEST.fullmatch(row["id"]) is None
+                or not isinstance(row["digest"], str)
+                or _SHA256.fullmatch(row["digest"]) is None
+                or row["digest_version"] != 2
+            ):
+                raise UploadBackupError("upload request metadata is invalid")
+            continue
         if (
             not isinstance(row["id"], str)
             or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", row["id"]) is None

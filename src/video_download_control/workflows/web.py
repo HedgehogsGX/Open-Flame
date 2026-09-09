@@ -53,7 +53,7 @@ WORKFLOW_HTML = r'''<!doctype html>
   </main>
   <script>
 'use strict';
-const $=id=>document.getElementById(id);let csrf='',busy=false,pollTimer=null,readinessExpiryTimer=null,accounts=[],aiCapabilities=[],workflowPresets=[],appliedPreset=null,presetParameters=null,aiEnginesLoaded=false,workflowSegmentSequence=0,renderedWorkflowSignature='',renderedWorkflowStates=new Map(),downloadRuntimeStatus=null,downloadRuntimeObservedAt=null,aiRuntimeStatus=null,uploadRuntimeStatus=null,renderedReadinessSignature='';const readinessProbes={download:'pending',aiRuntime:'pending',aiCapabilities:'pending',upload:'pending',accounts:'pending'},readinessProbeSequence={download:0,aiRuntime:0,aiCapabilities:0,upload:0,accounts:0},changedUploadFields=new Set(),suggestedAiLabelFields=new Set(),maxWorkflowSegments=10;
+const $=id=>document.getElementById(id);let csrf='',busy=false,pollTimer=null,readinessExpiryTimer=null,accounts=[],aiCapabilities=[],workflowPresets=[],appliedPreset=null,presetParameters=null,aiEnginesLoaded=false,workflowSegmentSequence=0,workflowRefreshSequence=0,renderedWorkflowSignature='',renderedWorkflowStates=new Map(),downloadRuntimeStatus=null,downloadRuntimeObservedAt=null,aiRuntimeStatus=null,uploadRuntimeStatus=null,renderedReadinessSignature='';const readinessProbes={download:'pending',aiRuntime:'pending',aiCapabilities:'pending',upload:'pending',accounts:'pending'},readinessProbeSequence={download:0,aiRuntime:0,aiCapabilities:0,upload:0,accounts:0},changedUploadFields=new Set(),suggestedAiLabelFields=new Set(),maxWorkflowSegments=10;
 const stateNames={created:'已创建',downloading:'下载中',preparing_edit:'准备编辑',awaiting_ai_review:'等待 AI 结果核对',awaiting_edit_confirmation:'等待编辑确认',rendering:'编辑处理中',preparing_upload:'准备上传草稿',awaiting_upload_confirmation:'等待上传确认',uploading:'上传中',completed:'流程已结束',attention_required:'需要处理',canceled:'已取消'};
 const platformNames={bilibili:'Bilibili',douyin:'抖音',tencent:'视频号'},platformContentIds={bilibili:['bilibili-title','bilibili-description','bilibili-tags'],douyin:['douyin-title','douyin-description','douyin-tags'],tencent:['tencent-title','tencent-description','tencent-tags']},platformUploadFieldIds={bilibili:['bilibili-use-overrides','bilibili-title','bilibili-description','bilibili-tags','category-id','copyright','source-credit','bilibili-publish-at','bilibili-dynamic','bilibili-no-reprint','bilibili-close-comments','bilibili-close-danmu'],douyin:['douyin-use-overrides','douyin-title','douyin-description','douyin-tags','douyin-publish-at','douyin-declaration'],tencent:['tencent-use-overrides','tencent-title','tencent-description','tencent-tags','tencent-mode','tencent-publish-at','tencent-short-title','tencent-content-label']};
 function uploadCapability(platform){return Array.isArray(uploadRuntimeStatus?.platforms)?uploadRuntimeStatus.platforms.find(item=>item?.id===platform)||null:null;}
@@ -73,6 +73,8 @@ Object.assign(codeNames,{workflow_ai_segments_must_be_contiguous:'自动 AI 多�
 Object.assign(codeNames,{download_worker_unobserved:'未观测到本次启动实例的下载 Worker，请通过正常启动入口运行应用',download_runtime_unavailable:'下载 Worker 状态暂不可用，请稍后刷新',download_queue_paused:'下载队列已暂停，请恢复后重试',download_worker_stale:'下载 Worker 心跳已过期，请重启应用',download_worker_not_ready:'下载 Worker 尚未就绪，请稍后重试',download_network_disabled:'当前下载 Worker 未启用网络下载',runtime_missing:'上传运行时尚未安装',runtime_invalid:'上传运行时校验失败',runtime_busy:'上传运行时正在被其他操作占用',runtime_upgrade_required:'旧上传运行时需要重建；账号与上传数据可保留',runtime_unavailable:'上传运行时暂不可用',unsupported_platform:'当前系统不支持上传运行时',scheduler_owned_by_other_instance:'上传调度器由另一个应用实例持有，请关闭重复实例后重试',scheduler_database_unavailable:'上传调度器数据库暂不可用',scheduler_failed:'上传调度器启动失败，请重启应用',upload_scheduler_not_ready:'上传调度器尚未就绪，请重启应用',uploader_stopped:'上传器已停止，请重启应用',upload_activity_busy:'上传数据目录正在进行维护，请稍后重试',account_not_found:'所选上传账号不存在，请重新选择',account_disconnected:'所选上传账号已断开，请重新连接',account_not_ready:'所选上传账号尚未通过登录检查',ai_runtime_changed:'AI 运行时在选择后发生变化，请刷新并重建流程',ai_runtime_unsupported:'当前 AI 运行时或系统不受支持',ai_provider_not_found:'所选 AI provider 不存在',ai_provider_operation_unsupported:'所选 AI provider 不支持此操作',ai_model_not_found:'所选 AI 模型不存在',ai_model_operation_unsupported:'所选 AI 模型不支持此操作',ai_provider_auth_environment_invalid:'AI provider 凭据配置不安全',ai_voice_not_allowed:'所选音色已不在当前标准音色列表中，请重新选择'});
 const ledgerReviewCodes=new Set(['ai_remote_result_unknown','ai_remote_retry_blocked','ai_remote_reconciliation_required','ai_remote_accepted_without_result','ai_remote_abandoned']);
 Object.assign(codeNames,{workflow_preset_invalid:'预设参数无效，请核对后重新保存',workflow_preset_not_found:'预设不存在，请刷新列表',workflow_preset_conflict:'预设数量已达上限',workflow_preset_authorization_changed:'预设的 AI 能力已变化，请核对后保存新预设',workflow_preset_storage_unavailable:'预设文件不可读或校验失败，请检查本地存储'});
+Object.assign(codeNames,{workflow_cancellation_requested:'正在停止此流程最远端的任务；只有确认所有远端执行都已停止后才会标记为已取消',workflow_canceled:'流程及其最远端任务已确认停止'});
+Object.assign(codeNames,{download_batch_not_found:'下载批次不存在，无法确认停止状态',download_batch_mismatch:'下载批次与此流程不匹配，已拒绝取消',download_discovery_failed:'无法读取此流程可能已创建的下载批次，请检查下载记录后重试',download_discovery_unavailable:'当前适配器无法查找尚未写回流程的下载任务，请升级后重试',download_batch_conflict:'发现多个同名下载批次，无法确定应取消哪一个，请检查下载记录',download_input_set_invalid:'下载批次的输入记录不完整或来源不匹配，无法安全取消',download_cancellation_unavailable:'当前运行实例无法取消下载任务',download_cancellation_failed:'下载取消请求未被正确记录，请检查下载任务',download_input_not_found:'下载输入不存在，无法确认停止状态',download_state_unknown:'下载任务状态未知，请检查下载记录',download_cancellation_pending:'下载任务正在停止',ai_task_set_invalid:'AI 任务链不完整，无法安全取消',ai_task_state_unknown:'AI 任务状态未知，请到编辑页核对',ai_cancellation_pending:'AI 任务正在停止',edit_discovery_unavailable:'当前适配器无法查找尚未写回流程的编辑任务，请升级后重试',edit_request_invalid:'编辑请求记录不完整或与当前流程参数不一致，请到编辑页核对',edit_project_mismatch:'编辑项目与此流程的来源不匹配，已拒绝取消',edit_plan_mismatch:'编辑计划不属于此流程，已拒绝取消',edit_plan_set_invalid:'编辑重试链不完整，无法安全取消',edit_output_mismatch:'流程输出与编辑资产不匹配，已拒绝取消上传',edit_state_invalid:'编辑计划数据不完整，无法安全取消',edit_cancellation_pending:'编辑任务正在停止',edit_state_unknown:'编辑任务状态未知，请到编辑页核对',upload_discovery_unavailable:'当前适配器无法查找尚未写回流程的上传任务，请升级后重试',upload_request_invalid:'上传请求记录不完整，无法安全确定所属任务',upload_request_mismatch:'上传请求与当前标题、标签、封面、发布时间或平台参数不一致，已拒绝取消',upload_job_set_invalid:'上传任务与本流程记录不一致，无法安全取消',upload_job_not_found:'上传任务不存在，无法确认停止状态',upload_cancellation_failed:'上传取消请求未被正确记录，请检查上传任务',upload_state_unknown:'上传任务状态未知，请到上传页核对',upload_result_unknown:'平台是否已接收投稿仍未知，请到平台后台核对',upload_partially_completed:'部分平台任务已经完成，不能把整个流程标记为已取消；请逐个平台核对',upload_cancellation_pending:'上传任务正在停止'});
 function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('danger',error);}
 const pendingKeys=new Map();
 function readinessLabel(state){return {ready:'可执行',review:'需要核对',blocked:'未就绪',unknown:'状态未知',pending:'正在检查…'}[state]||'状态未知';}
@@ -217,8 +219,8 @@ function render(items){
     const plannedOutputs=Array.isArray(item.profile?.edit_recipe?.segments)&&item.profile.edit_recipe.segments.length?item.profile.edit_recipe.segments.length:1,plannedJobs=plannedOutputs*(Array.isArray(item.profile?.upload?.account_ids)?item.profile.upload.account_ids.length:0),preparedOutputs=Array.isArray(item.outputs)?item.outputs.filter(output=>output?.upload_source_id).length:0;
     copy.append(el('h3',item.name),el('p',(stateNames[item.state]||item.state)+' · 修订 '+item.revision,'muted'),el('p','成品 '+(item.edit_output_count||0)+' / '+plannedOutputs+' · 已准备 '+preparedOutputs+' / '+plannedOutputs+' · 上传任务 '+(item.upload_job_count||0)+' / '+plannedJobs,'muted small'));
     head.append(copy);
-    const actions=el('div',undefined,'row');
-    if(item.state==='awaiting_ai_review'&&item.code&&confirmationReady){
+    const actions=el('div',undefined,'row'),cancelRequested=item.code==='workflow_cancellation_requested';
+    if(!cancelRequested&&item.state==='awaiting_ai_review'&&item.code&&confirmationReady){
       if(item.code.endsWith('_review_required')&&!item.code.includes('restart')){
         const link=workflowFocus(el('a','在编辑页核对时间轴','button-link'),item.id+':review-timeline');
         link.href='/edits';
@@ -230,19 +232,19 @@ function render(items){
         actions.append(button);
       }
     }
-    if(item.state==='awaiting_edit_confirmation'&&confirmationReady){
+    if(!cancelRequested&&item.state==='awaiting_edit_confirmation'&&confirmationReady){
       const button=workflowFocus(el('button','确认开始编辑'),item.id+':confirm-edit');
       button.type='button';
       button.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/confirm-edit',{method:'POST',body:JSON.stringify({expected_revision:item.revision,expected_profile_sha256:item.profile_sha256})})));
       actions.append(button);
     }
-    if(item.state==='awaiting_upload_confirmation'){
+    if(!cancelRequested&&item.state==='awaiting_upload_confirmation'){
       const count=item.upload_job_count||plannedJobs,button=workflowFocus(el('button','确认 '+count+' 个任务上传'),item.id+':confirm-upload');
       button.type='button';
       button.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/confirm-upload',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
       actions.append(button);
     }
-    const needsLedgerReview=item.state==='attention_required'&&ledgerReviewCodes.has(item.code),aiRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_plan_id&&!(item.edit_output_ids||[]).length&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
+    const needsLedgerReview=!cancelRequested&&item.state==='attention_required'&&ledgerReviewCodes.has(item.code),aiRetry=!cancelRequested&&confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_project_id&&!item.edit_plan_id&&item.profile?.ai,renderRetry=!cancelRequested&&confirmationReady&&!needsLedgerReview&&item.state==='attention_required'&&item.edit_plan_id&&!(item.edit_output_ids||[]).length&&!['edit_output_shape_invalid','edit_state_unknown'].includes(item.code);
     if(needsLedgerReview){const ledger=workflowFocus(el('a','在编辑页核对远程调用账本','button-link'),item.id+':review-ledger');ledger.href='/edits';actions.append(ledger);}
     if(aiRetry||renderRetry){
       const retry=workflowFocus(el('button',renderRetry?'创建编辑重试计划':'创建 AI 重试任务'),item.id+':retry');
@@ -250,10 +252,13 @@ function render(items){
       retry.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/retry',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
       actions.append(retry);
     }
-    const advance=workflowFocus(el('button',needsLedgerReview?'核对后重新检查':'立即对账','secondary'),item.id+':advance');
-    advance.type='button';
-    advance.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/advance',{method:'POST'})));
-    actions.append(advance);
+    if(!['completed','canceled'].includes(item.state)){
+      const cancel=workflowFocus(el('button',cancelRequested?'重新检查取消':'取消流程','secondary'),item.id+':cancel');
+      cancel.type='button';
+      cancel.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/cancel',{method:'POST',body:JSON.stringify({expected_revision:item.revision})})));
+      actions.append(cancel);
+    }
+    if(!cancelRequested){const advance=workflowFocus(el('button',needsLedgerReview?'核对后重新检查':'立即对账','secondary'),item.id+':advance');advance.type='button';advance.addEventListener('click',()=>mutate(()=>api('/'+item.id+'/advance',{method:'POST'})));actions.append(advance);}
     head.append(actions);
     card.append(head);
     if(binding.enabled)card.append(el('p',binding.summary,binding.current?'muted small':'notice small'));
@@ -264,7 +269,7 @@ function render(items){
   }
   if(activeKey){const target=[...host.querySelectorAll('[data-workflow-focus]')].find(node=>node.dataset.workflowFocus===activeKey)||[...host.querySelectorAll('[data-workflow-card]')].find(node=>node.dataset.workflowCard===activeWorkflowId);if(target)requestAnimationFrame(()=>{if(document.activeElement===document.body||host.contains(document.activeElement))target.focus({preventScroll:true});});}
 }
-async function refresh(){const items=await api('');render(items);}
+async function refresh(){const sequence=++workflowRefreshSequence,items=await api('');if(sequence!==workflowRefreshSequence)return false;render(items);return true;}
 async function loadPresets(){
   const rows=await api('/presets');if(!Array.isArray(rows))throw new Error('预设列表格式错误');
   workflowPresets=rows;const select=$('preset-select'),prior=select.value;select.replaceChildren();
@@ -342,7 +347,7 @@ async function savePreset(){
   await loadPresets();
   try{if(generation===formGeneration&&JSON.stringify(canonical(profile))===JSON.stringify(canonical(workflowProfile({saving:true})))){appliedPreset=created;presetParameters=created;$('preset-select').value=created.id;changedUploadFields.clear();showPresetTargets(created.profile.upload.target_overrides);invalidateAiEgress();}}catch{}
 }
-async function mutate(work,{refreshAfter=true,successMessage='流程状态已更新。'}={}){if(busy)return;busy=true;document.querySelectorAll('button').forEach(node=>node.disabled=true);try{let result;try{result=await work();}catch(error){message(error.message,true);return;}if(refreshAfter)try{await refresh();}catch(error){message('操作已完成，但列表刷新失败；请点“刷新状态”：'+error.message,true);return result;}message(successMessage);return result;}finally{busy=false;document.querySelectorAll('button').forEach(node=>node.disabled=false);syncWorkflowSegmentControls();renderReadiness();}}
+async function mutate(work,{refreshAfter=true,successMessage='流程状态已更新。'}={}){if(busy)return;const activeControl=document.activeElement,activeKey=activeControl?.dataset.workflowFocus||'',activeWorkflowId=activeControl?.closest('[data-workflow-card]')?.dataset.workflowCard||'';busy=true;workflowRefreshSequence++;document.querySelectorAll('button').forEach(node=>node.disabled=true);try{let result;try{result=await work();}catch(error){message(error.message,true);return;}if(refreshAfter)try{await refresh();}catch(error){message('操作已完成，但列表刷新失败；请点“刷新状态”：'+error.message,true);return result;}message(successMessage);return result;}finally{busy=false;document.querySelectorAll('button').forEach(node=>node.disabled=false);syncWorkflowSegmentControls();renderReadiness();if(activeKey){const target=[...document.querySelectorAll('[data-workflow-focus]')].find(node=>node.dataset.workflowFocus===activeKey)||[...document.querySelectorAll('[data-workflow-card]')].find(node=>node.dataset.workflowCard===activeWorkflowId);if(target)target.focus({preventScroll:true});}}}
 $('save-preset').addEventListener('click',()=>mutate(()=>savePreset(),{refreshAfter:false,successMessage:'参数预设已保存。'}));
 let formGeneration=0;
 for(const eventName of ['input','change'])$('workflow-form').addEventListener(eventName,event=>{formGeneration++;if(event.target instanceof Element&&event.target.hasAttribute('data-upload-invalid'))clearResolvedUploadError(event.target);});

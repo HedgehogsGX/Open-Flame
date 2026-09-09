@@ -1,0 +1,174 @@
+# Open-Flame 外部完整测试手册
+
+本文件供受委托的开发者、测试员及其 AI 对一个**固定 Git 提交**进行验收。当前首批上传范围只有 **Bilibili、抖音、视频号**。测试结果必须区分本地合成验证、真实 AI 调用、平台接收、平台审核和公开发布；其中任一层成功都不能替代下一层。
+
+测试者完成后须基于[回传模板](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)输出一份独立 Markdown 文件，用它记录证据、失败复现和下一步开发入口。排障方法见[完整 Debug 指南](docs/DEBUG_GUIDE.md)。更细的上传矩阵见[上传器外部验收计划](docs/UPLOADER_TEST_PLAN.md)。
+
+## 1. 测试边界与结果词汇
+
+- 只使用测试者本人管理的账号，以及本人创作或已获授权下载、翻译、配音和投稿的媒体。
+- 不把 API key、Cookie、二维码、手机号、平台 session、完整本地用户名路径或未脱敏日志提交到仓库。
+- 每项只使用 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN`。`PASS` 必须写明观察到什么；`BLOCKED` 必须写明阻断条件；未执行的真实远端动作使用 `NOT RUN`。
+- `submitted` 只表示上游工具报告平台接收了投稿请求；`draft_saved` 只表示上游工具报告视频号草稿已保存。两者都要在平台后台核对，不能自动写成审核通过或公开成功。
+- 本地草稿、runtime `ready`、二维码出现、HTTP 200、合成 provider 成功及历史 receipt 都不是当前真实平台成功证据。
+- 测试期间不要直接编辑 SQLite、manifest、runtime 或账号私有目录。不要通过重复点击来“试出成功”；远端结果为 `unknown` 时先到平台后台核对。
+
+## 2. 固定被测提交
+
+在全新目录检出维护者指定的完整 40 位提交，不用会移动的分支名充当最终身份：
+
+```powershell
+$openFlameCommit = '<维护者提供的完整 40 位 Git SHA>'
+if ($openFlameCommit -notmatch '^[0-9a-f]{40}$') { throw '请填写完整提交 SHA' }
+git clone https://github.com/HedgehogsGX/Open-Flame.git Open-Flame-test
+Set-Location .\Open-Flame-test
+git checkout --detach $openFlameCommit
+git rev-parse HEAD
+git status --porcelain
+git show -s --format='author=%an <%ae>%ncommitter=%cn <%ce>%nsubject=%s' HEAD
+git config core.hooksPath .githooks
+git config --get core.hooksPath
+```
+
+`git status --porcelain` 在测试开始前应无输出。报告必须记录：完整 SHA、获取方式、Windows 版本、Python/Node 版本、CPU 架构、系统时区、浏览器版本、是否使用全新 app root、测试开始/结束时间。若使用维护者提供的源码 ZIP，还要记录 ZIP SHA-256；不要把 GitHub 自动 ZIP 的散列当作项目 release receipt。
+
+启动后从实际进程读取产品身份：
+
+```powershell
+$openFlameBase = 'http://127.0.0.1:8000'
+$identity = (Invoke-RestMethod -Uri "$openFlameBase/api/v1/capability-snapshot?limit=1").current_product_identity
+$health = Invoke-RestMethod -Uri "$openFlameBase/health"
+[pscustomobject]@{
+  git_commit = (git rev-parse HEAD)
+  product_identity = $identity
+  health = $health.status
+}
+```
+
+若产品身份缺失或报告 `product_build_drift`，停止该轮并重新核对启动目录。源码 SHA 与运行中的产品身份必须同时写入报告。
+
+## 3. 安装与运行前门槛
+
+先阅读 [Windows Setup](docs/WINDOWS_SETUP.md)、[启动与日志](docs/WINDOWS_LAUNCHER.md)、[AI runtime](docs/AI_RUNTIME.md)和[上传 runtime](docs/UPLOAD_RUNTIME.md)。需要 AI 的完整测试使用第二条 Setup 命令；不测试 AI 时使用第一条：
+
+```powershell
+# 不运行 AI 的上传测试：
+.\Setup-Open-Flame.cmd --yes --upload-runtime
+# 或者，运行 AI 与上传测试：
+# .\Setup-Open-Flame.cmd --yes --upload-runtime --ai-python-embed-zip '<文档指定的绝对 ZIP 路径>'
+
+# Setup 只安装产品运行依赖。完整 Git checkout 要执行第 4 节源码回归时，
+# 在应用启动前按 uv.lock 安装锁定的 dev extra：
+uv sync --extra dev --frozen
+
+.\Start-Open-Flame.cmd --no-open-browser
+```
+
+若不执行源码回归，可跳过 `uv sync`，保持普通产品运行环境。不得在应用运行期间修改 `.venv`；如已启动，先按 `Ctrl+C` 正常停止，再安装开发依赖并重新启动。报告须记录 `uv --version`；无法取得或安装锁定开发依赖时，把源码回归标为 `BLOCKED`，不要改用未锁定 pytest。
+
+在另一个 PowerShell 中记录四项就绪度：
+
+```powershell
+$openFlameBase = 'http://127.0.0.1:8000'
+Invoke-RestMethod "$openFlameBase/health/ready"
+Invoke-RestMethod "$openFlameBase/api/v1/operations/runtime"
+Invoke-RestMethod "$openFlameBase/api/v1/edits/ai/runtime"
+Invoke-RestMethod "$openFlameBase/api/v1/uploads/status"
+Invoke-RestMethod "$openFlameBase/api/v1/uploads/accounts"
+```
+
+真实 AI 测试只有在测试者自行配置本次 OpenAI key 后运行。真实平台测试只有在测试者本人决定扫码和提交后运行。若缺少 runtime、凭据或账号，把对应远端行标为 `BLOCKED` 或 `NOT RUN`，其余本地测试继续。
+
+## 4. 无凭据源码回归
+
+以下命令不得调用 OpenAI 或国内平台，且不应修改 `tests/`。当前开发基线的稳定回归集为：
+
+```powershell
+uv lock --check --offline
+uv pip check
+.\.venv\Scripts\python.exe -m compileall -q src
+.\.venv\Scripts\python.exe -m pytest -q `
+  tests/test_editing_service.py `
+  tests/test_editing_ai_contracts.py `
+  tests/test_upload_service.py `
+  tests/test_upload_resilience.py `
+  tests/test_upload_platform_parameters.py `
+  tests/test_upload_api.py `
+  tests/test_upload_backup_restore.py
+git diff --check
+git status --porcelain
+```
+
+报告保存每条命令、退出码、通过/失败/跳过数和运行时长。当前仓库另有少量仍断言历史 Schema/导航的旧测试；遇到失败必须逐项判断是既有过期断言还是产品回归，不能删除、改写或静默排除后宣称全绿。
+
+## 5. 四页人工功能检查
+
+在同一启动实例依次打开 `/`、`/edits`、`/uploads`、`/workflows`，在浅色、深色、系统主题及 320 px 窄视口检查：
+
+| ID | 页面 | 操作 | 预期 |
+| --- | --- | --- | --- |
+| UI-01 | 全部 | 键盘遍历导航、表单、details、按钮 | 焦点可见、顺序合理、无键盘陷阱；轮询不抢焦点。 |
+| UI-02 | 全部 | 输入文字、选择账号/任务、展开详情，等待至少 10 秒 | 轮询后输入、选择、焦点和展开状态保持。 |
+| UI-03 | 全部 | 系统/浅色/深色、减少动态效果、200% 文字缩放、320 px | 内容可读，无关键控件裁切或水平溢出。 |
+| DL-01 | 下载 | 提交一个合法自有 URL，观察 Batch/Input/Job/Asset | 阶段与错误码一致；ready 原件可进入编辑或显式导入上传。 |
+| ED-01 | 编辑 | 建立项目、分段、封面、保存新草稿、建计划 | 原件不被覆盖；计划冻结版本；未确认不运行 FFmpeg。 |
+| ED-02 | 编辑 | 取消 review/queued/running 计划，再显式重试 | 状态不倒退；重试产生明确 lineage，不自动沿用旧确认。 |
+| UP-01 | 上传 | 导入媒体/封面、创建本地草稿、刷新 | 未最终确认前平台无新增；详情中的平台参数与输入一致。 |
+| WF-01 | 自动流程 | 首次进入不选预设 | 显示“完整视频 · 0 段”；主动启用分段后出现 0–60 秒起始行。 |
+| WF-02 | 自动流程 | 保存/载入预设 | 不保存 URL、key、Cookie 或 session revision；本次云端外发仍需重新勾选。 |
+| WF-03 | 自动流程 | 启动后点击整流程取消 | 尚未发送的后续阶段停止；正在运行或取消中的最远任务显示等待；未知远端结果及部分平台已完成转为人工核对，不显示假取消。 |
+
+页面视觉检查只证明当前浏览器中的呈现。若维护者声明某个新视觉方向，报告应附四页桌面与窄屏截图，并单独记录透明度关闭/减少动态效果的结果。
+
+## 6. URL → AI → 三平台完整流程
+
+每轮使用唯一测试编号，例如 `OF-20260909-B1`，并把编号写入标题、源视频首帧或口播。先用 15–60 秒自有短片验证，再决定是否测试长片。完整视频、分段和每个平台分别判定。
+
+| ID | 场景 | 必须观察的结果 |
+| --- | --- | --- |
+| E2E-01 | 完整视频；听写、翻译、标准音色配音；仅一个平台 | 请求保持 `segments=[]`；成品时长接近完整源；译文、字幕、配音内容与时间基本对应；只建立所选账号的任务。 |
+| E2E-02 | 3 个连续分段 × 3 个平台账号 | 生成 3 个有序成品和 9 个精确任务；标题、标签、封面、发布时间及平台字段不串账号/平台；批量确认前均停在本地。 |
+| E2E-03 | 预设重用 | 换一个 URL 后恢复编辑/AI/投稿参数，但重新绑定当前 AI authorization 和账号 session；旧外发勾选不复用。 |
+| E2E-04 | 自动执行 | 明确勾选本次自动编辑/上传后，原始未派发任务可向前推进；重启后的 running、retry 或 unknown 不自动重放。 |
+| E2E-05 | 整流程取消 | 分别在下载、AI、渲染、上传草稿/排队阶段取消；后续阶段不再创建。运行中任务等待其原域确认停止；未知远端结果或部分平台已完成时停下核对。 |
+| E2E-06 | 输入/预算边界 | 超过当前 30 分钟听写、25 MiB 音频或文本/cue/request 硬上限 | 在 provider 请求前阻止；调用账本和平台均没有被掩盖的额外提交。 |
+
+真实 OpenAI 结果另记录：模型标识、源/目标语言、音色、用例时长、听写主要错误、翻译主要错误、配音缺字/错音/爆音/时间溢出、是否需要人工修订。不要把硬上限当作价格估算；费用以测试者自己的 provider 账单核对。
+
+真实平台从小到大执行：先 Bilibili、再抖音、最后视频号；每次只确认一个清楚核对过的草稿。到各平台后台记录平台是否接收、稿件/作品 ID、审核状态、公开状态、音画、标题、简介/正文、标签、封面、分区/声明、定时和平台专属字段。视频号 `draft_saved` 与 `submitted` 分开测试。详细用例和 unknown 处理遵循[上传器外部验收计划](docs/UPLOADER_TEST_PLAN.md)。
+
+## 7. 恢复与故障注入
+
+故障注入只在测试 app root 和测试账号上进行，不强杀或损坏维护者的真实数据目录。
+
+1. 在 download queued、AI review、AI queued、render review、render queued、upload draft、upload queued 分别正常退出并重启；记录恢复后的固定 code 和是否需要再确认。
+2. 对一个已知会失败的本地输入执行显式 retry；验证旧记录保留，新记录引用 predecessor，且同一重试请求不会产生多个 successor。
+3. 在远端调用可能已经发送后中断网络或进程；期望 `unknown`/reconciliation，而不是自动重试。先到 provider 或平台后台核对，再使用 UI 的明确核对入口。
+4. 更换上传账号 session、AI runtime manifest/model revision 或源媒体内容；旧 workflow/plan/job 应因绑定变化停止。
+5. 测试相同 URL 的并发/重复下载、应用正常重启和整个 Workflow 取消；记录是否出现无法继续的 duplicate owner、残留子任务或重复远端请求。
+6. 检查磁盘不足、runtime 缺失/损坏、调度器 standby、Worker paused/stale；修复后只用产品提供的刷新、retry、advance 或重建入口恢复，不直接改库。
+
+## 8. 证据与回传
+
+每个 `FAIL` 至少包含：固定提交、product identity、用例 ID、最小输入特征、准确步骤、预期、实际、UTC 与本地时间、页面固定错误码、相关 workflow/batch/project/plan/job ID、脱敏日志事件、是否发生远端动作、平台后台核对结果、重现次数。截图和媒体证据放在仓库外受控位置，报告只写经授权的引用和 SHA-256。
+
+测试者必须从[回传模板](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)生成一个文件。可在源码根目录执行：
+
+```powershell
+$shortSha = (git rev-parse --short=12 HEAD).Trim()
+$testerLabel = '<非隐私唯一测试轮次短标签>'
+if ($testerLabel -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { throw '测试者短标签只能使用小写字母、数字和连字符' }
+$reportDirectory = 'validation/external'
+$reportPath = Join-Path $reportDirectory "$(Get-Date -Format yyyyMMdd)-$shortSha-$testerLabel-handoff.md"
+if (Test-Path -LiteralPath $reportPath) { throw '报告路径已存在，请换一个非隐私测试轮次短标签' }
+New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
+Copy-Item 'docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md' $reportPath
+$reportPath
+```
+
+该文件既是验收报告，也是下一位开发者的入口，默认作为 Git 仓库中的交接记录。`testerLabel` 只用于区分测试轮次，不得使用 Windows/GitHub 用户名、姓名、手机号、账号 ID 或其他私有标识。报告必须列出未验证边界、按优先级排序的缺陷、首个可复现下一步、涉及文件/模块和禁止破坏的约束。新报告不会因位于 `validation/external/` 而自动进入 project-only release；只有维护者完成隐私与内容复核并把精确路径显式加入 `release-files.txt` 后，才可随该发行包交付。测试者若提交代码修复，应把测试报告和产品修改分成清晰提交，并不得加入凭据、账号私有数据、媒体、runtime、构建目录或新的/修改过的 `tests/` 文件。提交前须执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify_commit_scope.py --staged
+git diff --cached --check
+```

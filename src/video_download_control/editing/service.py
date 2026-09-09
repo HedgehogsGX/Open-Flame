@@ -54,6 +54,13 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
 _EMPTY_RECIPE = EditRecipe().to_dict()
+_AI_CANCELLATION_EVIDENCE_CODES = frozenset({
+    "ai_remote_result_unknown",
+    "ai_remote_retry_blocked",
+    "ai_remote_reconciliation_required",
+    "ai_remote_accepted_without_result",
+    "ai_remote_abandoned",
+})
 
 
 def default_editing_root(data_root: Path) -> Path:
@@ -447,6 +454,42 @@ class EditingService:
             "(invocation.state='reconciled' AND invocation.resolution IN "
             "('accepted_without_result','abandoned')) LIMIT 1",
             (owner_id,),
+        ).fetchone()
+        if blocked is not None:
+            raise EditingError("ai_remote_retry_blocked")
+
+    @staticmethod
+    def _assert_ai_invocation_cancellation_safe(
+        db: sqlite3.Connection,
+        owner_column: str,
+        owner_id: str,
+        *,
+        owner_state: str,
+        owner_code: str,
+    ) -> None:
+        """Preserve durable remote evidence while allowing an in-flight stop."""
+
+        owner_table = {
+            "ai_task_id": "ai_tasks",
+            "render_plan_id": "render_plans",
+        }.get(owner_column)
+        if owner_table is None:
+            raise EditingError("editing_data_invalid")
+        if owner_code in _AI_CANCELLATION_EVIDENCE_CODES:
+            raise EditingError(owner_code)
+        blocked = db.execute(
+            "WITH RECURSIVE retry_ancestry(id,retry_of) AS ("
+            f"SELECT id,retry_of FROM {owner_table} WHERE id=? UNION "
+            f"SELECT parent.id,parent.retry_of FROM {owner_table} parent "
+            "JOIN retry_ancestry child ON parent.id=child.retry_of) "
+            "SELECT 1 FROM ai_invocations invocation "
+            f"JOIN retry_ancestry owner ON invocation.{owner_column}=owner.id "
+            "WHERE invocation.state='unknown' OR "
+            "(invocation.state='reconciled' AND invocation.resolution IN "
+            "('accepted_without_result','abandoned')) OR "
+            "(invocation.state IN ('reserved','dispatched') AND NOT "
+            "(owner.id=? AND ? IN ('running','canceling'))) LIMIT 1",
+            (owner_id, owner_id, owner_state),
         ).fetchone()
         if blocked is not None:
             raise EditingError("ai_remote_retry_blocked")
@@ -901,6 +944,217 @@ class EditingService:
         with self._db() as db:
             return self._project_by_id(db, _identifier(project_id))
 
+    def workflow_artifacts_for_requests(
+        self,
+        project_request_key: str,
+        plan_request_key: str,
+        *,
+        expected_name: str | None = None,
+        expected_source_asset_id: str | None = None,
+        expected_recipe: EditRecipe | Mapping[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Discover workflow-owned editing artifacts without creating replacements."""
+
+        project_key = _request_id(project_request_key)
+        plan_key = _request_id(plan_request_key)
+        if project_key == plan_key:
+            raise EditingError("editing_request_invalid")
+        expected_recipe_value = None
+        expected_recipe_sha256 = None
+        if expected_recipe is not None:
+            expected_recipe_value, _encoded, expected_recipe_sha256 = (
+                _canonical_recipe(expected_recipe)
+            )
+        if expected_name is not None:
+            expected_name = _text(expected_name, 160, required=True)
+        if expected_source_asset_id is not None:
+            expected_source_asset_id = _source_asset_identifier(
+                expected_source_asset_id
+            )
+        with self._db() as db:
+            return self._workflow_artifacts_for_requests_in(
+                db,
+                project_key,
+                plan_key,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+                expected_recipe=expected_recipe_value,
+                expected_recipe_sha256=expected_recipe_sha256,
+            )
+
+    def _workflow_artifacts_for_requests_in(
+        self,
+        db: sqlite3.Connection,
+        project_key: str,
+        plan_key: str,
+        *,
+        expected_name: str | None = None,
+        expected_source_asset_id: str | None = None,
+        expected_recipe: EditRecipe | None = None,
+        expected_recipe_sha256: str | None = None,
+    ) -> dict[str, dict[str, Any] | None]:
+        project_request = db.execute(
+            "SELECT operation,digest,result_id FROM requests WHERE id=?", (project_key,)
+        ).fetchone()
+        plan_request = db.execute(
+            "SELECT operation,digest,result_id FROM requests WHERE id=?", (plan_key,)
+        ).fetchone()
+        if project_request is None:
+            if plan_request is not None:
+                raise EditingError("editing_request_invalid")
+            return {"project": None, "plan": None}
+        if project_request["operation"] == "cancel_workflow_project":
+            if (
+                expected_name is None
+                or expected_source_asset_id is None
+                or expected_recipe_sha256 is None
+                or not isinstance(project_request["digest"], str)
+                or _SHA256.fullmatch(project_request["digest"]) is None
+                or not hmac.compare_digest(
+                    project_request["digest"],
+                    _digest(
+                        "cancel_workflow_project",
+                        {
+                            "name": expected_name,
+                            "source_asset_id": expected_source_asset_id,
+                            "recipe_sha256": expected_recipe_sha256,
+                        },
+                    ),
+                )
+                or plan_request is None
+                or plan_request["operation"] != "cancel_workflow_plan"
+                or not isinstance(plan_request["digest"], str)
+                or _SHA256.fullmatch(plan_request["digest"]) is None
+                or not hmac.compare_digest(
+                    plan_request["digest"],
+                    _digest(
+                        "cancel_workflow_plan",
+                        {
+                            "project_id": None,
+                            "project_request_key": project_key,
+                        },
+                    ),
+                )
+            ):
+                raise EditingError("editing_request_invalid")
+            return {"project": None, "plan": None}
+        if project_request["operation"] != "create_project":
+            raise EditingError("editing_request_invalid")
+        try:
+            project = self._project_by_id(
+                db, _identifier(project_request["result_id"])
+            )
+        except EditingError as error:
+            if error.code in {"invalid_identifier", "project_not_found"}:
+                raise EditingError("editing_request_invalid") from None
+            raise
+        if (
+            expected_name is not None
+            and project.get("name") != expected_name
+            or expected_source_asset_id is not None
+            and project.get("source_asset_id") != expected_source_asset_id
+        ):
+            raise EditingError("edit_project_mismatch")
+        if expected_recipe_sha256 is not None:
+            expected_project_digest = _digest(
+                "create_project",
+                {
+                    "source_id": project.get("source_id"),
+                    "name": project.get("name"),
+                    "recipe_sha256": expected_recipe_sha256,
+                },
+            )
+            if (
+                not isinstance(project_request["digest"], str)
+                or _SHA256.fullmatch(project_request["digest"]) is None
+                or not hmac.compare_digest(
+                    project_request["digest"], expected_project_digest
+                )
+            ):
+                raise EditingError("editing_request_invalid")
+        plan = None
+        if plan_request is not None:
+            if plan_request["operation"] == "cancel_workflow_plan":
+                expected_tombstone_digest = _digest(
+                    "cancel_workflow_plan",
+                    {
+                        "project_id": project.get("id"),
+                        "project_request_key": project_key,
+                    },
+                )
+                if (
+                    not isinstance(plan_request["digest"], str)
+                    or _SHA256.fullmatch(plan_request["digest"]) is None
+                    or not hmac.compare_digest(
+                        plan_request["digest"], expected_tombstone_digest
+                    )
+                ):
+                    raise EditingError("editing_request_invalid")
+                return {"project": project, "plan": None}
+            if plan_request["operation"] != "create_plan":
+                raise EditingError("editing_request_invalid")
+            try:
+                plan = self._plan_by_id(
+                    db, _identifier(plan_request["result_id"])
+                )
+            except EditingError as error:
+                if error.code in {"invalid_identifier", "plan_not_found"}:
+                    raise EditingError("editing_request_invalid") from None
+                raise
+            if plan.get("project_id") != project.get("id"):
+                raise EditingError("editing_request_invalid")
+            expected_plan_digest = _digest(
+                "create_plan",
+                {
+                    "project_id": plan.get("project_id"),
+                    "expected_version": plan.get("draft_version"),
+                    "timeline_revision_id": plan.get("timeline_revision_id"),
+                },
+            )
+            if (
+                not isinstance(plan_request["digest"], str)
+                or _SHA256.fullmatch(plan_request["digest"]) is None
+                or not hmac.compare_digest(plan_request["digest"], expected_plan_digest)
+                or expected_recipe is not None
+                and not self._workflow_plan_recipe_matches(
+                    expected_recipe, plan.get("recipe")
+                )
+            ):
+                raise EditingError("editing_request_invalid")
+        return {"project": project, "plan": plan}
+
+    @staticmethod
+    def _workflow_plan_recipe_matches(
+        expected: EditRecipe, actual: object
+    ) -> bool:
+        """Allow only the deterministic AI-ready evolution of a workflow recipe."""
+
+        try:
+            actual_recipe = recipe_from_mapping(actual).to_dict()
+        except EditingError:
+            return False
+        expected_recipe = expected.to_dict()
+        if not (expected.translation.enabled or expected.dubbing.enabled):
+            return actual_recipe == expected_recipe
+        translation = actual_recipe.get("translation")
+        expected_translation = expected_recipe.get("translation")
+        dubbing = actual_recipe.get("dubbing")
+        expected_dubbing = expected_recipe.get("dubbing")
+        if (
+            not isinstance(translation, dict)
+            or not isinstance(expected_translation, dict)
+            or not isinstance(dubbing, dict)
+            or not isinstance(expected_dubbing, dict)
+            or translation.get("state") != "ready"
+            or expected.dubbing.enabled and dubbing.get("state") != "ready"
+        ):
+            return False
+        translation["source_language"] = expected_translation["source_language"]
+        translation["state"] = expected_translation["state"]
+        if expected.dubbing.enabled:
+            dubbing["state"] = expected_dubbing["state"]
+        return actual_recipe == expected_recipe
+
     def create_ai_task(
         self,
         project_id: str,
@@ -1168,16 +1422,30 @@ class EditingService:
                 return result
             return None
 
-    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
-        task_id = _identifier(task_id)
-        with self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
+    def _cancel_ai_task_ids_in(
+        self, db: sqlite3.Connection, task_ids: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        rows: list[sqlite3.Row] = []
+        for task_id in task_ids:
             row = db.execute(
-                "SELECT state FROM ai_tasks WHERE id=?", (task_id,)
+                "SELECT state,code FROM ai_tasks WHERE id=?", (task_id,)
             ).fetchone()
             if row is None:
                 raise EditingError("ai_task_not_found")
-            now = _now()
+            if db.execute(
+                "SELECT 1 FROM ai_tasks WHERE retry_of=? LIMIT 1", (task_id,)
+            ).fetchone() is not None:
+                raise EditingError("ai_task_retry_lineage_changed")
+            self._assert_ai_invocation_cancellation_safe(
+                db,
+                "ai_task_id",
+                task_id,
+                owner_state=row["state"],
+                owner_code=row["code"],
+            )
+            rows.append(row)
+        now = _now()
+        for task_id, row in zip(task_ids, rows, strict=True):
             if row["state"] in {"review", "queued"}:
                 db.execute(
                     "UPDATE ai_tasks SET state='canceled',code='canceled',"
@@ -1190,7 +1458,90 @@ class EditingService:
                     "code='cancellation_requested',updated_at=? WHERE id=?",
                     (now, task_id),
                 )
-            return self._ai_task_by_id(db, task_id)
+        return [self._ai_task_by_id(db, task_id) for task_id in task_ids]
+
+    def cancel_ai_tasks(self, task_ids: Sequence[str]) -> list[dict[str, Any]]:
+        if (
+            not isinstance(task_ids, Sequence)
+            or isinstance(task_ids, (str, bytes))
+            or not task_ids
+        ):
+            raise EditingError("invalid_ai_task_batch")
+        normalized_ids = [_identifier(task_id) for task_id in task_ids]
+        if len(set(normalized_ids)) != len(normalized_ids):
+            raise EditingError("invalid_ai_task_batch")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self._cancel_ai_task_ids_in(db, normalized_ids)
+
+    def cancel_ai_project_tasks(self, project_id: str) -> list[dict[str, Any]]:
+        """Atomically validate a project's complete retry graph and stop every leaf."""
+
+        project_id = _identifier(project_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self._cancel_ai_project_tasks_in(db, project_id)
+
+    def _cancel_ai_project_tasks_in(
+        self, db: sqlite3.Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        if db.execute(
+            "SELECT 1 FROM projects WHERE id=?", (project_id,)
+        ).fetchone() is None:
+            raise EditingError("project_not_found")
+        rows = db.execute(
+            "SELECT * FROM ai_tasks WHERE project_id=? ORDER BY created_at,id",
+            (project_id,),
+        ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        successor_by_parent: dict[str, str] = {}
+        try:
+            for row in rows:
+                task = self._ai_task_from_row(row)[0]
+                task_id = task["id"]
+                if task["project_id"] != project_id or task_id in records:
+                    raise EditingError("ai_task_set_invalid")
+                records[task_id] = task
+            for task_id, task in records.items():
+                parent_id = task["retry_of"]
+                if parent_id is None:
+                    continue
+                parent = records.get(parent_id)
+                if (
+                    parent is None
+                    or parent_id == task_id
+                    or parent_id in successor_by_parent
+                    or any(
+                        task[field] != parent[field]
+                        for field in (
+                            "operation",
+                            "source_revision_id",
+                            "request_sha256",
+                        )
+                    )
+                ):
+                    raise EditingError("ai_task_set_invalid")
+                successor_by_parent[parent_id] = task_id
+            for task_id in records:
+                seen: set[str] = set()
+                cursor = task_id
+                while cursor in successor_by_parent:
+                    if cursor in seen:
+                        raise EditingError("ai_task_set_invalid")
+                    seen.add(cursor)
+                    cursor = successor_by_parent[cursor]
+        except EditingError as error:
+            if error.code == "ai_task_set_invalid":
+                raise
+            raise EditingError("ai_task_set_invalid") from error
+
+        leaf_ids = [
+            task_id for task_id in records if task_id not in successor_by_parent
+        ]
+        return self._cancel_ai_task_ids_in(db, leaf_ids)
+
+    def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
+        return self.cancel_ai_tasks((task_id,))[0]
 
     def ai_task_cancellation_requested(self, task_id: str, claim_token: str) -> bool:
         task_id, claim_token = _identifier(task_id), _identifier(claim_token)
@@ -1733,21 +2084,220 @@ class EditingService:
         plan_id = _identifier(plan_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT state FROM render_plans WHERE id=?", (plan_id,)).fetchone()
-            if row is None:
-                raise EditingError("plan_not_found")
-            now = _now()
-            if row["state"] in {"review", "queued"}:
-                db.execute(
-                    "UPDATE render_plans SET state='canceled',code='canceled',"
-                    "updated_at=?,finished_at=? WHERE id=?", (now, now, plan_id),
+            return self._cancel_plan_in(db, plan_id)
+
+    def _cancel_plan_in(
+        self, db: sqlite3.Connection, plan_id: str
+    ) -> dict[str, Any]:
+        row = db.execute(
+            "SELECT state,code FROM render_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise EditingError("plan_not_found")
+        if db.execute(
+            "SELECT 1 FROM render_plans WHERE retry_of=? LIMIT 1", (plan_id,)
+        ).fetchone() is not None:
+            raise EditingError("render_retry_lineage_changed")
+        self._assert_ai_invocation_cancellation_safe(
+            db,
+            "render_plan_id",
+            plan_id,
+            owner_state=row["state"],
+            owner_code=row["code"],
+        )
+        now = _now()
+        if row["state"] in {"review", "queued"}:
+            db.execute(
+                "UPDATE render_plans SET state='canceled',code='canceled',"
+                "updated_at=?,finished_at=? WHERE id=?", (now, now, plan_id),
+            )
+        elif row["state"] == "running":
+            db.execute(
+                "UPDATE render_plans SET state='canceling',code='cancellation_requested',"
+                "updated_at=? WHERE id=?", (now, plan_id),
+            )
+        return self._plan_by_id(db, plan_id)
+
+    def _latest_plan_for_project_in(
+        self,
+        db: sqlite3.Connection,
+        root_plan_id: str,
+        project_id: str,
+    ) -> dict[str, Any]:
+        rows = db.execute(
+            "SELECT * FROM render_plans WHERE project_id=? ORDER BY created_at,id",
+            (project_id,),
+        ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        successors: dict[str, str] = {}
+        try:
+            for row in rows:
+                plan = self._plan_public(db, row)
+                plan_id = _identifier(plan["id"])
+                if plan.get("project_id") != project_id or plan_id in records:
+                    raise EditingError("edit_plan_set_invalid")
+                records[plan_id] = plan
+            if root_plan_id not in records:
+                raise EditingError("edit_plan_mismatch")
+            for plan_id, plan in records.items():
+                parent_id = plan.get("retry_of")
+                if parent_id is None:
+                    continue
+                parent_id = _identifier(parent_id)
+                parent = records.get(parent_id)
+                if (
+                    parent is None
+                    or parent_id == plan_id
+                    or parent_id in successors
+                    or any(
+                        plan.get(field) != parent.get(field)
+                        for field in (
+                            "draft_version",
+                            "recipe_sha256",
+                            "timeline_revision_id",
+                        )
+                    )
+                ):
+                    raise EditingError("edit_plan_set_invalid")
+                successors[parent_id] = plan_id
+            for plan_id in records:
+                cursor = plan_id
+                seen: set[str] = set()
+                while cursor in successors:
+                    if cursor in seen:
+                        raise EditingError("edit_plan_set_invalid")
+                    seen.add(cursor)
+                    cursor = successors[cursor]
+        except EditingError as error:
+            if error.code in {"edit_plan_set_invalid", "edit_plan_mismatch"}:
+                raise
+            raise EditingError("edit_plan_set_invalid") from error
+        leaf_id = root_plan_id
+        while leaf_id in successors:
+            leaf_id = successors[leaf_id]
+        return records[leaf_id]
+
+    def cancel_workflow_request_artifacts(
+        self,
+        project_request_key: str,
+        plan_request_key: str,
+        *,
+        expected_project_id: str | None,
+        expected_name: str,
+        expected_source_asset_id: str,
+        expected_recipe: EditRecipe | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Discover and stop the furthest editing leaf in one write transaction."""
+
+        project_key = _request_id(project_request_key)
+        plan_key = _request_id(plan_request_key)
+        if project_key == plan_key:
+            raise EditingError("editing_request_invalid")
+        if expected_project_id is not None:
+            expected_project_id = _identifier(expected_project_id)
+        expected_name = _text(expected_name, 160, required=True)
+        expected_source_asset_id = _source_asset_identifier(
+            expected_source_asset_id
+        )
+        normalized_recipe, _encoded, recipe_sha256 = _canonical_recipe(
+            expected_recipe
+        )
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            artifacts = self._workflow_artifacts_for_requests_in(
+                db,
+                project_key,
+                plan_key,
+                expected_name=expected_name,
+                expected_source_asset_id=expected_source_asset_id,
+                expected_recipe=normalized_recipe,
+                expected_recipe_sha256=recipe_sha256,
+            )
+            project = artifacts["project"]
+            plan = artifacts["plan"]
+            if project is None:
+                if plan is not None or expected_project_id is not None:
+                    raise EditingError("editing_request_invalid")
+                if db.execute(
+                    "SELECT 1 FROM requests WHERE id=?", (project_key,)
+                ).fetchone() is None:
+                    self._insert_request(
+                        db,
+                        project_key,
+                        "cancel_workflow_project",
+                        _digest(
+                            "cancel_workflow_project",
+                            {
+                                "name": expected_name,
+                                "source_asset_id": expected_source_asset_id,
+                                "recipe_sha256": recipe_sha256,
+                            },
+                        ),
+                        expected_source_asset_id,
+                        _now(),
+                    )
+                if db.execute(
+                    "SELECT 1 FROM requests WHERE id=?", (plan_key,)
+                ).fetchone() is None:
+                    self._insert_request(
+                        db,
+                        plan_key,
+                        "cancel_workflow_plan",
+                        _digest(
+                            "cancel_workflow_plan",
+                            {
+                                "project_id": None,
+                                "project_request_key": project_key,
+                            },
+                        ),
+                        project_key,
+                        _now(),
+                    )
+                return {
+                    "kind": "none",
+                    "project": None,
+                    "plan": None,
+                    "ai_tasks": [],
+                }
+            project_id = _identifier(project["id"])
+            if expected_project_id is not None and project_id != expected_project_id:
+                raise EditingError("edit_project_mismatch")
+            if plan is not None:
+                root_plan_id = _identifier(plan["id"])
+                leaf = self._latest_plan_for_project_in(
+                    db, root_plan_id, project_id
                 )
-            elif row["state"] == "running":
-                db.execute(
-                    "UPDATE render_plans SET state='canceling',code='cancellation_requested',"
-                    "updated_at=? WHERE id=?", (now, plan_id),
+                canceled_plan = self._cancel_plan_in(db, leaf["id"])
+                return {
+                    "kind": "plan",
+                    "project": project,
+                    "plan": canceled_plan,
+                    "ai_tasks": [],
+                }
+            canceled_tasks = self._cancel_ai_project_tasks_in(db, project_id)
+            if db.execute(
+                "SELECT 1 FROM requests WHERE id=?", (plan_key,)
+            ).fetchone() is None:
+                self._insert_request(
+                    db,
+                    plan_key,
+                    "cancel_workflow_plan",
+                    _digest(
+                        "cancel_workflow_plan",
+                        {
+                            "project_id": project_id,
+                            "project_request_key": project_key,
+                        },
+                    ),
+                    project_id,
+                    _now(),
                 )
-            return self._plan_by_id(db, plan_id)
+            return {
+                "kind": "ai",
+                "project": project,
+                "plan": None,
+                "ai_tasks": canceled_tasks,
+            }
 
     def plan_cancellation_requested(self, plan_id: str, claim_token: str) -> bool:
         plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)

@@ -6,6 +6,7 @@ never retried automatically. The immutable local draft remains reviewable.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import struct
 import threading
 import time
 import zlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import wraps
@@ -1999,7 +2000,7 @@ class UploadService:
                 root = self._get_job(db, root_id)
                 current = root
                 seen = {root_id}
-                for _ in range(32):
+                while True:
                     successors = list(
                         db.execute(
                             "SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid",
@@ -2021,12 +2022,280 @@ class UploadService:
                     ):
                         raise UploadError("job_retry_lineage_invalid")
                     current = successor
-                else:
-                    raise UploadError("job_retry_lineage_invalid")
                 leaves.append(current)
         if len({job["id"] for job in leaves}) != len(leaves):
             raise UploadError("job_retry_lineage_invalid")
         return leaves
+
+    def jobs_for_request(
+        self,
+        idempotency_key: str,
+        *,
+        expected_request: Mapping[str, object] | None = None,
+    ) -> list[dict] | None:
+        """Read the immutable roots created by one idempotent fan-out request."""
+
+        if (
+            not isinstance(idempotency_key, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+        ):
+            raise UploadError("invalid_idempotency_key")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            expected_targets: list[dict] | None = None
+            expected_source_id: str | None = None
+            if expected_request is not None:
+                try:
+                    expected_source_id, expected_targets, expected_digest = (
+                        self._workflow_request_identity_in(db, expected_request)
+                    )
+                except (KeyError, TypeError, UploadError, ValueError):
+                    raise UploadError("upload_request_invalid") from None
+                if (
+                    row["digest_version"] != 2
+                    or not isinstance(row["digest"], str)
+                    or _SHA256.fullmatch(row["digest"]) is None
+                    or not hmac.compare_digest(row["digest"], expected_digest)
+                ):
+                    raise UploadError("upload_request_mismatch")
+            return self._request_jobs_from_row_in(
+                db,
+                row,
+                expected_source_id=expected_source_id,
+                expected_targets=expected_targets,
+            )
+
+    @_requires_activity
+    def claim_workflow_request_for_cancellation(
+        self,
+        idempotency_key: str,
+        *,
+        expected_request: Mapping[str, object],
+    ) -> list[dict] | None:
+        """Atomically discover a workflow fan-out or tombstone its stable key."""
+
+        if (
+            not isinstance(idempotency_key, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+        ):
+            raise UploadError("invalid_idempotency_key")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                source_id, targets, expected_digest = (
+                    self._workflow_request_identity_in(db, expected_request)
+                )
+            except (KeyError, TypeError, UploadError, ValueError):
+                raise UploadError("upload_request_invalid") from None
+            row = db.execute(
+                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO requests(id,digest,job_ids,digest_version) "
+                    "VALUES(?,?,?,2)",
+                    (idempotency_key, expected_digest, "[]"),
+                )
+                return None
+            if (
+                row["digest_version"] != 2
+                or not isinstance(row["digest"], str)
+                or _SHA256.fullmatch(row["digest"]) is None
+                or not hmac.compare_digest(row["digest"], expected_digest)
+            ):
+                raise UploadError("upload_request_mismatch")
+            try:
+                existing_ids = json.loads(row["job_ids"])
+            except (TypeError, ValueError):
+                raise UploadError("upload_request_invalid") from None
+            if existing_ids == []:
+                return None
+            return self._request_jobs_from_row_in(
+                db,
+                row,
+                expected_source_id=source_id,
+                expected_targets=targets,
+            )
+
+    def _request_jobs_from_row_in(
+        self,
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        expected_source_id: str | None = None,
+        expected_targets: Sequence[Mapping[str, object]] | None = None,
+    ) -> list[dict]:
+        try:
+            job_ids = json.loads(row["job_ids"])
+        except (TypeError, ValueError):
+            raise UploadError("upload_request_invalid") from None
+        if (
+            row["digest_version"] not in {1, 2}
+            or not isinstance(row["digest"], str)
+            or _SHA256.fullmatch(row["digest"]) is None
+            or not isinstance(job_ids, list)
+            or not 1 <= len(job_ids) <= 20
+            or any(
+                not isinstance(job_id, str) or _ID.fullmatch(job_id) is None
+                for job_id in job_ids
+            )
+            or len(set(job_ids)) != len(job_ids)
+        ):
+            raise UploadError("upload_request_invalid")
+        try:
+            jobs = [self._get_job(db, job_id) for job_id in job_ids]
+        except (json.JSONDecodeError, TypeError, UploadError) as error:
+            if isinstance(error, (json.JSONDecodeError, TypeError)):
+                raise UploadError("upload_request_invalid") from None
+            if error.code == "job_not_found":
+                raise UploadError("upload_request_invalid") from None
+            raise
+        if expected_targets is not None and expected_source_id is not None:
+            if len(jobs) != len(expected_targets) or any(
+                job.get("source_id") != expected_source_id
+                or any(
+                    job.get(field) != target[field]
+                    for field in (
+                        "account_id",
+                        "platform",
+                        "title",
+                        "description",
+                        "tags",
+                        "category_id",
+                        "mode",
+                        "copyright",
+                        "source_credit",
+                        "cover_landscape_asset_id",
+                        "cover_portrait_asset_id",
+                        "publish_at_unix",
+                        "publish_timezone_offset_minutes",
+                        "platform_options",
+                    )
+                )
+                for job, target in zip(jobs, expected_targets, strict=True)
+            ):
+                raise UploadError("upload_request_mismatch")
+        return jobs
+
+    def _workflow_request_identity_in(
+        self, db: sqlite3.Connection, expected: Mapping[str, object]
+    ) -> tuple[str, list[dict], str]:
+        source_id, targets = self._workflow_request_targets_in(db, expected)
+        digest_payload = {
+            "source_id": source_id,
+            "targets": sorted(targets, key=lambda item: item["account_id"]),
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                digest_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return source_id, targets, digest
+
+    def _workflow_request_targets_in(
+        self, db: sqlite3.Connection, expected: Mapping[str, object]
+    ) -> tuple[str, list[dict]]:
+        expected_keys = {
+            "source_id",
+            "account_ids",
+            "title",
+            "description",
+            "tags",
+            "category_id",
+            "mode",
+            "copyright",
+            "source_credit",
+            "target_overrides",
+        }
+        if not isinstance(expected, Mapping) or set(expected) != expected_keys:
+            raise UploadError("upload_request_invalid")
+        source_id = _identifier(expected["source_id"])
+        account_ids = expected["account_ids"]
+        if (
+            not isinstance(account_ids, Sequence)
+            or isinstance(account_ids, (str, bytes))
+            or not 1 <= len(account_ids) <= 20
+        ):
+            raise UploadError("upload_request_invalid")
+        normalized_account_ids = [_identifier(item) for item in account_ids]
+        if len(set(normalized_account_ids)) != len(normalized_account_ids):
+            raise UploadError("upload_request_invalid")
+        title = _text(expected["title"], 100, required=True)
+        description = _text(expected["description"], 2000)
+        tags = self._normalize_tags(expected["tags"])
+        category_id = expected["category_id"]
+        mode = expected["mode"]
+        copyright_value = expected["copyright"]
+        source_credit = _text(expected["source_credit"], 200)
+        if (
+            mode not in {"publish", "draft"}
+            or category_id is not None
+            and (type(category_id) is not int or not 1 <= category_id <= 10_000)
+            or copyright_value is not None
+            and (type(copyright_value) is not int or copyright_value not in {1, 2})
+        ):
+            raise UploadError("upload_request_invalid")
+        raw_overrides = expected["target_overrides"]
+        if (
+            not isinstance(raw_overrides, Sequence)
+            or isinstance(raw_overrides, (str, bytes))
+            or len(raw_overrides) > len(normalized_account_ids)
+        ):
+            raise UploadError("upload_request_invalid")
+        override_map: dict[str, dict] = {}
+        for raw in raw_overrides:
+            if (
+                not isinstance(raw, Mapping)
+                or set(raw) - _TARGET_OVERRIDE_KEYS
+                or set(raw) == {"account_id"}
+            ):
+                raise UploadError("upload_request_invalid")
+            account_id = _identifier(raw.get("account_id"))
+            if account_id not in normalized_account_ids or account_id in override_map:
+                raise UploadError("upload_request_invalid")
+            override_map[account_id] = dict(raw)
+        base = {
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "category_id": category_id,
+            "mode": mode,
+            "copyright": copyright_value,
+            "source_credit": source_credit,
+            "cover_landscape_asset_id": None,
+            "cover_portrait_asset_id": None,
+            "publish_at_unix": None,
+            "publish_timezone_offset_minutes": None,
+            "platform_options": {},
+        }
+        targets: list[dict] = []
+        for account_id in normalized_account_ids:
+            account = db.execute(
+                "SELECT * FROM accounts WHERE id=?", (account_id,)
+            ).fetchone()
+            if account is None:
+                raise UploadError("upload_request_invalid")
+            targets.append(
+                self._normalize_target(
+                    db=db,
+                    account=account,
+                    base=base,
+                    override=override_map.get(account_id, {}),
+                    verify_assets=False,
+                    enforce_schedule=False,
+                )
+            )
+        return source_id, targets
 
     def _get_job(self, db, job_id: str) -> dict:
         row = db.execute(self._job_query() + " WHERE j.id=?", (_identifier(job_id),)).fetchone()
@@ -2272,6 +2541,7 @@ class UploadService:
         expected: list[dict] | None,
         *,
         verify_account_ids: set[str] | None = None,
+        verify_current_session: bool = True,
     ) -> None:
         if expected is None:
             return
@@ -2308,7 +2578,13 @@ class UploadService:
             raise UploadError("invalid_account_bindings")
         for account_id in verify_account_ids:
             account = accounts_by_id[account_id]
-            if by_id.get(account_id) != self._workflow_account_binding(db, account):
+            expected_binding = by_id.get(account_id)
+            current_binding = self._workflow_account_binding(db, account)
+            if expected_binding is None or (
+                expected_binding != current_binding
+                if verify_current_session
+                else expected_binding["platform"] != current_binding["platform"]
+            ):
                 raise UploadError("account_session_changed")
 
     @_requires_activity
@@ -2471,6 +2747,13 @@ class UploadService:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             prior = db.execute("SELECT * FROM requests WHERE id=?", (idempotency_key,)).fetchone()
+            if prior is not None:
+                try:
+                    prior_job_ids = json.loads(prior["job_ids"])
+                except (TypeError, ValueError):
+                    raise UploadError("idempotency_conflict") from None
+                if prior_job_ids == []:
+                    raise UploadError("idempotency_conflict")
             accounts_by_id = {}
             for account_id in account_ids:
                 account = db.execute(
@@ -2534,7 +2817,7 @@ class UploadService:
                         raise UploadError("idempotency_conflict")
                 if prior["digest_version"] not in {1, 2}:
                     raise UploadError("idempotency_conflict")
-                return [self._get_job(db, job_id) for job_id in json.loads(prior["job_ids"])]
+                return [self._get_job(db, job_id) for job_id in prior_job_ids]
             if tags_error is not None:
                 raise tags_error
             assert tags is not None
@@ -2715,18 +2998,198 @@ class UploadService:
             job["cover_portrait_asset_id"],
         )
 
+    @staticmethod
+    def _cancel_batch(
+        job_ids: Sequence[str],
+        expected_targets: Sequence[Mapping[str, str]] | None,
+    ) -> tuple[tuple[str, ...], tuple[dict[str, str], ...] | None]:
+        if (
+            not isinstance(job_ids, Sequence)
+            or isinstance(job_ids, (str, bytes))
+            or not 1 <= len(job_ids) <= 30
+        ):
+            raise UploadError("invalid_job_batch")
+        normalized_ids: list[str] = []
+        seen: set[str] = set()
+        for job_id in job_ids:
+            try:
+                normalized_id = _identifier(job_id)
+            except UploadError:
+                raise UploadError("invalid_job_batch") from None
+            if normalized_id in seen:
+                raise UploadError("invalid_job_batch")
+            seen.add(normalized_id)
+            normalized_ids.append(normalized_id)
+
+        if expected_targets is None:
+            return tuple(normalized_ids), None
+        if (
+            not isinstance(expected_targets, Sequence)
+            or isinstance(expected_targets, (str, bytes))
+            or len(expected_targets) != len(normalized_ids)
+        ):
+            raise UploadError("invalid_job_batch")
+        normalized_targets: list[dict[str, str]] = []
+        for index, target in enumerate(expected_targets):
+            if not isinstance(target, Mapping) or set(target) != {
+                "job_id", "source_id", "account_id", "platform",
+            }:
+                raise UploadError("invalid_job_batch")
+            try:
+                target_job_id = _identifier(target.get("job_id"))
+                source_id = _identifier(target.get("source_id"))
+                account_id = _identifier(target.get("account_id"))
+            except UploadError:
+                raise UploadError("invalid_job_batch") from None
+            platform = target.get("platform")
+            if (
+                target_job_id != normalized_ids[index]
+                or not isinstance(platform, str)
+                or platform not in PLATFORMS
+            ):
+                raise UploadError("invalid_job_batch")
+            normalized_targets.append({
+                "job_id": target_job_id,
+                "source_id": source_id,
+                "account_id": account_id,
+                "platform": platform,
+            })
+        return tuple(normalized_ids), tuple(normalized_targets)
+
+    def _cancel_current_jobs(
+        self,
+        db: sqlite3.Connection,
+        job_ids: tuple[str, ...],
+        expected_targets: tuple[dict[str, str], ...] | None,
+        expected_account_bindings: list[dict] | None,
+    ) -> tuple[list[dict], tuple[threading.Event, ...]]:
+        jobs = [self._get_job(db, job_id) for job_id in job_ids]
+        if expected_targets is not None and any(
+            job["id"] != expected["job_id"]
+            or any(
+                job[field] != expected[field]
+                for field in ("source_id", "account_id", "platform")
+            )
+            for job, expected in zip(jobs, expected_targets, strict=True)
+        ):
+            raise UploadError("invalid_job_batch")
+        if expected_targets is not None and any(
+            db.execute(
+                "SELECT 1 FROM jobs WHERE retry_of=? LIMIT 1", (job["id"],)
+            ).fetchone()
+            is not None
+            for job in jobs
+        ):
+            # The caller resolved these rows as retry leaves before entering
+            # this transaction. A new successor means that view is stale; do
+            # not report cancellation while a newer child remains active.
+            raise UploadError("job_retry_lineage_changed")
+        if expected_account_bindings is not None:
+            account_ids = {job["account_id"] for job in jobs}
+            accounts_by_id = {
+                account_id: db.execute(
+                    "SELECT * FROM accounts WHERE id=?", (account_id,)
+                ).fetchone()
+                for account_id in account_ids
+            }
+            if any(account is None for account in accounts_by_id.values()):
+                raise UploadError("account_not_found")
+            self._validate_workflow_account_bindings(
+                db,
+                accounts_by_id,
+                expected_account_bindings,
+                verify_account_ids=set(accounts_by_id),
+                # A login revision authorizes dispatch; it is not required to
+                # stop immutable jobs whose exact target identity still
+                # matches. Re-login must never make emergency cancellation
+                # unavailable.
+                verify_current_session=False,
+            )
+
+        now = _now()
+        cancellable = [
+            ("canceled", "canceled", now, job["id"])
+            for job in jobs
+            if job["state"] in ("draft", "queued")
+        ]
+        cancellation_requested = [
+            ("cancellation_requested", now, job["id"])
+            for job in jobs
+            if job["state"] == "running"
+        ]
+        if cancellable:
+            db.executemany(
+                "UPDATE jobs SET state=?,code=?,updated_at=? WHERE id=?",
+                cancellable,
+            )
+        if cancellation_requested:
+            db.executemany(
+                "UPDATE jobs SET code=?,updated_at=? WHERE id=?",
+                cancellation_requested,
+            )
+        running_ids = {item[2] for item in cancellation_requested}
+        stops = (
+            (self._operation_stop,)
+            if self._active_id is not None and self._active_id in running_ids
+            else ()
+        )
+        return [self._get_job(db, job_id) for job_id in job_ids], stops
+
     @_requires_activity
     def cancel(self, job_id: str) -> dict:
-        with self._active_guard, self._db() as db:
-            db.execute("BEGIN IMMEDIATE")
-            job = self._get_job(db, job_id)
-            if job["state"] in ("draft", "queued"):
-                db.execute("UPDATE jobs SET state='canceled',code='canceled',updated_at=? WHERE id=?", (_now(), job_id))
-            elif job["state"] == "running":
-                db.execute("UPDATE jobs SET code='cancellation_requested',updated_at=? WHERE id=?", (_now(), job_id))
-                if self._active_id == job_id:
-                    self._operation_stop.set()
-            return self._get_job(db, job_id)
+        normalized_id = _identifier(job_id)
+        with self._active_guard:
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                jobs, stops = self._cancel_current_jobs(
+                    db, (normalized_id,), None, None
+                )
+            for stop in stops:
+                stop.set()
+        return jobs[0]
+
+    @_requires_activity
+    def cancel_many(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]] | None = None,
+        expected_account_bindings: Sequence[Mapping[str, str]] | None = None,
+    ) -> list[dict]:
+        """Cancel current upload jobs together without following retry lineage."""
+
+        normalized_ids, normalized_targets = self._cancel_batch(
+            job_ids, expected_targets
+        )
+        if expected_account_bindings is None:
+            normalized_bindings = None
+        elif (
+            not isinstance(expected_account_bindings, Sequence)
+            or isinstance(expected_account_bindings, (str, bytes))
+            or any(
+                not isinstance(binding, Mapping)
+                for binding in expected_account_bindings
+            )
+        ):
+            raise UploadError("invalid_account_bindings")
+        else:
+            normalized_bindings = [
+                dict(binding) for binding in expected_account_bindings
+            ]
+        with self._active_guard:
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                jobs, stops = self._cancel_current_jobs(
+                    db,
+                    normalized_ids,
+                    normalized_targets,
+                    normalized_bindings,
+                )
+            # The transaction must commit before a backend can observe its stop
+            # event and finalize the running job.
+            for stop in stops:
+                stop.set()
+        return jobs
 
     @_requires_activity
     def retry(self, job_id: str, acknowledge_unknown: bool = False) -> dict:
