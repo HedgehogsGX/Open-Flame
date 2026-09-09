@@ -9,7 +9,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-WORKFLOW_SHA256 = "680d963b2070da14742c4d24fb83c0eb7fe3978789dcaf2597fa8129933d3213"
+WORKFLOW_SHA256 = "0b6338b43e2f3f707252fe2f3467a9c4d95003f11e6da25894d40dfe2e327f77"
+MATRIX_ENVIRONMENT_CHECK = (
+    "uv run python -c \"import os, pytest, sys; "
+    "actual='.'.join(map(str, sys.version_info[:3])); "
+    "print(f'python={actual} pytest={pytest.__version__}'); "
+    "assert actual == os.environ['EXPECTED_PYTHON']\""
+)
 
 PINNED_ACTIONS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -22,15 +28,18 @@ REQUIRED_SNIPPETS = (
     "workflow_dispatch:",
     "permissions:\n  contents: read",
     "persist-credentials: false",
-    "fetch-depth: 2",
+    "fetch-depth: 0",
     "timeout-minutes: 30",
     "fail-fast: false",
     "- windows-latest",
     "- ubuntu-latest",
-    '- "3.12.13"',
+    '- "3.12.10"',
     '- "3.13.14"',
+    'UV_NO_SYNC: "1"',
+    "UV_PYTHON: ${{ matrix.python-version }}",
     'version: "0.11.25"',
     "enable-cache: false",
+    "python scripts/verify_commit_scope.py --github-event",
     "python scripts/verify_ci_contract.py",
     "node --version",
     "uv sync --extra dev --locked",
@@ -41,8 +50,10 @@ REQUIRED_SNIPPETS = (
 )
 REQUIRED_EXACT_RUNS = (
     "python scripts/verify_ci_contract.py",
+    "python scripts/verify_commit_scope.py --github-event",
     'uv sync --extra dev --locked --python "${{ matrix.python-version }}"',
     "uv pip check",
+    MATRIX_ENVIRONMENT_CHECK,
     "uv run python -m pytest -q",
     "git diff --check",
     "git diff-tree --check --root -r -m --no-commit-id HEAD",
