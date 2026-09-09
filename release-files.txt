@@ -243,6 +243,7 @@ validation/iteration-0.28.0-multisegment-workflow.md
 validation/iteration-0.28.0-post-release-ai-authorization.md
 validation/iteration-0.28.0-post-release-automation-correctness.md
 validation/iteration-0.28.0-workflow-multisegment-ui.md
+validation/iteration-0.28.0-workflow-platform-parameters.md
 validation/iteration-0.28.0-workflow-readiness-ui.md
 validation/iteration-0.28.0-workflow-server-preflight.md
 validation/iteration-0.6-graph-v2-offline-evidence.md

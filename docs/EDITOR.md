@@ -5,7 +5,7 @@
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -35,7 +35,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 上传适配器才可能被调用
 ```
 
-下载页输入网址只创建下载任务。需要持久化串接后续步骤时使用 `/workflows`：它按保存的 recipe 和预授权推进，未授权的 AI、编辑或上传节点会停下等待确认；应用重启、AI/编辑重试、上传 retry leaf 和未知远端结果仍会重新停下，不会凭旧确认静默继续。远程 AI 请求进入 provider 前会写入 Schema 4 调用账本；页面按项目显示脱敏状态，`unknown` 明确标为“远程结果待核对”，并隐藏被账本阻止的重试入口。
+下载页输入网址只创建下载任务。需要持久化串接后续步骤时使用 `/workflows`：它按保存的 recipe 和预授权推进，未授权的 AI、编辑或上传节点会停下等待确认；应用重启、AI/编辑重试、上传 retry leaf 和未知远端结果仍会重新停下，不会凭旧确认静默继续。页面按所选账号显示 Bilibili、抖音与视频号的独立内容、定时、发布模式和平台专属参数，并在提交前限制共同支持的生成封面比例。相同平台多个账号的 preset 差异默认逐账号保留；修改单个字段只统一该字段，另有明确按钮可统一整个平台面板。远程 AI 请求进入 provider 前会写入 Schema 4 调用账本；页面按项目显示脱敏状态，`unknown` 明确标为“远程结果待核对”，并隐藏被账本阻止的重试入口。
 
 ### 1.1 从下载成品建立编辑项目
 
@@ -269,7 +269,7 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 8. 后续 AI 验收与本地 provider 方向
 
-0.28.0 发布后源码已完成逐操作 authorization、输入/调用硬上限和 Editing Schema 4 远程调用账本，但真实账号、质量和费用仍未验收。下一工程切片加入不含密钥、Cookie 或账号 session 的复用预设，并跑完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke。之后再在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、供应商 request/账单证据、实际费用和真人试听；真实结果不能由 manifest、账本人工结论或 synthetic 媒体推定。
+0.28.0 发布后源码已完成逐操作 authorization、输入/调用硬上限、Editing Schema 4 远程调用账本、非密钥复用预设、完整 URL→AI→编辑→三平台上传草稿的本地 synthetic smoke，以及三平台参数卡与下载前封面预检。下一工程切片先按用户选定的液态玻璃方向统一四页生产视觉；随后只对已预授权、可确认尚未 dispatch 的 queued AI/render/upload 工作补安全重启续跑，`running`、retry 与 unknown 继续停下。之后再在同一冻结构建上使用有权处理的短样本，分别记录听写、中文/English 翻译、13 个标准音色中的实际选择、取消/重试、segment-local 输出、供应商 request/账单证据、实际费用和真人试听；真实结果不能由 manifest、账本人工结论或 synthetic 媒体推定。
 
 本地 provider 仍是后续方向。若继续实现本地 ASR/翻译/TTS，应分别固定模型 revision、文件 SHA-256、许可证、架构和转换参数，并复用现有 task/timeline/plan 确认边界。候选研究包括 faster-whisper/CTranslate2、M2M100 与 Kokoro；这些候选尚未进入 0.28.0 runtime，也没有 ready 声明。
 
@@ -311,4 +311,4 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 10. 当前可以准确声称的结果
 
-0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复。仓库内验证只覆盖本机定义、ignored validator、synthetic/fake 编排、本地媒体处理、compileall 和既有回归；本轮既有定向集合为 277 passed，另有 3 项历史导航断言仍只接受下载/编辑/上传三项，未包含早已存在的 `/workflows`。测试文件按仓库策略未修改。以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。
+0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、绑定修订的处理计划、本地分段/封面/字幕/配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复。自动流程页现可填写首批三平台的独立内容、定时、发布模式和专属选项，并在下载前验证固定生成封面比例、既有受管封面及两类封面冲突。仓库内验证只覆盖本机定义、ignored validator、synthetic/fake 编排、本地媒体处理、compileall 和既有回归；本轮既有定向集合为 277 passed，另有 3 项历史导航断言仍只接受下载/编辑/上传三项，未包含早已存在的 `/workflows`。本次参数/封面切片另有上传相关 `275 passed`、三个 Workflow Chromium validator 和扩展 preflight validator 通过。测试文件按仓库策略未修改。以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真人试听、三平台真实投稿或新发行制品证据。

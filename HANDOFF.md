@@ -2,10 +2,12 @@
 
 > 每轮结束更新本文件的状态、证据、风险、下一入口和历史。
 > 最后更新：2026-09-09
-> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度、服务端零副作用执行预检与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
+> 当前迭代：Iteration 0.28.0 发布后开发 — Workflow Schema 2 有序多输出、生产 1–10 段界面、四项运行就绪度、三平台投稿参数、服务端零副作用执行/封面预检与三账号上传 fan-out 已接线并通过本地浏览器/故障恢复验证；液态玻璃前三套候选已在 ignored 本地预览生成，等待用户选定后再改生产样式；真实模型/三平台发布与当前制品仍未验收
 > 当前版本：`0.28.0`；下载数据库：Schema `11`；编辑数据库：独立 Schema `4`；上传数据库：独立 Schema `3`；自动流程数据库：独立 Schema `2`；上传备份格式：`2`
 
 ## 本次交接入口
+
+2026-09-09 三平台参数与封面预检：`/workflows` 现按所选账号显示 Bilibili、抖音和视频号参数面板，可分别覆盖标题、简介、标签、发布时间、Bilibili 动态/转载/评论弹幕开关、抖音三种自主声明，以及视频号发布/草稿、短标题和内容标记。标题上限、发布时间提前量、视频号模式与声明枚举优先读取既有上传 capability；启用 AI 时会逐账号为缺少显式 preset 值的目标补建议标记，显式空值/差异值或用户明确选空均原样保留；共享面板不会把一个账号的声明复制给另一个账号。同平台多账号 preset 差异未编辑时逐账号保留，可按字段或用明确按钮统一整个面板；视频号草稿会清空定时，Bilibili 原创/转载会联动来源。平台校验会关联并聚焦首个错误控件，独立标题与当前有效的 Bilibili 标签输入带动态 required。生成封面只显示固定比例，并按所选平台共同支持范围禁用；冲突的当前或 preset 比例会保留并持续显示错误，直至操作者明确重选。首次 upload preflight 已校验既有受管封面文件/尺寸，生成封面与 preset 封面冲突、无效比例及三平台封面方向/比例错误均在 workflow/event/download 为零时失败，工作流页对可达封面错误提供中文说明。没有新增数据库、服务或线程，且删除了外部 `execution_check` 参数，第二层 runtime probe 由冻结账号绑定推导。证据见[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)。真实平台参数接受、裁切、定时触发与发布仍未运行。
 
 2026-09-09 自动流程服务端执行预检：`WorkflowService.create()` 现在先核对本次托管下载 Worker、FFmpeg、逐平台投稿参数、所选账号 ready/session revision、上传 runtime/调度器，以及启用 AI 时听写/翻译/配音三项当前 authorization 与标准音色；创建预检失败时不保存 workflow/event，也不建立下载 batch。创建成功后在 `created → downloading` 前用冻结账号绑定和完全无缓存的上传 runtime 校验再次检查，覆盖请求后的窄竞态、重启恢复和 Windows `ctime` 不能代表 ChangeTime 的摘要缓存限制。创建 admission 跳过页面的 10 秒整体验证结果缓存并重新枚举树，只对 identity/大小/mtime/ctime 未变文件复用摘要；同进程扫描用独立锁避免并发冷散列，平台 child 前还会第三次执行完全无缓存检查。首次冷校验不持有 WorkflowService 全局 mutation lock。启动/暂停等短暂下载状态留在 `created` 有界重试，需要修复 runtime、凭据、账号或 authorization 的状态进入 attention，并可由显式“立即对账”重新检查。ignored validator 以外部网络 audit guard 覆盖缓存分歧、三项 AI/音色、账号绑定转发、API 状态码和真实 Local adapter 零下游写入；完整离线整链再次通过。证据见[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)。真实下载、OpenAI 与三平台网络仍未运行。
 
@@ -40,7 +42,7 @@
 | T08 有界韧性切片 | 已覆盖三平台多账号严格串行、300 轮/1500 次本地读取的资源预算、媒体复制中断清理，并重复运行 | 执行计划中的更广数据库/浏览器/进程树故障矩阵仍按后续风险决定补充；没有远端调用 |
 | T09 无凭据 CI | 已加入 Windows/Linux × CPython 3.12.13/3.13.14 工作流、精确 action/uv 固定和本地合同负向测试 | GitHub hosted checks **NOT RUN**；required checks / branch protection **NOT CONFIGURED** |
 | T10 与 T16 | 0.24.4 的 T10 与 0.25.0 的 T16/G6 保留各自历史；共享 Apple 风格、主题、响应式和无障碍规范已用于下载/编辑/上传/自动流程页面 | 0.28.0 最终冻结只由包外 receipt 判定；没有有效 receipt 时须完成 clean commit、冻结全量、五个制品和源码/wheel 独立安装 |
-| T17 投稿参数 | 0.26.0 本地 G7 保留为历史：Bilibili/抖音/视频号均可覆盖标题、简介、标签、受管封面、发布时间和平台字段，并逐任务明确确认 | 当前页面同一平台只有一套表单值；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
+| T17 投稿参数 | 0.26.0 本地 G7 保留为历史；当前 `/uploads` 与 `/workflows` 均可设置 Bilibili/抖音/视频号的标题、简介、标签、受管/生成封面、发布时间和平台字段；Workflow 同平台多账号可保留 preset 差异或明确统一面板 | Workflow 同一平台仍以一个可显式统一的面板编辑，不提供每个账号并排表单；三平台真实登录、扫码、上传、定时触发及平台后台接受结果均 **NOT RUN** |
 | T18 编辑工作台 | 独立 `data-edits` 已 forward-migrate 到 Schema 4；下载来源复核复制；版本化草稿与绑定时间轴的不可变计划；H.264/AAC MP4 分段、PNG 封面、确认、取消和重试 | 未做编辑备份/恢复、真实用户长片/大文件矩阵或最终发行制品；下载原件不会被编辑域覆盖 |
 | T19 / T20 AI 与自动流程 | `data-ai-runtime` 离线 builder、源码 Setup 可选 AI/上传 runtime、时间轴审核、segment-local 字幕/配音与可恢复 workflow 已接线；Workflow Schema 2 与生产页面保存/配置最多 10 个有序输出，并向最多 3 个账号建立不超过 30 个上传草稿，逐段失败可幂等恢复，完整批次只确认一次；服务端在保存 workflow 与建立下载前复核下载 Worker、FFmpeg、三项 AI authorization/音色、上传 runtime/调度器及账号绑定；发布后还收敛真实 upload outcome、固定硬上限及 Schema 4 脱敏调用账本；远程 unknown 必须人工 reconciliation，完成与重试按账本失败关闭；普通 Start 已以 control-only 方式继承精确 OpenAI 密钥 | 多分段 fan-out 与执行预检仅完成 synthetic/offline 适配、迁移、恢复和浏览器验证。真实默认应用目录仍需由操作者构建 AI runtime，并按文档保留/改名 Schema 1 上传 runtime 后重建；真实 OpenAI、真人试听和三平台真实发布仍未执行 |
 | 仓库测试策略 | 127 个既有回归冻结供本地与 CI 使用；源码发行清单不再携带 `tests/`，Git ignore、提交检查脚本及本地 pre-commit hook 阻止今后新增或修改测试文件进入提交 | 新 clone 须执行 `git config core.hooksPath .githooks`；历史回归结果仍只证明对应源码，临时验证材料必须留在 ignored `validation/local/` |
@@ -425,7 +427,7 @@ Iteration 0.17.0 在保留 0.16 的 Schema 11 stop/claim 线性化、显式新�
 
 ## 5. 继续工作入口
 
-继续前先读 [自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设和真实域离线整链均已重新验证。下一步等待用户在液态玻璃 A/B/C 候选中选定方向，然后统一实现下载、编辑、上传和自动流程四页并做实际浏览器 QA；其后再核对实际启动数据根/runtime 条件并准备当前冻结候选。仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
+继续前先读 [三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[自动流程服务端预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后自动流程正确性记录](validation/iteration-0.28.0-post-release-automation-correctness.md)、[AI 精确授权与输入硬预算记录](validation/iteration-0.28.0-post-release-ai-authorization.md)、[Schema 4 远程调用账本记录](validation/iteration-0.28.0-ai-invocation-ledger.md)、[AI runtime 指南](docs/AI_RUNTIME.md)、[编辑指南](docs/EDITOR.md)及对应包外 `release-receipt.json`。若 receipt 不存在或未同时绑定 clean commit、冻结全量、完整 identity、五件制品及源码/wheel 独立验收，就把当前状态视为源码里程碑，不把它称为最终发行制品。三平台参数卡、封面预检、服务端执行预检、Editing Schema 4 账本、unknown 人工 reconciliation、可复用预设和真实域离线整链均已重新验证。下一步等待用户在液态玻璃 A/B/C 候选中选定方向，然后统一实现下载、编辑、上传和自动流程四页并做实际浏览器 QA；其后优先补已预授权流程对确定未 dispatch 工作的安全重启续跑，再核对实际启动数据根/runtime 条件并准备当前冻结候选。仍须在同一冻结构建上验收真实 OpenAI 账号样本、中文/English 真人试听、实际费用，以及 Bilibili、抖音、视频号逐平台结果。真实登录、扫码、下载、上传或发布仍须用户另行明确授权。旧版本结果或制品不能绑定给 0.28.0。
 
 本地开发：
 

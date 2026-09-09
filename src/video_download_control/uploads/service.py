@@ -2145,6 +2145,12 @@ class UploadService:
             raise UploadError("multiple_covers_unsupported")
         landscape = self._verified_cover_row(db, landscape_id)
         portrait = self._verified_cover_row(db, portrait_id)
+        if (
+            platform == "bilibili"
+            and landscape is not None
+            and landscape["width"] < landscape["height"]
+        ):
+            raise UploadError("bilibili_cover_orientation_invalid")
         if platform == "douyin" and (
             landscape is not None and landscape["width"] < landscape["height"]
             or portrait is not None and portrait["height"] <= portrait["width"]
@@ -2311,12 +2317,9 @@ class UploadService:
         source_credit: str = "",
         target_overrides: list[dict] | None = None,
         expected_account_bindings: list[dict] | None = None,
-        execution_check: bool = False,
     ) -> list[dict]:
         """Validate workflow upload metadata before download or AI work begins."""
 
-        if type(execution_check) is not bool:
-            raise UploadError("invalid_runtime_check")
         if (
             not isinstance(account_ids, list)
             or not 1 <= len(account_ids) <= 20
@@ -2397,13 +2400,15 @@ class UploadService:
                     account=account,
                     base=base,
                     override=override_map.get(account_id, {}),
-                    verify_assets=False,
+                    verify_assets=True,
                 )
                 target["account_binding"] = self._workflow_account_binding(
                     db, account
                 )
                 targets.append(target)
-        self._require_workflow_runtime(execution_check=execution_check)
+        self._require_workflow_runtime(
+            execution_check=expected_account_bindings is not None
+        )
         return targets
 
     @_requires_activity

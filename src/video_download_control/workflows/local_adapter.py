@@ -168,6 +168,20 @@ class LocalWorkflowAdapter:
         self._validate_download_runtime()
         if self.editing_manager.media_ready is not True:
             raise WorkflowError("processor_not_configured")
+        raw_overrides = (
+            upload.get("target_overrides", ()) if isinstance(upload, Mapping) else ()
+        )
+        if (
+            cover_aspect_ratio is not None
+            and isinstance(raw_overrides, Sequence)
+            and not isinstance(raw_overrides, (str, bytes))
+            and any(
+                isinstance(item, Mapping)
+                and any(item.get(key) is not None for key in _COVER_KEYS)
+                for item in raw_overrides
+            )
+        ):
+            raise WorkflowError("upload_cover_override_conflict")
         bindings = self.validate_upload(
             upload,
             cover_aspect_ratio=cover_aspect_ratio,
@@ -295,7 +309,6 @@ class LocalWorkflowAdapter:
                 options["expected_account_bindings"] = [
                     dict(binding) for binding in expected_account_bindings
                 ]
-                options["execution_check"] = True
             targets = self.upload_manager.get().preflight_jobs(**options)
         except UploadError as error:
             _domain_failure(error, "upload_metadata_invalid")
@@ -315,7 +328,7 @@ class LocalWorkflowAdapter:
             "1:1": (1, 1),
         }.get(cover_aspect_ratio)
         if dimensions is None:
-            raise WorkflowError("workflow_domain_data_invalid")
+            raise WorkflowError("workflow_cover_incompatible")
         for target in targets:
             platform = target.get("platform")
             if (
