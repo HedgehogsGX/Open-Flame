@@ -44,6 +44,16 @@ class CreatePresetRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     profile: dict[str, Any]
+    schedule_policies: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CreatePresetWorkflowRequest(CreateWorkflowRequest):
+    schedule_base_unix: int | None = Field(
+        default=None,
+        ge=1_700_000_000,
+        le=4_102_444_800,
+        strict=True,
+    )
 
 
 class ConfirmWorkflowRequest(BaseModel):
@@ -164,7 +174,9 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
 
     @router.post("/presets", status_code=201)
     async def create_preset(payload: CreatePresetRequest):
-        return await preset_invoke("create", payload.name, payload.profile)
+        return await preset_invoke(
+            "create", payload.name, payload.profile, payload.schedule_policies
+        )
 
     @router.get("/presets/{preset_id}")
     async def preset(preset_id: Identifier):
@@ -172,9 +184,14 @@ def install_workflow_routes(app: FastAPI, manager: WorkflowManager) -> None:
 
     @router.post("/presets/{preset_id}/workflows", status_code=201)
     async def create_from_preset(
-        preset_id: Identifier, payload: CreateWorkflowRequest
+        preset_id: Identifier, payload: CreatePresetWorkflowRequest
     ):
-        profile = await preset_invoke("materialize", preset_id, payload.profile)
+        profile = await preset_invoke(
+            "materialize",
+            preset_id,
+            payload.profile,
+            schedule_base_unix=payload.schedule_base_unix,
+        )
         result = await invoke(
             "create",
             source_url=payload.source_url,

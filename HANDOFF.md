@@ -10,7 +10,7 @@
 | --- | --- |
 | 仓库 | [HedgehogsGX/Open-Flame](https://github.com/HedgehogsGX/Open-Flame) |
 | 开发版本 | `0.28.0` |
-| 数据库 | Download Schema 11；Editing Schema 4；Upload Schema 3；Workflow Schema 3 |
+| 数据库 | Download Schema 11；Editing Schema 4；Upload Schema 3；Workflow Schema 3；Workflow preset Schema 2 |
 | 上传备份格式 | 2 |
 | 首批上传平台 | Bilibili、抖音、视频号（内部 ID `tencent`） |
 | 前端方向 | 方向 C“编辑式玻璃”，遵循 [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) |
@@ -35,6 +35,8 @@
 - Workflow 支持 URL → 下载 → 编辑 → 所选账号上传的持久化编排、恢复、取消和精确确认。
   保存一次完整预设后可只更换 URL；来源标题、绑定 asset 与逐账号最终标题在下载 ready
   时冻结，预设仅在账号、AI capability 和预设初始读取成功且操作者尚未修改表单时恢复。
+  账号可保存“创建流程后 N 个整小时发布”；每次运行以固定锚点物化为绝对时间，响应丢失
+  重试会复用相同锚点、幂等键和完整投稿参数。
 - 上传域支持首批三平台逐账号标题、简介、标签、封面、原创/转载、分区、声明、动态文案、
   视频号短标题/内容标签、草稿模式和平台允许范围内的定时发布。最多选择 3 个账号；
   1–10 个输出最多形成 30 个上传 slot；重试后继必须保持账号、来源、平台及完整投稿参数
@@ -54,7 +56,7 @@
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
+| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
 

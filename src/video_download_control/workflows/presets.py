@@ -24,7 +24,9 @@ from ..editing.contracts import recipe_from_mapping
 from ..uploads.contracts import UploadError
 from ..uploads.metadata import (
     PLATFORM_OPTION_KEYS,
+    SCHEDULE_LEAD_SECONDS,
     TARGET_OVERRIDE_KEYS,
+    TENCENT_SCHEDULE_MAX_SECONDS,
     normalize_platform_options,
     normalize_upload_tags,
     normalize_upload_text,
@@ -38,11 +40,24 @@ _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^\S(?:.*\S)?$")
 _PRESETS_FILE = "presets.json"
-_SCHEMA = 1
+_SCHEMA = 2
+_LEGACY_SCHEMA = 1
 _LOCK = RLock()
 _MAX_RECORDS = 50
 _MAX_PROFILE_BYTES = 128 * 1024
 _MAX_STORAGE_BYTES = 8 * 1024 * 1024
+_SCHEDULE_POLICY_KEYS = frozenset({"account_id", "platform", "delay_seconds"})
+_SCHEDULE_PLATFORMS = frozenset(SCHEDULE_LEAD_SECONDS)
+_MIN_DELAY_SECONDS = {
+    platform: ((lead_seconds + 60 * 60 - 1) // (60 * 60)) * (60 * 60)
+    for platform, lead_seconds in SCHEDULE_LEAD_SECONDS.items()
+}
+_MAX_DELAY_SECONDS = {
+    "bilibili": 365 * 24 * 60 * 60,
+    "douyin": 365 * 24 * 60 * 60,
+    # Leave one whole hour for the required forward rounding.
+    "tencent": TENCENT_SCHEDULE_MAX_SECONDS - 60 * 60,
+}
 _PROFILE_KEYS = frozenset({
     "download_credential_mode", "edit_recipe", "ai", "upload",
     "auto_confirm_edit", "auto_confirm_upload",
@@ -101,6 +116,10 @@ def _canonical(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError, RecursionError) as exc:
         raise WorkflowPresetError("workflow_preset_invalid") from exc
+
+
+def _sha256(value: object) -> str:
+    return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
 def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -251,15 +270,176 @@ def _stored_profile(profile: object) -> dict[str, Any]:
     return original
 
 
-def _record(value: object) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != {
+def _schedule_policies(
+    value: object, profile: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    upload = profile.get("upload")
+    if not isinstance(upload, Mapping):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    account_ids = upload.get("account_ids")
+    if not isinstance(account_ids, list):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    if not isinstance(value, list) or len(value) > len(account_ids):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    targets = upload.get("target_overrides")
+    if not isinstance(targets, list):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    target_by_account = {
+        target.get("account_id"): target
+        for target in targets
+        if isinstance(target, Mapping)
+    }
+    policies: dict[str, dict[str, Any]] = {}
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) != _SCHEDULE_POLICY_KEYS:
+            raise WorkflowPresetError("workflow_preset_invalid")
+        account_id = _id(raw.get("account_id"))
+        platform = raw.get("platform")
+        delay_seconds = raw.get("delay_seconds")
+        if (
+            account_id not in account_ids
+            or account_id in policies
+            or not isinstance(platform, str)
+            or platform not in _SCHEDULE_PLATFORMS
+            or type(delay_seconds) is not int
+            or delay_seconds % (60 * 60)
+            or not (
+                _MIN_DELAY_SECONDS[platform]
+                <= delay_seconds
+                <= _MAX_DELAY_SECONDS[platform]
+            )
+        ):
+            raise WorkflowPresetError("workflow_preset_invalid")
+        target = target_by_account.get(account_id, {})
+        if target.get("mode", upload.get("mode")) != "publish":
+            raise WorkflowPresetError("workflow_preset_invalid")
+        policies[account_id] = {
+            "account_id": account_id,
+            "platform": platform,
+            "delay_seconds": delay_seconds,
+        }
+    return [policies[account_id] for account_id in account_ids if account_id in policies]
+
+
+def _without_absolute_schedules(
+    profile: Mapping[str, Any], policies: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    result = json.loads(_canonical(profile))
+    relative_accounts = {policy["account_id"] for policy in policies}
+    for target in result["upload"]["target_overrides"]:
+        if target["account_id"] in relative_accounts:
+            target.pop("publish_at_unix", None)
+            target.pop("publish_timezone_offset_minutes", None)
+    return result
+
+
+def _local_offset_minutes(timestamp: int) -> int:
+    try:
+        offset = datetime.fromtimestamp(timestamp, UTC).astimezone().utcoffset()
+    except (OSError, OverflowError, ValueError) as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
+    if offset is None:
+        raise WorkflowPresetError("workflow_preset_invalid")
+    seconds = offset.total_seconds()
+    if seconds % 60:
+        raise WorkflowPresetError("workflow_preset_invalid")
+    minutes = int(seconds // 60)
+    if not -840 <= minutes <= 840:
+        raise WorkflowPresetError("workflow_preset_invalid")
+    return minutes
+
+
+def _relative_publish_schedule(
+    platform: str, delay_seconds: int, schedule_base_unix: int
+) -> tuple[int, int]:
+    earliest = schedule_base_unix + delay_seconds
+    publish_at = ((earliest + 59) // 60) * 60
+    if platform == "tencent":
+        # Start from a real instant and scan forwards. This remains deterministic
+        # through local daylight-saving gaps and repeated wall-clock hours.
+        for candidate in range(publish_at, publish_at + 3 * 60 * 60 + 60, 60):
+            offset = _local_offset_minutes(candidate)
+            if (candidate + offset * 60) % (60 * 60) == 0:
+                publish_at = candidate
+                break
+        else:
+            raise WorkflowPresetError("workflow_preset_invalid")
+    offset = _local_offset_minutes(publish_at)
+    try:
+        return validate_publish_schedule(
+            platform,
+            publish_at,
+            offset,
+            now=schedule_base_unix,
+        )
+    except UploadError as exc:
+        raise WorkflowPresetError("workflow_preset_invalid") from exc
+
+
+def _materialize_schedules(
+    upload: Mapping[str, Any],
+    policies: list[Mapping[str, Any]],
+    schedule_base_unix: object,
+) -> dict[str, Any]:
+    if not policies:
+        return json.loads(_canonical(upload))
+    if (
+        type(schedule_base_unix) is not int
+        or not 1_700_000_000 <= schedule_base_unix <= 4_102_444_800
+    ):
+        raise WorkflowPresetError("workflow_preset_invalid")
+    result = json.loads(_canonical(upload))
+    by_account = {
+        target["account_id"]: target for target in result["target_overrides"]
+    }
+    for policy in policies:
+        account_id = policy["account_id"]
+        target = by_account.get(account_id)
+        if target is None:
+            target = {"account_id": account_id}
+            result["target_overrides"].append(target)
+            by_account[account_id] = target
+        publish_at, offset = _relative_publish_schedule(
+            policy["platform"], policy["delay_seconds"], schedule_base_unix
+        )
+        target["publish_at_unix"] = publish_at
+        target["publish_timezone_offset_minutes"] = offset
+    return result
+
+
+def _record(value: object, *, schema: int = _SCHEMA) -> dict[str, Any]:
+    base_keys = {
         "id", "name", "profile", "profile_sha256", "revision", "created_at", "updated_at",
-    }:
+    }
+    expected_keys = (
+        base_keys
+        if schema == _LEGACY_SCHEMA
+        else base_keys | {"schedule_policies", "schedule_policies_sha256"}
+    )
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
         raise WorkflowPresetError("workflow_preset_invalid")
     profile = _stored_profile(value["profile"])
     digest = _digest(value.get("profile_sha256"))
-    if not hmac.compare_digest(digest, hashlib.sha256(_canonical(profile).encode("utf-8")).hexdigest()):
+    if not hmac.compare_digest(digest, _sha256(profile)):
         raise WorkflowPresetError("workflow_preset_invalid")
+    if schema == _LEGACY_SCHEMA:
+        policies: list[dict[str, Any]] = []
+        policies_digest = _sha256(policies)
+    else:
+        policies = _schedule_policies(value.get("schedule_policies"), profile)
+        policies_digest = _digest(value.get("schedule_policies_sha256"))
+        if not hmac.compare_digest(policies_digest, _sha256(policies)):
+            raise WorkflowPresetError("workflow_preset_invalid")
+        relative_accounts = {policy["account_id"] for policy in policies}
+        if any(
+            target.get("account_id") in relative_accounts
+            and (
+                "publish_at_unix" in target
+                or "publish_timezone_offset_minutes" in target
+            )
+            for target in profile["upload"]["target_overrides"]
+        ):
+            raise WorkflowPresetError("workflow_preset_invalid")
     if type(value["revision"]) is not int or not 1 <= value["revision"] <= 2**31 - 1:
         raise WorkflowPresetError("workflow_preset_invalid")
     try:
@@ -279,6 +459,8 @@ def _record(value: object) -> dict[str, Any]:
     return {
         "id": _id(value.get("id")), "name": _name(value.get("name")),
         "profile": profile, "profile_sha256": digest,
+        "schedule_policies": policies,
+        "schedule_policies_sha256": policies_digest,
         "revision": value["revision"], "created_at": value["created_at"],
         "updated_at": value["updated_at"],
     }
@@ -304,12 +486,13 @@ class WorkflowPresetStore:
             raise WorkflowPresetError("workflow_preset_storage_unavailable") from exc
         if (
             not isinstance(value, dict) or set(value) != {"schema", "presets"}
-            or type(value["schema"]) is not int or value["schema"] != _SCHEMA
+            or type(value["schema"]) is not int
+            or value["schema"] not in {_LEGACY_SCHEMA, _SCHEMA}
             or not isinstance(value["presets"], list) or len(value["presets"]) > _MAX_RECORDS
         ):
             raise WorkflowPresetError("workflow_preset_storage_unavailable")
         try:
-            records = [_record(item) for item in value["presets"]]
+            records = [_record(item, schema=value["schema"]) for item in value["presets"]]
             if len({item["id"] for item in records}) != len(records):
                 raise WorkflowPresetError("workflow_preset_invalid")
             return records
@@ -351,14 +534,26 @@ class WorkflowPresetStore:
                     return record
         raise WorkflowPresetError("workflow_preset_not_found")
 
-    def create(self, name: str, profile: Mapping[str, Any]) -> dict[str, Any]:
+    def create(
+        self,
+        name: str,
+        profile: Mapping[str, Any],
+        schedule_policies: object = None,
+    ) -> dict[str, Any]:
         reusable = _secret_free_profile(profile, template_only=True)
+        policies = _schedule_policies(
+            [] if schedule_policies is None else schedule_policies, reusable
+        )
+        reusable = _without_absolute_schedules(reusable, policies)
+        profile_digest = _sha256(reusable)
         now = _now()
         record = _record({
             "id": uuid4().hex,
             "name": _name(name),
             "profile": reusable,
-            "profile_sha256": hashlib.sha256(_canonical(reusable).encode("utf-8")).hexdigest(),
+            "profile_sha256": profile_digest,
+            "schedule_policies": policies,
+            "schedule_policies_sha256": _sha256(policies),
             "revision": 1,
             "created_at": now,
             "updated_at": now,
@@ -366,7 +561,12 @@ class WorkflowPresetStore:
         with _LOCK:
             records = self._read()
             for existing in records:
-                if existing["name"] == record["name"] and existing["profile_sha256"] == record["profile_sha256"]:
+                if (
+                    existing["name"] == record["name"]
+                    and existing["profile_sha256"] == record["profile_sha256"]
+                    and existing["schedule_policies_sha256"]
+                    == record["schedule_policies_sha256"]
+                ):
                     return existing
             records.insert(0, record)
             if len(records) > _MAX_RECORDS:
@@ -374,7 +574,13 @@ class WorkflowPresetStore:
             self._write(records)
         return record
 
-    def materialize(self, preset_id: str, profile: Mapping[str, Any]) -> dict[str, Any]:
+    def materialize(
+        self,
+        preset_id: str,
+        profile: Mapping[str, Any],
+        *,
+        schedule_base_unix: int | None = None,
+    ) -> dict[str, Any]:
         preset = self.get(preset_id)
         normalized = _current_profile(profile)
         current = _secret_free_profile(profile)
@@ -387,7 +593,9 @@ class WorkflowPresetStore:
         if "authorization" in current_dubbing:
             recipe["dubbing"]["authorization"] = current_dubbing["authorization"]
         materialized["edit_recipe"] = recipe
-        materialized["upload"] = saved["upload"]
+        materialized["upload"] = _materialize_schedules(
+            saved["upload"], preset["schedule_policies"], schedule_base_unix
+        )
         # Confirmation and credential choices belong to this invocation. A
         # saved template must never silently elevate the current request.
         return _current_profile(materialized)
