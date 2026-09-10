@@ -16,6 +16,8 @@
 
 上传入口在下载首页，或访问 `/uploads`。使用步骤见 [上传指南](docs/UPLOADER.md)，独立工具安装见 [上传运行环境](docs/UPLOAD_RUNTIME.md)，技术选择见 [开源上传器调研](docs/OPEN_SOURCE_UPLOADER_REVIEW.md)。上传环境与浏览器不会加入原下载 `.venv`，上传账号不会复用下载 Cookie。下载备份不包含上传目录；上传数据使用单独的 `video-upload-backup` 命令。
 
+下载器原有的 yt-dlp 命令会把平台返回的 thumbnail 写入对应 ready 资产。下载页现在将它明确显示为“来源封面（平台返回）”，可在同源受管接口中预览和下载；JPEG、PNG、WebP 还可通过 `/uploads` 的独立提示显式导入上传封面库。进入上传页、导入视频或导入封面都不会自动创建草稿、上传或发布，导入后仍须在平台参数中选择封面并逐项确认。这里的“来源封面”不承诺是发布者上传的原始母版或无损图片：固定 yt-dlp 的 Bilibili 提取器会把 `videoData.pic` 作为 thumbnail，Douyin 提取器可返回 `cover`、`origin_cover` 等多个变体但不保证当前单 thumbnail 一定选中 `origin_cover`；两者真实平台提取与上传仍未验收。视频号没有对应的 yt-dlp extractor，本次不声称其网址封面抓取能力。实现、开源方案与证据边界见[来源封面调研与导入记录](validation/iteration-0.28.0-source-cover-research-and-import.md)。
+
 首次使用双击 [Setup-Open-Flame.cmd](Setup-Open-Flame.cmd)，阅读联网与改动提示后输入 `y`；需要三平台上传时可向同一 Setup 传入 `--upload-runtime`，需要 AI 时传入 `--ai-python-embed-zip ABSOLUTE_ZIP`。两者都复用现有安装入口和应用根，不会建立第二套安装服务；完成后双击 [Start-Open-Flame.cmd](Start-Open-Flame.cmd)。详见 [首次安装与修复](docs/WINDOWS_SETUP.md)、[上传运行环境](docs/UPLOAD_RUNTIME.md)和[启动与日志](docs/WINDOWS_LAUNCHER.md)。当前本地证据见 [0.28.0 AI 与流程记录](validation/iteration-0.28.0-ai-workflow-evidence.md)；[0.27.0 编辑工作台记录](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保持为历史。
 
 上一版 0.23.0 的独立源码发行与安装记录为 **1670 passed、8 skipped**，属于历史证据，不代表当前上传或真实平台验收。维护者见 [构建与验收说明](docs/RELEASE.md)，接续开发见 [项目交接](HANDOFF.md#本次交接入口)。源码 ZIP、sdist、wheel 不包含第三方运行二进制；本机开发和打包不自动 push 或创建 GitHub Release。
@@ -32,9 +34,9 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 |---|---|
 | 编辑工作台 | `/edits`；下载成品只读复制到独立 `data-edits`；0 段生成完整视频，也可生成多个分段与封面；另有 AI 听写/翻译任务、可审核时间轴、标准音色配音、绑定时间轴的不可变处理计划、取消与显式重试、成品哈希和导入上传；AI runtime 缺失或无凭据时明确阻塞 |
 | 自动流程 | `/workflows`；页面可输入或从预设恢复完整视频或 1–10 个有序分段，分别设置三平台的内容、模式、定时与专属参数，并在创建前显示下载 Worker、AI runtime/凭据、上传 runtime/调度器和所选账号的即时状态；服务端在保存 workflow 与建立下载前复核真实执行依赖、账号 session revision 和受管封面；随后持久化串接 URL 下载、可选 AI 审核/确认，以及每个视频输出向最多 3 个账号建立上传草稿。最多 30 个任务在一次批量确认中共同通过或共同停止；逐段准备以稳定幂等键和 prefix checkpoint 恢复，重试 leaf 只在原 segment/source/account/platform 位置更新；整流程取消持久化意图并保守停止最远下游，未知远端结果停下人工核对 |
-| 上传器 | `/uploads`；Bilibili、抖音、视频号的独立账号与任务；先本地草稿、后明确确认；支持逐平台文案/标签/封面/发布时间及平台参数、本地账号墓碑、媒体与封面占用/显式删除、视频精确恢复；开源工具运行环境独立安装；真实平台投稿与定时发布未验收 |
+| 上传器 | `/uploads`；Bilibili、抖音、视频号的独立账号与任务；先本地草稿、后明确确认；支持逐平台文案/标签/封面/发布时间及平台参数、本地账号墓碑、媒体与封面占用/显式删除、视频精确恢复；下载所得 JPEG/PNG/WebP 来源封面须由用户单独点击才复制到上传封面库，并且不会自动建草稿或上传；开源工具运行环境独立安装；真实平台投稿与定时发布未验收 |
 | Windows 一体化应用 | `video-download-local-app` 可独立启动控制面、Worker 与浏览器；固定 app/data/database 布局、抢占前预检、严格握手、单实例、异常子进程回收及结构化日志继续保留；Schema 11 的 two-phase run claim gate 将“允许领取”和停机关闭在 SQLite 写事务中线性化，旧 run 不能因 Pipe 检查竞态领取新 Job |
-| Web UI / FastAPI 控制面 | 可由一体化入口启动，也保留开发用单独入口；下载/编辑/上传页共用本地语义样式、系统/浅/深主题、响应式布局与 CSP；显示每个 Job 的中文阶段与估算进度，列出 ready 原件及其缩略图/字幕；无认证，代码强制绑定 loopback |
+| Web UI / FastAPI 控制面 | 可由一体化入口启动，也保留开发用单独入口；下载/编辑/上传页共用本地语义样式、系统/浅/深主题、响应式布局与 CSP；显示每个 Job 的中文阶段与估算进度，列出 ready 原件、来源封面（平台返回）及字幕；来源封面只从登记 artifact 的同源接口预览/下载，可导入格式才显示上传入口；无认证，代码强制绑定 loopback |
 | SQLite | Schema 11；WAL、`busy_timeout=5000`、`synchronous=FULL`，启动时 forward-only 迁移、结构、claim-gate singleton 与 capability ledger 语义检查；Schema 9 能力行只读封存，旧 flat-v1/graph 记录继续可读 |
 | 下载 Worker | 一体化入口内部设置并持有 Windows 本机直连 Worker 的完整配置；高级手动入口仍要求环境 gate + CLI 明示确认、固定工具链、共享现有数据库和单实例锁；离线 fake 与 Linux 隔离 candidate 保持独立 |
 | 本机工具链 | Windows x64 固定 yt-dlp `2026.08.19`、FFmpeg/ffprobe `n9.0.1-11-ge47273f4d9-20260831`；改用官方月末保留构建，逐文件校验并通过离线真实二进制 smoke；不加入系统 `PATH` |
@@ -54,6 +56,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 - 严格 SRT/VTT 时间轴读写、隔离 CPython runtime 与标准库 OpenAI provider；`whisper-1` 听写、`gpt-5.6-luna` 结构化翻译和 `gpt-4o-mini-tts` 标准音色均经 manifest 显式声明。每个 cue 最多 4096 字符；自动 AI 流程允许完整视频或首尾连续的多个分段，把这段连续范围的派生音频交给听写并将相对时间换算回源时间。含间隙的多分段会在远端任务创建前拒绝，避免外发未选择的音频。runtime、凭据或能力缺失时保持 blocked。
 - AI 渲染按每个已选分段过滤并把字幕/配音时间归零；边界切入 cue 时以 `ai_segment_boundary_splits_cue` 拒绝，纯 B-roll 分段生成空 VTT 和本地静音而不调用 TTS。保留原声时将原声压到 22% 后与配音混合；AI 或配音重试须再次确认，已经完成的远程批次/cue 仍可能重复计费。
 - 编辑视频通过 `edit_output_id` 显式复制到上传域并再次校验；该动作不创建上传任务，更不会调用平台适配器。
+- yt-dlp 已有 `--write-thumbnail` 产物继续作为下载资产的登记辅助文件；下载页可预览、下载，并把唯一且可导入的 JPEG/PNG/WebP 封面 ID 随“用于上传”链接带到上传页。上传页只有在用户点击“导入此来源封面”后才核验并建立独立受管副本，既不自动选择平台封面，也不创建上传草稿或调用平台。
 - Web 提交页面、最近批次恢复入口、ready 原件及其缩略图/字幕链接和显式响应 DTO；JSON、TXT、CSV 一批最多 50 条输入。
 - X 单帖、YouTube 单视频/Shorts、Bilibili 普通 BV/av 默认分 P、Douyin 单作品、TikTok `/@handle/video/{id}` 与 Instagram `/reel/{shortcode}` 的 URL 提取、白名单校验、规范化和去重；Bilibili `p > 1` 与 Instagram 帖子/轮播/Story/Live 会明确拒绝。TikTok `vm`/`vt` 被建模为需受控展开的短链，不会静默当作直链。
 - `t.co`、`b23.tv`、`v.douyin.com` 以及 TikTok `vm.tiktok.com` / `vt.tiktok.com` 有逐跳 HTTPS/DNS/peer/redirect 上限的 resolver；Windows 一体化入口显式确认直连后可使用，通用控制面仍须单独启用 POSIX UDS transport，关闭时以 `short_link_resolution_required` 终止。TikTok 策略只允许精确的 `vm.tiktok.com`、`vt.tiktok.com`、`tiktok.com`、`www.tiktok.com` 与 `m.tiktok.com`，拒绝相似子域和后缀欺骗；`youtu.be/{id}` 不需要展开，可直接规范化。
@@ -71,7 +74,7 @@ Apache-2.0 只授权本程序本身，不授予任何被下载媒体的版权、
 - deployment-owned Cookie source override、六平台 0–6 映射、完整祖先/ACL/路径重叠检查、Worker core-dump 禁用，以及默认只读且需要二次明确授权才执行变更的 Linux/Docker acceptance runner。
 - [ADR-0001](docs/adr/0001-x-attachment-discovery.md) 的 Schema 8 graph-v2 编排已实现；真实 stable key 与 exact-selector 仍未经过 Stage 0，故真实 X graph 路由保持 gate 关闭。
 
-准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[服务端执行预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)与 [Iteration 0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)；[Iteration 0.27.0 编辑工作台证据](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前构建、AI 模型或真实平台验收。
+准确的当前运维步骤与边界见 [Runbook](docs/RUNBOOK.md)。本轮记录在[来源封面调研与导入记录](validation/iteration-0.28.0-source-cover-research-and-import.md)、[三平台参数与封面预检记录](validation/iteration-0.28.0-workflow-platform-parameters.md)、[服务端执行预检记录](validation/iteration-0.28.0-workflow-server-preflight.md)、[多分段自动流程记录](validation/iteration-0.28.0-multisegment-workflow.md)、[运行就绪度界面记录](validation/iteration-0.28.0-workflow-readiness-ui.md)与 [Iteration 0.28.0 AI 与自动流程证据](validation/iteration-0.28.0-ai-workflow-evidence.md)；[Iteration 0.27.0 编辑工作台证据](validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录均为 point-in-time 历史证据，不替代当前构建、AI 模型或真实平台验收。
 
 ## 本地启动
 

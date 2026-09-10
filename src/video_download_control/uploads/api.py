@@ -375,6 +375,7 @@ def install_upload_routes(
     original_asset_resolver: Callable[[str], tuple[Path, str]] | None = None,
     edited_output_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
     edited_cover_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
+    downloaded_cover_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
 ) -> None:
     """Install routes without touching upload directories, workers or accounts."""
     root = data_root.with_name(data_root.name + "-uploads")
@@ -682,6 +683,41 @@ def install_upload_routes(
             return _public(result, _COVER_FIELDS)
         finally:
             cover_path.unlink(missing_ok=True)
+
+    @router.post(
+        "/covers/download-artifacts/{artifact_id}",
+        status_code=201,
+        response_model=UploadCoverResponse,
+    )
+    async def import_downloaded_cover(
+        artifact_id: str,
+        idempotency_key: str | None = Query(
+            default=None,
+            min_length=8,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9_-]+$",
+        ),
+    ):
+        if downloaded_cover_resolver is None:
+            raise HTTPException(
+                status_code=404, detail="download_thumbnail_not_found"
+            )
+        path, expected_sha256, name = await run_guarded(
+            lambda: downloaded_cover_resolver(artifact_id)
+        )
+        result = await invoke(
+            "import_cover",
+            path,
+            name,
+            expected_sha256=expected_sha256,
+            managed_id=_managed_import_id(
+                "download_thumbnail",
+                artifact_id,
+                expected_sha256,
+                idempotency_key,
+            ),
+        )
+        return _public(result, _COVER_FIELDS)
 
     @router.post(
         "/covers/edits/{output_id}",

@@ -99,6 +99,7 @@ _ROUTES = frozenset(
         "/api/v1/uploads/accounts/{account_id}/{action}",
         "/api/v1/uploads/accounts/{account_id}/disconnect",
         "/api/v1/uploads/covers",
+        "/api/v1/uploads/covers/download-artifacts/{artifact_id}",
         "/api/v1/uploads/covers/edits/{output_id}",
         "/api/v1/uploads/covers/page",
         "/api/v1/uploads/covers/resolve",

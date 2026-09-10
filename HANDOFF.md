@@ -26,6 +26,9 @@
 - 下载域接受既有受支持 URL/导入入口，经独立 Worker、受管资产与 manifest 进入本地
   control plane。各平台仍按 capability/evidence 判定，不因单样本或历史结果自动升级为
   `verified`。
+- 下载域原有 yt-dlp 路径会把选中的平台 thumbnail 保存为 ready 资产的登记辅助文件；下载页
+  以“来源封面（平台返回）”预览/下载，JPEG、PNG、WebP 可通过深链进入上传页。上传页只有在
+  用户点击后才复核并复制到独立受管封面库，且不会自动选择封面、建立草稿或触发上传。
 - 编辑域支持完整视频、1–10 个非破坏分段、封面取帧/文字、审核后渲染，以及可选的
   自动听写、中文与 English 翻译和标准音色配音。`segments: []` 表示完整视频；只做封面
   也会生成可上传的完整视频。
@@ -50,7 +53,7 @@
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md) |
+| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
 
@@ -72,7 +75,11 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
-   Douyin `authentication_required` 和未执行平台都不是平台级支持或否定结论。
+   Douyin `authentication_required` 和未执行平台都不是平台级支持或否定结论。固定 yt-dlp
+   的 Bilibili 提取器可读取 `videoData.pic`，Douyin 提取器可列出 `cover`、`origin_cover`
+   等变体，但当前单 thumbnail 流程不保证得到 `origin_cover`，且两平台真实封面提取尚未验收。
+   视频号没有专用 yt-dlp extractor，本轮没有增加视频号网址封面能力。“来源封面（平台返回）”
+   也不代表发布者原始母版、最高分辨率或无损文件。
 
 ## 下一入口
 
@@ -85,7 +92,8 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    `origin/main`。首批上传范围保持 Bilibili、抖音、视频号。
 3. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
    明确授权、凭据留在 Git 外且精确候选固定后进行。每个结果按平台、来源类型、适配器版本、
-   环境和 commit 单独记录。
+   环境和 commit 单独记录。来源封面还需分别用 Bilibili 与 Douyin 的已授权样本对照平台可见
+   封面、下载 artifact 和导入副本；视频号保持未支持，不能用通用 extractor 结果替代专用证据。
 4. 功能反馈收敛后再创建 clean release candidate，执行源码与 wheel 独立安装、完整检查、
    隐私/许可证扫描和包外 receipt；历史 receipt 不覆盖新候选。
 

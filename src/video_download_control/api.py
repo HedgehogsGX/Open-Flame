@@ -547,7 +547,7 @@ class _VerifiedOriginalSnapshotResponse(Response):
                 _close_binary_handle(payload)
 
 
-def _registered_auxiliary_payload(
+def _registered_auxiliary_file(
     data_root: Path,
     *,
     asset_id: object,
@@ -556,8 +556,8 @@ def _registered_auxiliary_payload(
     mime_type: object,
     language: object,
     expected_sha256: object,
-) -> tuple[BinaryIO, int, str, str]:
-    """Verify one sidecar into a bounded spool before any bytes are served."""
+) -> tuple[Path, os.stat_result, str, str, str]:
+    """Resolve one registered sidecar without trusting its database path fields."""
 
     canonical_asset_id = _canonical_asset_id(asset_id)
     if kind == "thumbnail":
@@ -653,6 +653,32 @@ def _registered_auxiliary_payload(
     resolved = current.resolve(strict=True)
     if not resolved.is_relative_to(root):
         raise ValueError("registered artifact is outside the asset root")
+    return resolved, final_info, expected_mime, suffix, expected_sha256
+
+
+def _registered_auxiliary_payload(
+    data_root: Path,
+    *,
+    asset_id: object,
+    kind: object,
+    relative_path: object,
+    mime_type: object,
+    language: object,
+    expected_sha256: object,
+) -> tuple[BinaryIO, int, str, str]:
+    """Verify one sidecar into a bounded spool before any bytes are served."""
+
+    resolved, final_info, expected_mime, suffix, registered_sha256 = (
+        _registered_auxiliary_file(
+            data_root,
+            asset_id=asset_id,
+            kind=kind,
+            relative_path=relative_path,
+            mime_type=mime_type,
+            language=language,
+            expected_sha256=expected_sha256,
+        )
+    )
     spool: BinaryIO = tempfile.SpooledTemporaryFile(
         max_size=_AUXILIARY_SPOOL_MEMORY_BYTES,
         mode="w+b",
@@ -682,7 +708,7 @@ def _registered_auxiliary_payload(
             or final_opened_info.st_dev != opened_info.st_dev
             or final_opened_info.st_ino != opened_info.st_ino
             or final_opened_info.st_size != opened_info.st_size
-            or digest.hexdigest() != expected_sha256
+            or digest.hexdigest() != registered_sha256
         ):
             raise ValueError("registered artifact content is invalid")
         spool.seek(0)
@@ -936,6 +962,45 @@ def create_app(
             raise HTTPException(status_code=409, detail="asset_file_unavailable") from None
         return path, registered["sha256"]
 
+    def upload_download_thumbnail(artifact_id: str) -> tuple[Path, str, str]:
+        try:
+            canonical_id = _canonical_asset_id(artifact_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail="download_thumbnail_not_found"
+            ) from None
+        registered = service.get_ready_auxiliary_artifact(canonical_id)
+        if (
+            registered is None
+            or registered.get("artifact_id") != canonical_id
+            or registered.get("kind") != "thumbnail"
+        ):
+            raise HTTPException(
+                status_code=404, detail="download_thumbnail_not_found"
+            )
+        try:
+            path, _, _, suffix, expected_sha256 = _registered_auxiliary_file(
+                resolved_settings.data_root,
+                asset_id=registered["asset_id"],
+                kind=registered["kind"],
+                relative_path=registered["artifact_path"],
+                mime_type=registered["mime_type"],
+                language=registered["language"],
+                expected_sha256=registered["sha256"],
+            )
+        except (KeyError, OSError, ValueError):
+            raise HTTPException(
+                status_code=409, detail="download_thumbnail_unavailable"
+            ) from None
+        if suffix not in {".jpe", ".jpg", ".jpeg", ".png", ".webp"}:
+            raise HTTPException(status_code=409, detail="unsupported_cover_type")
+        upload_suffix = ".jpeg" if suffix == ".jpe" else suffix
+        return (
+            path,
+            expected_sha256,
+            f"download-cover-{canonical_id}{upload_suffix}",
+        )
+
     editing_processor_factory = None
     if (
         resolved_settings.tool_root is not None
@@ -971,6 +1036,7 @@ def create_app(
         original_asset_resolver=upload_original_asset,
         edited_output_resolver=upload_edited_output,
         edited_cover_resolver=upload_edited_cover,
+        downloaded_cover_resolver=upload_download_thumbnail,
     )
     workflow_adapter = LocalWorkflowAdapter(
         batch_service=service,

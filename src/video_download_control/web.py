@@ -761,6 +761,27 @@ INDEX_HTML = """<!doctype html>
       return pending.promise;
     }
 
+    const thumbnailMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+    function uploadableThumbnailArtifact(artifact) {
+      return artifact?.kind === 'thumbnail'
+        && typeof artifact.artifact_id === 'string'
+        && canonicalUuid.test(artifact.artifact_id)
+        && thumbnailMimeTypes.has(artifact.mime_type);
+    }
+
+    function localArtifactUrl(artifactId) {
+      return `/api/v1/artifacts/${encodeURIComponent(artifactId)}/download`;
+    }
+
+    function uploadImportUrl(assetId, coverArtifactId = null) {
+      const params = new URLSearchParams();
+      if (assetId) params.set('asset_id', assetId);
+      if (coverArtifactId) params.set('cover_artifact_id', coverArtifactId);
+      return `/uploads?${params.toString()}`;
+    }
+
     function updateAssetItem(item, asset, index) {
       if (!item._downloadLink) {
         item._downloadLink = document.createElement('a');
@@ -773,6 +794,12 @@ INDEX_HTML = """<!doctype html>
       item._downloadLink.href = asset.download_url;
       item._downloadLink.textContent = `下载成品 ${index + 1}（${kind}${size}）`;
 
+      const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts : [];
+      const thumbnailArtifacts = artifacts.filter(artifact => artifact?.kind === 'thumbnail');
+      const soleCoverArtifact = thumbnailArtifacts.length === 1
+        && uploadableThumbnailArtifact(thumbnailArtifacts[0])
+        ? thumbnailArtifacts[0]
+        : null;
       const canUpload = kind === 'video' && typeof asset.asset_id === 'string';
       if (canUpload && !item._uploadLink) {
         item._editLink = document.createElement('a');
@@ -785,8 +812,16 @@ INDEX_HTML = """<!doctype html>
       if (canUpload) {
         item._editLink.href = '/edits?asset_id=' + encodeURIComponent(asset.asset_id);
         item._editLink.setAttribute('aria-label', `将成品 ${index + 1} 复制到编辑工作台`);
-        item._uploadLink.href = '/uploads?asset_id=' + encodeURIComponent(asset.asset_id);
-        item._uploadLink.setAttribute('aria-label', `将成品 ${index + 1} 用于上传`);
+        item._uploadLink.href = uploadImportUrl(
+          asset.asset_id,
+          soleCoverArtifact?.artifact_id || null
+        );
+        item._uploadLink.setAttribute(
+          'aria-label',
+          soleCoverArtifact
+            ? `将成品 ${index + 1} 和来源封面复制到上传工作台`
+            : `将成品 ${index + 1} 用于上传`
+        );
       } else if (item._uploadLink) {
         item._editLink.remove();
         item._editLink = null;
@@ -794,7 +829,6 @@ INDEX_HTML = """<!doctype html>
         item._uploadLink = null;
       }
 
-      const artifacts = Array.isArray(asset.artifacts) ? asset.artifacts : [];
       if (artifacts.length > 0 && !item._artifactList) {
         item._artifactList = document.createElement('ul');
         item._artifactList.className = 'artifact-list';
@@ -807,19 +841,92 @@ INDEX_HTML = """<!doctype html>
           entry => entry.artifact.artifact_id || entry.artifact.download_url || entry.artifactIndex,
           () => {
             const artifactItem = document.createElement('li');
+            artifactItem._preview = document.createElement('img');
+            artifactItem._preview.className = 'source-cover-preview';
+            artifactItem._preview.loading = 'lazy';
+            artifactItem._preview.decoding = 'async';
+            artifactItem._preview.referrerPolicy = 'no-referrer';
+            artifactItem._preview.addEventListener('error', () => {
+              artifactItem._preview.dataset.failed = 'true';
+              artifactItem._preview.hidden = true;
+            });
+            artifactItem._preview.addEventListener('load', () => {
+              if (!artifactItem._preview.dataset.source) return;
+              delete artifactItem._preview.dataset.failed;
+              artifactItem._preview.hidden = false;
+            });
+            artifactItem._content = document.createElement('div');
+            artifactItem._content.className = 'artifact-content';
+            artifactItem._label = document.createElement('strong');
+            artifactItem._meta = document.createElement('p');
+            artifactItem._meta.className = 'muted small';
+            artifactItem._actions = document.createElement('div');
+            artifactItem._actions.className = 'row artifact-actions';
             artifactItem._link = document.createElement('a');
+            artifactItem._link.className = 'button-link secondary';
             artifactItem._link.setAttribute('download', '');
-            artifactItem.append(artifactItem._link);
+            artifactItem._uploadLink = document.createElement('a');
+            artifactItem._uploadLink.className = 'button-link';
+            artifactItem._actions.append(artifactItem._link, artifactItem._uploadLink);
+            artifactItem._content.append(
+              artifactItem._label,
+              artifactItem._meta,
+              artifactItem._actions
+            );
+            artifactItem.append(artifactItem._preview, artifactItem._content);
             return artifactItem;
           },
           (artifactItem, entry) => {
             const {artifact, artifactIndex} = entry;
+            const isThumbnail = artifact.kind === 'thumbnail';
+            const canImportThumbnail = uploadableThumbnailArtifact(artifact);
             const artifactKind = artifact.kind === 'thumbnail' ? '缩略图' : '字幕';
+            const displayLabel = isThumbnail ? '来源封面（平台返回）' : artifactKind;
             const language = artifact.kind === 'caption' && artifact.language
               ? ` · ${artifact.language}`
               : '';
-            artifactItem._link.href = artifact.download_url;
-            artifactItem._link.textContent = `下载${artifactKind} ${artifactIndex + 1}${language}`;
+            const artifactUrl = isThumbnail && canonicalUuid.test(artifact.artifact_id || '')
+              ? localArtifactUrl(artifact.artifact_id)
+              : artifact.download_url;
+            artifactItem.className = isThumbnail
+              ? 'artifact-entry source-cover-artifact'
+              : 'artifact-entry caption-artifact';
+            artifactItem._label.textContent = `${displayLabel} ${artifactIndex + 1}`;
+            artifactItem._meta.textContent = `${artifact.mime_type || '类型未知'}${language}`;
+            artifactItem._link.href = artifactUrl;
+            artifactItem._link.textContent = isThumbnail ? '下载来源封面' : '下载字幕';
+            if (isThumbnail) {
+              if (artifactItem._preview.dataset.source !== artifactUrl) {
+                artifactItem._preview.dataset.source = artifactUrl;
+                delete artifactItem._preview.dataset.failed;
+                artifactItem._preview.src = artifactUrl;
+              }
+              artifactItem._preview.hidden = artifactItem._preview.dataset.failed === 'true';
+              artifactItem._preview.alt = `来源封面（平台返回）${artifactIndex + 1}预览`;
+              artifactItem._uploadLink.hidden = !canImportThumbnail;
+              if (canImportThumbnail) {
+                artifactItem._uploadLink.href = uploadImportUrl(
+                  canUpload ? asset.asset_id : null,
+                  artifact.artifact_id
+                );
+                artifactItem._uploadLink.textContent = '用于上传';
+                artifactItem._uploadLink.setAttribute(
+                  'aria-label',
+                  `将来源封面 ${artifactIndex + 1} 导入上传工作台`
+                );
+              } else {
+                artifactItem._uploadLink.removeAttribute('href');
+                artifactItem._uploadLink.removeAttribute('aria-label');
+              }
+            } else {
+              artifactItem._preview.hidden = true;
+              artifactItem._preview.removeAttribute('src');
+              delete artifactItem._preview.dataset.source;
+              delete artifactItem._preview.dataset.failed;
+              artifactItem._uploadLink.hidden = true;
+              artifactItem._uploadLink.removeAttribute('href');
+              artifactItem._uploadLink.removeAttribute('aria-label');
+            }
           }
         );
       } else if (item._artifactList) {

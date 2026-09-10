@@ -16,6 +16,12 @@ results belong outside Git or under ignored `validation/local/`.
 - Real OpenAI responses, human listening quality, Bilibili/Douyin/WeChat
   Channels upload acceptance, scheduled publication and public visibility are
   unverified for the current source.
+- The Download pipeline already registers the thumbnail selected by pinned
+  yt-dlp. The current source can preview/download that **source cover returned
+  by the platform** and explicitly copy JPEG/PNG/WebP into Upload's managed
+  cover library. This wording does not claim a creator master or lossless
+  image. Bilibili/Douyin real extraction remains unverified, and yt-dlp has no
+  dedicated WeChat Channels extractor.
 - Hosted CI now reaches the full Windows/Linux and CPython 3.12/3.13 pytest
   stage, but the matrix remains red because frozen historical tests conflict
   with current HTTP security, Schema and version contracts. See the CI record;
@@ -69,7 +75,8 @@ The concise current development state, risks and next actions live in
   [platform parameters](iteration-0.28.0-workflow-platform-parameters.md) and
   [speech rate](iteration-0.28.0-speech-rate.md)
 - [Editorial Glass frontend](iteration-0.28.0-editorial-glass-frontend.md) and
-  [translation revision binding](iteration-0.28.0-translation-revision-binding.md)
+  [source-cover research and explicit import](iteration-0.28.0-source-cover-research-and-import.md),
+  and [translation revision binding](iteration-0.28.0-translation-revision-binding.md)
 - [Current local runtime refresh](iteration-0.28.0-local-runtime-refresh.md),
   [synthetic full-chain smoke](iteration-0.28.0-full-chain-smoke.md) and
   [hosted CI execution-chain recovery](iteration-0.28.0-hosted-ci-recovery.md)
