@@ -3104,6 +3104,8 @@ class LocalWorkflowAdapter:
         expected_targets: Sequence[Mapping[str, str]],
         account_bindings: Sequence[Mapping[str, str]],
         expected_request_keys: Sequence[str],
+        expected_upload: Mapping[str, Any],
+        expected_upload_cover_id: str | None,
     ) -> UploadSnapshot:
         """Atomically replace only failed upload leaves with reviewable drafts."""
 
@@ -3130,12 +3132,106 @@ class LocalWorkflowAdapter:
             or any(not isinstance(binding, Mapping) for binding in account_bindings)
         ):
             return UploadSnapshot("attention", code="upload_job_set_invalid")
+        if not isinstance(expected_upload, Mapping) or set(expected_upload) not in {
+            frozenset(_UPLOAD_KEYS),
+            frozenset(_UPLOAD_KEYS | {_UPLOAD_PREFER_DOWNLOAD_COVER_KEY}),
+        }:
+            return UploadSnapshot("attention", code="upload_request_invalid")
         try:
-            retried = self.upload_manager.get().retry_many(
+            normalized_bindings = list(
+                normalize_account_bindings(
+                    [dict(item) for item in account_bindings]
+                )
+            )
+            profile_bindings = list(
+                normalize_account_bindings(expected_upload.get("account_bindings"))
+            )
+        except UploadError:
+            return UploadSnapshot("attention", code="upload_request_invalid")
+        account_ids = expected_upload.get("account_ids")
+        if (
+            not isinstance(account_ids, list)
+            or not account_ids
+            or any(not isinstance(account_id, str) for account_id in account_ids)
+            or len(set(account_ids)) != len(account_ids)
+            or {
+                binding["account_id"]: binding for binding in normalized_bindings
+            }
+            != {binding["account_id"]: binding for binding in profile_bindings}
+            or {binding["account_id"] for binding in normalized_bindings}
+            != set(account_ids)
+        ):
+            return UploadSnapshot("attention", code="upload_request_mismatch")
+        platforms = {
+            binding["account_id"]: binding["platform"]
+            for binding in normalized_bindings
+        }
+        try:
+            service = self.upload_manager.get()
+        except UploadError as error:
+            _domain_failure(error, "upload_failed")
+        cover_record: Mapping[str, Any] | None = None
+        if expected_upload_cover_id is not None:
+            try:
+                expected_upload_cover_id = _hex_identifier(
+                    expected_upload_cover_id
+                )
+                cover_record = service.cover(expected_upload_cover_id)
+                if (
+                    not isinstance(cover_record, Mapping)
+                    or _record_id(cover_record) != expected_upload_cover_id
+                ):
+                    return UploadSnapshot(
+                        "attention", code="upload_request_mismatch"
+                    )
+            except (UploadError, WorkflowError):
+                return UploadSnapshot("attention", code="upload_request_mismatch")
+        elif expected_upload.get(_UPLOAD_PREFER_DOWNLOAD_COVER_KEY) is True:
+            return UploadSnapshot("attention", code="upload_request_mismatch")
+        try:
+            overrides = self._upload_overrides(
+                expected_upload.get("target_overrides"),
+                account_ids,
+                platforms,
+                cover_record,
+                expected_upload_cover_id,
+            )
+        except WorkflowError:
+            return UploadSnapshot("attention", code="upload_request_mismatch")
+
+        grouped_targets: dict[str, list[Mapping[str, str]]] = {}
+        for request_key, target in zip(
+            expected_request_keys, normalized_targets, strict=True
+        ):
+            grouped_targets.setdefault(request_key, []).append(target)
+        expected_requests: dict[str, dict[str, object]] = {}
+        source_ids: set[str] = set()
+        for request_key, targets in grouped_targets.items():
+            target_source_ids = {target["source_id"] for target in targets}
+            if (
+                [target["account_id"] for target in targets] != account_ids
+                or any(
+                    target["platform"] != platforms[target["account_id"]]
+                    for target in targets
+                )
+                or len(target_source_ids) != 1
+            ):
+                return UploadSnapshot("attention", code="upload_job_set_invalid")
+            source_id = next(iter(target_source_ids))
+            if source_id in source_ids:
+                return UploadSnapshot("attention", code="upload_job_set_invalid")
+            source_ids.add(source_id)
+            expected_requests[request_key] = self._workflow_upload_request(
+                source_id, account_ids, expected_upload, overrides
+            )
+
+        try:
+            retried = service.retry_many(
                 normalized_ids,
                 expected_targets=normalized_targets,
-                expected_account_bindings=[dict(item) for item in account_bindings],
+                expected_account_bindings=normalized_bindings,
                 expected_request_keys=list(expected_request_keys),
+                expected_requests=expected_requests,
             )
         except UploadError as error:
             if error.code in {"job_retry_lineage_changed", "retry_not_allowed"}:
@@ -3543,18 +3639,9 @@ class LocalWorkflowAdapter:
                 )
                 request_jobs = service.claim_workflow_request_for_cancellation(
                     request_key,
-                    expected_request={
-                        "source_id": source_id,
-                        "account_ids": account_ids,
-                        "title": expected_upload.get("title"),
-                        "description": expected_upload.get("description"),
-                        "tags": expected_upload.get("tags"),
-                        "category_id": expected_upload.get("category_id"),
-                        "mode": expected_upload.get("mode"),
-                        "copyright": expected_upload.get("copyright"),
-                        "source_credit": expected_upload.get("source_credit"),
-                        "target_overrides": overrides,
-                    },
+                    expected_request=self._workflow_upload_request(
+                        source_id, account_ids, expected_upload, overrides
+                    ),
                 )
             else:
                 overrides = self._upload_overrides(
@@ -3566,18 +3653,9 @@ class LocalWorkflowAdapter:
                 )
                 request_jobs = service.claim_workflow_request_for_cancellation(
                     request_key,
-                    expected_request={
-                        "source_id": source_id,
-                        "account_ids": account_ids,
-                        "title": expected_upload.get("title"),
-                        "description": expected_upload.get("description"),
-                        "tags": expected_upload.get("tags"),
-                        "category_id": expected_upload.get("category_id"),
-                        "mode": expected_upload.get("mode"),
-                        "copyright": expected_upload.get("copyright"),
-                        "source_credit": expected_upload.get("source_credit"),
-                        "target_overrides": overrides,
-                    },
+                    expected_request=self._workflow_upload_request(
+                        source_id, account_ids, expected_upload, overrides
+                    ),
                 )
         except WorkflowError as error:
             if error.code in {
@@ -3772,6 +3850,28 @@ class LocalWorkflowAdapter:
             for account_id in account_ids
             if account_id in by_account
         ]
+
+    @staticmethod
+    def _workflow_upload_request(
+        source_id: str,
+        account_ids: Sequence[str],
+        upload: Mapping[str, Any],
+        target_overrides: Sequence[Mapping[str, Any]],
+    ) -> dict[str, object]:
+        """Build the Upload-domain request identity from frozen Workflow data."""
+
+        return {
+            "source_id": source_id,
+            "account_ids": list(account_ids),
+            "title": upload.get("title"),
+            "description": upload.get("description"),
+            "tags": upload.get("tags"),
+            "category_id": upload.get("category_id"),
+            "mode": upload.get("mode"),
+            "copyright": upload.get("copyright"),
+            "source_credit": upload.get("source_credit"),
+            "target_overrides": [dict(item) for item in target_overrides],
+        }
 
     @staticmethod
     def _cover_slot(platform: str, width: int, height: int) -> str | None:

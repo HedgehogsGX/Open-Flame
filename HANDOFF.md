@@ -66,7 +66,9 @@
   不变，标题、标签、封面、模式、发布时间或平台选项漂移都会失败关闭。
 - 完整 Workflow fan-out 出现 `upload_job_failed` 时可在流程页建立批量重试。Upload 域在单一
   `BEGIN IMMEDIATE` 事务中先按稳定 request key/digest、request-owned root、完整 retry lineage、账号 session、媒体、
-  schedule 与当前平台合同核对全部 slot，再只为 failed/canceled leaf 创建新草稿；成功、平台草稿
+  schedule 与当前平台合同核对全部 slot。Workflow 还会从冻结的投稿配置、账号绑定与已选封面
+  重建每段完整 request；即使 Upload root 和重算 digest 彼此自洽，只要标题、简介、标签、封面、
+  模式、发布时间或平台参数与 Workflow 冻结意图不符，也会在建后继前失败关闭。随后只为 failed/canceled leaf 创建新草稿；成功、平台草稿
   与 active slot 原位保留，任一 `unknown` 整批阻断。新草稿始终要求再次明确确认；同批另有原
   draft 时使用独立 mixed review code，避免把其确认原因伪装成重试。Workflow 先观察并 checkpoint
   当前 leaf，因此 Upload 已提交而 Workflow 尚未写回的窗口不会重复建后继。该切片没有新增表、

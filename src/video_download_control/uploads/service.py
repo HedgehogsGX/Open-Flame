@@ -3281,6 +3281,7 @@ class UploadService:
         expected_targets: Sequence[Mapping[str, str]],
         expected_account_bindings: Sequence[Mapping[str, str]],
         expected_request_keys: Sequence[str],
+        expected_requests: Mapping[str, Mapping[str, object]],
     ) -> list[dict]:
         """Create failed upload successors atomically while preserving other slots."""
 
@@ -3303,6 +3304,16 @@ class UploadService:
         ):
             raise UploadError("invalid_job_batch")
         normalized_request_keys = tuple(expected_request_keys)
+        unique_request_keys = tuple(dict.fromkeys(normalized_request_keys))
+        if (
+            not isinstance(expected_requests, Mapping)
+            or set(expected_requests) != set(unique_request_keys)
+            or any(
+                not isinstance(expected_requests[key], Mapping)
+                for key in unique_request_keys
+            )
+        ):
+            raise UploadError("upload_request_invalid")
         if (
             not isinstance(expected_account_bindings, Sequence)
             or isinstance(expected_account_bindings, (str, bytes))
@@ -3317,17 +3328,33 @@ class UploadService:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             request_roots: dict[str, list[dict]] = {}
-            for request_key in dict.fromkeys(normalized_request_keys):
+            for request_key in unique_request_keys:
                 request = db.execute(
                     "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
                     (request_key,),
                 ).fetchone()
                 if request is None:
                     raise UploadError("upload_request_mismatch")
-                if request["digest_version"] != 2:
-                    raise UploadError("upload_request_invalid")
+                try:
+                    expected_source_id, expected_request_targets, expected_digest = (
+                        self._workflow_request_identity_in(
+                            db, expected_requests[request_key]
+                        )
+                    )
+                except (KeyError, TypeError, UploadError, ValueError):
+                    raise UploadError("upload_request_invalid") from None
+                if (
+                    request["digest_version"] != 2
+                    or not isinstance(request["digest"], str)
+                    or _SHA256.fullmatch(request["digest"]) is None
+                    or not hmac.compare_digest(request["digest"], expected_digest)
+                ):
+                    raise UploadError("upload_request_mismatch")
                 request_roots[request_key] = self._request_jobs_from_row_in(
-                    db, request
+                    db,
+                    request,
+                    expected_source_id=expected_source_id,
+                    expected_targets=expected_request_targets,
                 )
 
             roots: list[dict] = []

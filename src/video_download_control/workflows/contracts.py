@@ -272,6 +272,8 @@ class WorkflowDomainAdapter(Protocol):
         expected_targets: Sequence[Mapping[str, str]],
         account_bindings: Sequence[Mapping[str, str]],
         expected_request_keys: Sequence[str],
+        expected_upload: Mapping[str, Any],
+        expected_upload_cover_id: str | None,
     ) -> UploadSnapshot: ...
 
     def cancel_uploads(

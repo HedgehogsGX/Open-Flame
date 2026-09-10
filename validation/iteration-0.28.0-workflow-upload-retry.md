@@ -1,7 +1,7 @@
 # Iteration 0.28.0 Workflow 投稿重试验证
 
 > 日期：2026-09-11（Australia/Adelaide）
-> 基线：`706da5f`；本记录绑定包含本文件的后续签名提交。
+> 初始投稿重试基线：`706da5f`；本轮跨库投稿意图加固基线：`a4cbe83`；本记录绑定包含本文件的后续签名提交。
 > 范围：本地 Upload/Workflow 数据库、服务、适配器与生产 `/workflows` 页面。没有调用真实平台或 OpenAI。
 
 ## 结果
@@ -13,6 +13,7 @@ Workflow 现在可以在完整投稿 fan-out 中出现 `upload_job_failed` 时�
 ## 事务与身份边界
 
 - `UploadService.retry_many()` 在一个 `BEGIN IMMEDIATE` 事务中读取并校验全部 slot，全部通过后才插入后继；任一 source、cover、schedule、metadata、账号或 lineage 错误都会整批回滚。
+- Workflow 重试会从冻结的 `profile.upload` / `resolved_upload`、已绑定账号与已选封面重建每段完整 expected request；Upload 在同一事务中同时比对 ledger digest 和 root 的 source、title、description、tags、category、mode、copyright、source credit、cover、schedule 及 platform options。即使 Upload DB 内 root 与重算的 v2 digest 彼此自洽，只要与 Workflow 冻结意图不符，仍在创建 successor 前以 `upload_request_mismatch` 失败关闭。
 - 每个 slot 重新绑定其稳定的 `wf-{workflow_id}-upload-jobs[-NNN]` request key。request ledger 只能引用 `retry_of IS NULL` 的原始 root；Upload Schema 3 既有 `requests.digest` 会从这些 root jobs 的标题、简介、标签、封面、模式、发布时间及平台参数重新计算。root 漂移、把 request 关系改指 retry descendant、错误 key、缺失 request 或不完整 fan-out 都失败关闭。
 - retry forest 必须是无循环、无分叉、逐边 payload 相同的单链，且只有 failed/canceled/unknown parent 可以拥有后继。调用方记录落后时会返回当前唯一 leaf，避免响应丢失后重复建草稿。
 - `submitted` 只允许对应 `publish`，`draft_saved` 只允许对应 `draft`。`unknown` 始终返回 `verify_remote_result_first`，Workflow 不提供 acknowledge 绕过。
@@ -32,7 +33,7 @@ Workflow 现在可以在完整投稿 fan-out 中出现 `upload_job_failed` 时�
 | `uv run --no-sync python -m compileall -q src` | PASS |
 | `uv run --no-sync python -m pytest -q tests/test_upload_service.py tests/test_upload_resilience.py tests/test_upload_api.py` | `76 passed` |
 | 全部既有 `tests/test_upload_*.py` | `539 passed` |
-| `uv run --no-sync python validation/local/validate_workflow_upload_retry.py` | 9 组 PASS：原子/幂等、unknown/session、request root/digest/key、回滚、Adapter、显式确认、mixed draft、checkpoint、partial fail-closed |
+| `uv run --no-sync python validation/local/validate_workflow_upload_retry.py` | 11 组 PASS：原子/幂等、unknown/session、request root/digest/key、Workflow 对 Upload 自洽漂移的跨库阻断、三平台共享封面正向重试、回滚、Adapter、显式确认、mixed draft、checkpoint、partial fail-closed |
 | `uv run --no-sync python validation/local/validate_workflow_upload_attention_recovery.py` | 7 组 PASS |
 | `uv run --no-sync python validation/local/validate_workflow_restart_continuation.py` | PASS |
 | `uv run --no-sync python validation/local/validate_workflow_multisegment_service.py` | PASS |

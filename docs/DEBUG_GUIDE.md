@@ -221,7 +221,7 @@ workflow.edit_project_id
 - `upload_retry_confirmation_required`：本批只有 retry draft 等待确认。
 - `upload_retry_mixed_confirmation_required`：除了新 retry draft，同批还有原任务 draft；最终确认会把两类 draft 一起排队，必须先逐项核对原因。
 - `upload_result_unknown` / `verify_remote_result_first`：停止重试，到平台后台按账号、标题、时间和测试编号核对。Workflow 不允许 acknowledge 后直接重发。
-- `upload_request_mismatch`：稳定 request 摘要与 root job 的标题、标签、封面、模式、发布时间或平台参数不一致；不要改数据库，保留副本并重建 workflow。
+- `upload_request_mismatch`：稳定 request 摘要、root job 或 Workflow 冻结的标题、简介、标签、封面、模式、发布时间、账号绑定及平台参数彼此不一致；即使手工重算 Upload 摘要也不能把漂移后的请求变成合法重试。不要改数据库，保留副本并重建 workflow。
 - `upload_request_invalid` / `upload_job_set_invalid` / `job_retry_lineage_invalid`：request 或 retry lineage 不完整、分叉、循环或身份异常；保留 Upload/Workflow 数据库、WAL 与日志，停止确认和重试。
 - `account_session_changed`、source/cover 校验失败或发布时间已过：修复账号或素材后重建 workflow；冻结投稿参数不会在 retry 中被静默替换。
 

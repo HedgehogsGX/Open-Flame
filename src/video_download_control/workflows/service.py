@@ -929,6 +929,8 @@ class WorkflowService:
             expected_targets=self._upload_targets(record),
             account_bindings=record["profile"]["upload"]["account_bindings"],
             expected_request_keys=self._upload_request_keys(record),
+            expected_upload=self._upload_for_execution(record),
+            expected_upload_cover_id=record["upload_cover_id"],
         )
         self._sync_upload_job_ids(record, retry_snapshot)
         retry_classification = classify_upload_snapshot(retry_snapshot)
