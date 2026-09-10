@@ -1479,8 +1479,9 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             raise UploadBackupError("upload request job list is invalid") from exc
         if request_jobs == []:
             # Whole-workflow cancellation reserves an otherwise absent stable
-            # upload request key with its exact v2 digest.  Preserve that
-            # fail-closed tombstone so a restored app cannot create the fan-out.
+            # upload request key with either the exact request digest or a v2
+            # stable-key sentinel before request metadata is needed.  Preserve
+            # that fail-closed tombstone so restore cannot create the fan-out.
             if (
                 schema_version != _schema.SCHEMA_VERSION
                 or not isinstance(row["id"], str)

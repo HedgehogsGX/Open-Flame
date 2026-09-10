@@ -22,6 +22,8 @@ results belong outside Git or under ignored `validation/local/`.
   cover library. This wording does not claim a creator master or lossless
   image. Bilibili/Douyin real extraction remains unverified, and yt-dlp has no
   dedicated WeChat Channels extractor.
+- Workflow now has an explicit source-cover preference with a generated-cover
+  fallback; see the scoped [validation record](iteration-0.28.0-workflow-source-cover-preference.md).
 - Hosted CI now reaches the full Windows/Linux and CPython 3.12/3.13 pytest
   stage, but the matrix remains red because frozen historical tests conflict
   with current HTTP security, Schema and version contracts. See the CI record;
@@ -62,6 +64,7 @@ The concise current development state, risks and next actions live in
   [AI invocation ledger](iteration-0.28.0-ai-invocation-ledger.md)
 - [Workflow presets](iteration-0.28.0-workflow-presets.md),
   [source-caption reuse](iteration-0.28.0-workflow-source-caption-reuse.md),
+  [source-cover preference](iteration-0.28.0-workflow-source-cover-preference.md),
   [AI retry lineage](iteration-0.28.0-workflow-ai-retry-lineage.md),
   [relative publish schedules](iteration-0.28.0-workflow-relative-schedules.md),
   [source-title freezing](iteration-0.28.0-workflow-source-title.md),

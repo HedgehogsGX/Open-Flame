@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import perf_counter
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Iterator, Mapping
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
@@ -106,6 +106,7 @@ from .uploads.api import install_upload_routes
 from .uploads.service import default_upload_root
 from .web import INDEX_HTML
 from .workflows.api import install_workflow_routes
+from .workflows.contracts import WorkflowError
 from .workflows.local_adapter import LocalWorkflowAdapter
 from .workflows.manager import WorkflowManager
 from .workflows.service import default_workflow_root
@@ -1056,6 +1057,149 @@ def create_app(
             "payload": payload,
         }
 
+    def workflow_download_cover(asset_id: str) -> Mapping[str, object] | None:
+        """Return one unambiguous registered thumbnail for workflow import."""
+
+        try:
+            canonical_asset_id = _canonical_asset_id(asset_id)
+            registry_rows = service.list_registered_thumbnails_for_asset(
+                canonical_asset_id
+            )
+        except (OSError, ValueError):
+            raise WorkflowError("workflow_source_cover_unavailable") from None
+        if not registry_rows:
+            raise WorkflowError("workflow_source_cover_unavailable")
+
+        def belongs_to_directory(value: object, directory: str) -> bool:
+            if (
+                not isinstance(value, str)
+                or not value
+                or "\\" in value
+                or "\x00" in value
+            ):
+                return False
+            relative = PurePosixPath(value)
+            return (
+                not relative.is_absolute()
+                and relative.as_posix() == value
+                and ".." not in relative.parts
+                and relative.parent
+                == PurePosixPath("assets") / canonical_asset_id / directory
+            )
+
+        registered_candidates: list[
+            tuple[Mapping[str, object], Path, str, str]
+        ] = []
+        try:
+            for registered in registry_rows:
+                registered_asset_id = _canonical_asset_id(
+                    registered["asset_id"]
+                )
+                original_artifact_id = _canonical_asset_id(
+                    registered["original_artifact_id"]
+                )
+                asset_sha256 = registered.get("asset_sha256")
+                original_sha256 = registered.get("original_sha256")
+                if (
+                    registered_asset_id != canonical_asset_id
+                    or registered.get("asset_status") != "ready"
+                    or registered.get("asset_media_kind") != "video"
+                    or registered.get("original_count") != 1
+                    or not isinstance(asset_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", asset_sha256) is None
+                    or asset_sha256 != original_sha256
+                    or registered.get("original_parent_artifact_id") is not None
+                    or not belongs_to_directory(
+                        registered.get("original_path"), "original"
+                    )
+                    or registered.get("ready_original_link") != 1
+                ):
+                    raise ValueError("download cover owner is invalid")
+
+                raw_artifact_id = registered.get("artifact_id")
+                if raw_artifact_id is None:
+                    if any(
+                        registered.get(key) is not None
+                        for key in (
+                            "artifact_asset_id",
+                            "kind",
+                            "artifact_path",
+                            "mime_type",
+                            "sha256",
+                            "caption_artifact_id",
+                            "parent_artifact_id",
+                        )
+                    ):
+                        raise ValueError("empty download artifact row is invalid")
+                    continue
+
+                artifact_id = _canonical_asset_id(raw_artifact_id)
+                artifact_asset_id = _canonical_asset_id(
+                    registered["artifact_asset_id"]
+                )
+                parent_artifact_id = _canonical_asset_id(
+                    registered["parent_artifact_id"]
+                )
+                artifact_sha256 = registered.get("sha256")
+                if (
+                    artifact_asset_id != canonical_asset_id
+                    or parent_artifact_id != original_artifact_id
+                    or not isinstance(artifact_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None
+                ):
+                    raise ValueError("download artifact ownership is invalid")
+                if (
+                    registered.get("kind") != "thumbnail"
+                    or registered.get("caption_artifact_id") is not None
+                ):
+                    raise ValueError("download thumbnail registry is invalid")
+                path, _, _, suffix, expected_sha256 = (
+                    _registered_auxiliary_file(
+                        resolved_settings.data_root,
+                        asset_id=canonical_asset_id,
+                        kind=registered["kind"],
+                        relative_path=registered["artifact_path"],
+                        mime_type=registered["mime_type"],
+                        language=registered["language"],
+                        expected_sha256=artifact_sha256,
+                    )
+                )
+                handle, _, _, verified_suffix = _registered_auxiliary_payload(
+                    resolved_settings.data_root,
+                    asset_id=canonical_asset_id,
+                    kind=registered["kind"],
+                    relative_path=registered["artifact_path"],
+                    mime_type=registered["mime_type"],
+                    language=registered["language"],
+                    expected_sha256=artifact_sha256,
+                )
+                handle.close()
+                if (
+                    suffix != verified_suffix
+                    or suffix not in {".jpe", ".jpg", ".jpeg", ".png", ".webp"}
+                ):
+                    raise ValueError("download thumbnail type is not supported")
+                registered_candidates.append(
+                    (registered, path, suffix, expected_sha256)
+                )
+        except (KeyError, OSError, TypeError, ValueError):
+            raise WorkflowError("workflow_source_cover_unavailable") from None
+
+        if not registered_candidates:
+            return None
+        if len(registered_candidates) != 1:
+            raise WorkflowError("workflow_source_cover_ambiguous")
+        registered, path, suffix, expected_sha256 = registered_candidates[0]
+        artifact_id = _canonical_asset_id(registered["artifact_id"])
+        upload_suffix = ".jpeg" if suffix == ".jpe" else suffix
+        return {
+            "artifact_id": artifact_id,
+            "asset_id": canonical_asset_id,
+            "path": path,
+            "sha256": expected_sha256,
+            "name": f"download-cover-{artifact_id}{upload_suffix}",
+        }
+
     editing_processor_factory = None
     if (
         resolved_settings.tool_root is not None
@@ -1099,6 +1243,7 @@ def create_app(
         upload_manager=app.state.upload_manager,
         download_asset_resolver=upload_original_asset,
         download_caption_resolver=workflow_download_caption,
+        download_cover_resolver=workflow_download_cover,
         download_runtime_probe=lambda: current_worker_runtime_status().model_dump(),
         download_control=worker_repository,
     )

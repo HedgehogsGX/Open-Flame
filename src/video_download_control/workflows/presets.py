@@ -67,6 +67,7 @@ _AI_KEYS = frozenset({
     "transcription_authorization_sha256", "translation_authorization_sha256",
 })
 _AI_OPTIONAL_KEYS = frozenset({"transcription_mode"})
+_UPLOAD_OPTIONAL_KEYS = frozenset({"prefer_download_cover"})
 _SYNTHESIS_DIGEST = "synthesis_authorization_sha256"
 
 
@@ -253,6 +254,13 @@ def _stored_profile(
         raise WorkflowPresetError("workflow_preset_invalid")
     original = json.loads(encoded)
     candidate = json.loads(encoded)
+    raw_upload = candidate["upload"]
+    if (
+        schema == _LEGACY_SCHEMA
+        and isinstance(raw_upload, dict)
+        and bool(frozenset(raw_upload) & _UPLOAD_OPTIONAL_KEYS)
+    ):
+        raise WorkflowPresetError("workflow_preset_invalid")
     raw_ai = candidate["ai"]
     if raw_ai is not None:
         raw_ai_keys = frozenset(raw_ai) if isinstance(raw_ai, dict) else frozenset()

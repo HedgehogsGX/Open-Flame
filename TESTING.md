@@ -121,6 +121,7 @@ git status --porcelain
 | WF-04 | 自动流程 | 保存启用“使用下载来源标题”的预设，刷新后只更换 URL | 公共手动标题保持禁用；下载 ready 后卡片显示最终公共标题及每个账号的“来源标题 / 按平台限制生成 / 手动覆盖”来源，Bilibili/抖音/视频号分别遵守当前 80/30/100 字 capability。 |
 | WF-05 | 自动流程 | 初次打开时临时阻断预设、账号或 AI capability 接口，再恢复并点“刷新状态” | 失败期间明确提示且不覆盖默认/已编辑表单；接口恢复后只在用户尚未编辑时恢复记住的预设，已编辑时要求手动选择。 |
 | WF-06 | 自动流程 | 启用“优先使用下载到的来源字幕”，保存预设、刷新并重新载入 | 选项精确恢复；页面明确说明来源字幕仍需核对、人工/自动来源未知且无可用字幕时才回退 AI 听写；修改该选项后本次 data-egress 勾选立即清空，须重新核对。 |
+| WF-07 | 自动流程 | 保存/恢复“优先使用下载到的来源封面”，再关闭“生成封面” | 显式偏好精确恢复；生成封面始终作为 fallback，关闭它会同时清除来源封面偏好。详见[来源封面验证](validation/iteration-0.28.0-workflow-source-cover-preference.md)。 |
 
 页面视觉检查只证明当前浏览器中的呈现。若维护者声明某个新视觉方向，报告应附四页桌面与窄屏截图，并单独记录透明度关闭/减少动态效果的结果。
 
@@ -129,6 +130,8 @@ git status --porcelain
 每轮使用唯一测试编号，例如 `OF-20260909-B1`，并把编号写入标题、源视频首帧或口播。先用 15–60 秒自有短片验证，再决定是否测试长片。完整视频、分段和每个平台分别判定。
 
 来源字幕用例应准备测试者有权使用、且下载结果确实登记字幕 sidecar 的 URL。下载记录中的 `ready` 和 `origin=platform` 只证明文件与父资产的登记链，不证明字幕由人工制作、内容正确或适合直接配音；报告仍须把来源类型写为“人工/自动未知”，并人工核对文字与时间轴。
+
+来源封面测试须保留生成封面 fallback，并用 frozen `download_asset_id`、最终 `upload_cover_id` 和平台后台事实核对；完整矩阵见[来源封面验证](validation/iteration-0.28.0-workflow-source-cover-preference.md)。
 
 | ID | 场景 | 必须观察的结果 |
 | --- | --- | --- |
@@ -144,6 +147,7 @@ git status --porcelain
 | E2E-10 | 来源字幕优先复用；连续分段：选择 2–3 个首尾连续区间，使部分 cue 完全位于区间外、其余 cue 完全位于连续总区间内 | 区间外 cue 被排除，保留 cue 的绝对媒体时间并按结果重排顺序；审核前不翻译。让任一 cue 跨越外层或内部任一分段边界时，该字幕不被裁字或静默采用，而是走一次正常 AI transcribe fallback。 |
 | E2E-11 | 来源字幕安全回退：分别使用无字幕、仅不支持格式、无匹配语言、同优先级多候选、无效 UTF-8/空字幕、HTML/SSA 标记字幕；再明确拒绝一条已导入 timeline | 前述无候选或不可用场景只创建正常 transcribe task，并继续要求冻结的 AI authorization 与本次 data-egress 确认；内容解析失败不留下半导入 timeline。被拒绝的来源 timeline 保留，下一次推进才另建 transcribe，不能在同一次审核动作中暗中调用。 |
 | E2E-12 | 来源字幕重启、漂移与重试：导入后在审核前正常重启；批准后令 translation 以可重试失败结束；另在独立测试根中改变 caption 的 asset/artifact/path/hash 身份；在 AI fallback task 已建立后让候选列表出现字幕 | 重启复用同一 timeline ID，不能重复读取并导入第二份；translation retry 只建立绑定同一已批准 parent revision 的 translation successor，不能重新 transcribe。登记链或 hash 漂移必须进入精确 attention/error，且不得把完整性冲突当作可用性不足而回退远端 AI；已经开始的 AI fallback 必须继续原 task，不能中途切换字幕并遗留听写任务。 |
+| E2E-13 | 来源封面偏好：覆盖可信 owner 下的 0/1/多候选、登记伪装/漂移、三平台共同兼容、3 分段、选择后/导入后/建 jobs 后崩溃重启、封面媒体删除、取消 tombstone 重放/篡改 | 唯一且全体兼容时采用来源封面；0 个或不兼容时回退生成封面；歧义/完整性漂移停下；任何 Upload 写入前先 CAS 冻结 cover ID。已有请求从不可变历史恢复且不要求终态封面字节；无请求的取消先原子 tombstone，重启不依赖 Download，并继续取消前序分段。详见[来源封面验证](validation/iteration-0.28.0-workflow-source-cover-preference.md)。 |
 
 真实 OpenAI 结果另记录：模型标识、源/目标语言、音色、用例时长、听写主要错误、翻译主要错误、配音缺字/错音/爆音/时间溢出、是否需要人工修订。不要把硬上限当作价格估算；费用以测试者自己的 provider 账单核对。
 

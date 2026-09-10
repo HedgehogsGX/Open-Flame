@@ -93,6 +93,7 @@ _UPLOAD_INPUT_KEYS = {
 }
 _UPLOAD_KEYS = _UPLOAD_INPUT_KEYS | {"account_bindings"}
 _UPLOAD_TITLE_MODE_KEY = "title_mode"
+_UPLOAD_PREFER_DOWNLOAD_COVER_KEY = "prefer_download_cover"
 _SOURCE_METADATA_ERROR = "workflow_source_metadata_unavailable"
 _COVER_KEYS = {"cover_landscape_asset_id", "cover_portrait_asset_id"}
 _TRANSCRIPTION_MODE_KEY = "transcription_mode"
@@ -132,6 +133,7 @@ class DownloadControl(Protocol):
 
 DownloadAssetResolver = Callable[[str], tuple[Path, str]]
 DownloadCaptionResolver = Callable[[str], Mapping[str, Any]]
+DownloadCoverResolver = Callable[[str], Mapping[str, Any] | None]
 DownloadRuntimeProbe = Callable[[], Mapping[str, Any]]
 
 
@@ -237,6 +239,7 @@ class LocalWorkflowAdapter:
     download_runtime_probe: DownloadRuntimeProbe | None = None
     download_control: DownloadControl | None = None
     download_caption_resolver: DownloadCaptionResolver | None = None
+    download_cover_resolver: DownloadCoverResolver | None = None
 
     def preflight(
         self,
@@ -380,10 +383,28 @@ class LocalWorkflowAdapter:
         if not isinstance(upload, Mapping) or set(upload) not in {
             frozenset(_UPLOAD_INPUT_KEYS),
             frozenset(_UPLOAD_INPUT_KEYS | {_UPLOAD_TITLE_MODE_KEY}),
+            frozenset(
+                _UPLOAD_INPUT_KEYS | {_UPLOAD_PREFER_DOWNLOAD_COVER_KEY}
+            ),
+            frozenset(
+                _UPLOAD_INPUT_KEYS
+                | {_UPLOAD_TITLE_MODE_KEY, _UPLOAD_PREFER_DOWNLOAD_COVER_KEY}
+            ),
         }:
             raise WorkflowError("workflow_domain_data_invalid")
         title_mode = upload.get(_UPLOAD_TITLE_MODE_KEY, "explicit")
         if not isinstance(title_mode, str) or title_mode not in {"explicit", "source"}:
+            raise WorkflowError("workflow_domain_data_invalid")
+        prefer_download_cover = upload.get(
+            _UPLOAD_PREFER_DOWNLOAD_COVER_KEY, False
+        )
+        if (
+            type(prefer_download_cover) is not bool
+            or (
+                _UPLOAD_PREFER_DOWNLOAD_COVER_KEY in upload
+                and prefer_download_cover is not True
+            )
+        ):
             raise WorkflowError("workflow_domain_data_invalid")
         if expected_account_bindings is not None and (
             not isinstance(expected_account_bindings, Sequence)
@@ -397,6 +418,7 @@ class LocalWorkflowAdapter:
         try:
             options = dict(upload)
             options.pop(_UPLOAD_TITLE_MODE_KEY, None)
+            options.pop(_UPLOAD_PREFER_DOWNLOAD_COVER_KEY, None)
             if title_mode == "source":
                 # Source metadata is unavailable before the download.  A
                 # bounded placeholder lets the upload domain validate account,
@@ -2097,6 +2119,32 @@ class LocalWorkflowAdapter:
             raise WorkflowError("workflow_domain_data_invalid")
         return new_id
 
+    def select_upload_cover(
+        self,
+        workflow_id: str,
+        output_id: str,
+        cover_id: str,
+        upload: Mapping[str, Any],
+        *,
+        segment_ordinal: int,
+        download_asset_id: str,
+    ) -> str:
+        """Choose a deterministic cover without mutating the Upload domain."""
+
+        selected = self._prepare_upload(
+            workflow_id,
+            output_id,
+            cover_id,
+            upload,
+            segment_ordinal=segment_ordinal,
+            download_asset_id=download_asset_id,
+            expected_upload_cover_id=None,
+            select_cover_only=True,
+        )
+        if selected.cover_id is None or selected.job_ids:
+            raise WorkflowError("workflow_domain_data_invalid")
+        return selected.cover_id
+
     def prepare_upload(
         self,
         workflow_id: str,
@@ -2105,6 +2153,31 @@ class LocalWorkflowAdapter:
         upload: Mapping[str, Any],
         *,
         segment_ordinal: int = 1,
+        download_asset_id: str | None = None,
+        expected_upload_cover_id: str | None = None,
+    ) -> UploadPrepared:
+        return self._prepare_upload(
+            workflow_id,
+            output_id,
+            cover_id,
+            upload,
+            segment_ordinal=segment_ordinal,
+            download_asset_id=download_asset_id,
+            expected_upload_cover_id=expected_upload_cover_id,
+            select_cover_only=False,
+        )
+
+    def _prepare_upload(
+        self,
+        workflow_id: str,
+        output_id: str,
+        cover_id: str | None,
+        upload: Mapping[str, Any],
+        *,
+        segment_ordinal: int = 1,
+        download_asset_id: str | None = None,
+        expected_upload_cover_id: str | None = None,
+        select_cover_only: bool,
     ) -> UploadPrepared:
         workflow_id = _hex_identifier(workflow_id)
         output_id = _hex_identifier(output_id)
@@ -2116,7 +2189,35 @@ class LocalWorkflowAdapter:
             raise WorkflowError("workflow_domain_data_invalid")
         if cover_id is not None:
             cover_id = _hex_identifier(cover_id)
-        if not isinstance(upload, Mapping) or set(upload) != _UPLOAD_KEYS:
+        if not isinstance(upload, Mapping) or set(upload) not in {
+            frozenset(_UPLOAD_KEYS),
+            frozenset(_UPLOAD_KEYS | {_UPLOAD_PREFER_DOWNLOAD_COVER_KEY}),
+        }:
+            raise WorkflowError("workflow_domain_data_invalid")
+        prefer_download_cover = upload.get(
+            _UPLOAD_PREFER_DOWNLOAD_COVER_KEY, False
+        )
+        if (
+            type(prefer_download_cover) is not bool
+            or (
+                _UPLOAD_PREFER_DOWNLOAD_COVER_KEY in upload
+                and prefer_download_cover is not True
+            )
+        ):
+            raise WorkflowError("workflow_domain_data_invalid")
+        if prefer_download_cover:
+            if cover_id is None or download_asset_id is None:
+                raise WorkflowError("workflow_domain_data_invalid")
+            download_asset_id = _download_identifier(download_asset_id)
+        elif download_asset_id is not None:
+            raise WorkflowError("workflow_domain_data_invalid")
+        if expected_upload_cover_id is not None:
+            expected_upload_cover_id = _hex_identifier(expected_upload_cover_id)
+        if (
+            prefer_download_cover
+            and not select_cover_only
+            and expected_upload_cover_id is None
+        ):
             raise WorkflowError("workflow_domain_data_invalid")
 
         try:
@@ -2170,40 +2271,205 @@ class LocalWorkflowAdapter:
                 None,
             )
 
-            imported_cover_id = None
-            cover_record: Mapping[str, Any] | None = None
-            if cover_id is not None and cover_identity is not None:
-                cover_path, cover_sha256, cover_name = cover_identity
-                imported = service.import_cover(
-                    cover_path,
-                    cover_name,
-                    expected_sha256=cover_sha256,
-                    managed_id=_managed_import_id(
-                        workflow_id, "edit_cover", cover_id, cover_sha256
-                    ),
-                )
-                if not isinstance(imported, Mapping):
-                    raise WorkflowError("workflow_domain_data_invalid")
-                imported_cover_id = _record_id(imported)
-                cover_record = imported
-
-            overrides = self._upload_overrides(
-                upload.get("target_overrides"),
-                account_ids,
-                platforms,
-                cover_record,
-                imported_cover_id,
+            source_id = _managed_import_id(
+                workflow_id, "edit_video", output_id, output_sha256
             )
+            request_key = (
+                f"wf-{workflow_id}-upload-jobs"
+                if segment_ordinal == 1
+                else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
+            )
+            edit_imported_cover_id = (
+                _managed_import_id(
+                    workflow_id,
+                    "edit_cover",
+                    cover_id,
+                    cover_identity[1],
+                )
+                if cover_id is not None and cover_identity is not None
+                else None
+            )
+
+            imported_cover_id = None
+            selected_cover: tuple[Path, str, str, str] | None = None
+            source_cover_identity: tuple[str, Path, str, str] | None = None
+            cover_record: Mapping[str, Any] | None = None
+            force_edit_fallback = False
+            overrides: list[dict[str, Any]]
+            persisted_jobs = (
+                service.jobs_for_request(request_key)
+                if prefer_download_cover
+                else None
+            )
+            if prefer_download_cover and persisted_jobs == []:
+                raise WorkflowError("workflow_domain_data_invalid")
+            if prefer_download_cover and persisted_jobs is not None:
+                imported_cover_id = self._workflow_request_cover_id(
+                    persisted_jobs,
+                    source_id=source_id,
+                    account_ids=account_ids,
+                    platforms=platforms,
+                )
+            elif prefer_download_cover and expected_upload_cover_id is not None:
+                imported_cover_id = expected_upload_cover_id
+
+            if imported_cover_id is not None:
+                cover_record = self._frozen_workflow_cover_copy(
+                    service,
+                    workflow_id,
+                    imported_cover_id,
+                    edit_cover_id=edit_imported_cover_id,
+                    edit_cover_sha256=(
+                        cover_identity[1] if cover_identity is not None else None
+                    ),
+                    edit_cover_name=(
+                        cover_identity[2] if cover_identity is not None else None
+                    ),
+                    require_media=persisted_jobs is None,
+                    allow_missing=persisted_jobs is None,
+                )
+                if cover_record is None:
+                    force_edit_fallback = (
+                        imported_cover_id == edit_imported_cover_id
+                    )
+                    imported_cover_id = None
+                else:
+                    overrides = self._upload_overrides(
+                        upload.get("target_overrides"),
+                        account_ids,
+                        platforms,
+                        cover_record,
+                        imported_cover_id,
+                    )
+
+            if imported_cover_id is None and not force_edit_fallback:
+                source_cover_identity = (
+                    self._download_cover_identity(download_asset_id)
+                    if prefer_download_cover
+                    else None
+                )
+
+            if imported_cover_id is None and source_cover_identity is not None:
+                artifact_id, source_path, source_sha256, source_name = (
+                    source_cover_identity
+                )
+                source_imported_cover_id = _managed_import_id(
+                    workflow_id,
+                    "download_cover",
+                    artifact_id,
+                    source_sha256,
+                )
+                source_cover_record = service.inspect_managed_cover_import(
+                    source_path,
+                    source_name,
+                    expected_sha256=source_sha256,
+                    managed_id=source_imported_cover_id,
+                )
+                if not isinstance(source_cover_record, Mapping):
+                    raise WorkflowError("workflow_domain_data_invalid")
+                if _record_id(source_cover_record) != source_imported_cover_id:
+                    raise WorkflowError("workflow_domain_data_invalid")
+                try:
+                    overrides = self._upload_overrides(
+                        upload.get("target_overrides"),
+                        account_ids,
+                        platforms,
+                        source_cover_record,
+                        source_imported_cover_id,
+                    )
+                except WorkflowError as error:
+                    if error.code != "workflow_cover_incompatible":
+                        raise
+                else:
+                    imported_cover_id = source_imported_cover_id
+                    selected_cover = (
+                        source_path,
+                        source_name,
+                        source_sha256,
+                        source_imported_cover_id,
+                    )
+
+            if imported_cover_id is None and selected_cover is None:
+                if cover_id is not None and cover_identity is not None:
+                    cover_path, cover_sha256, cover_name = cover_identity
+                    imported_cover_id = edit_imported_cover_id
+                    if imported_cover_id is None:
+                        raise WorkflowError("workflow_domain_data_invalid")
+                    if prefer_download_cover:
+                        cover_record = service.inspect_managed_cover_import(
+                            cover_path,
+                            cover_name,
+                            expected_sha256=cover_sha256,
+                            managed_id=imported_cover_id,
+                        )
+                        if not isinstance(cover_record, Mapping):
+                            raise WorkflowError("workflow_domain_data_invalid")
+                        if _record_id(cover_record) != imported_cover_id:
+                            raise WorkflowError("workflow_domain_data_invalid")
+                        selected_cover = (
+                            cover_path,
+                            cover_name,
+                            cover_sha256,
+                            imported_cover_id,
+                        )
+                    else:
+                        imported = service.import_cover(
+                            cover_path,
+                            cover_name,
+                            expected_sha256=cover_sha256,
+                            managed_id=imported_cover_id,
+                        )
+                        if not isinstance(imported, Mapping):
+                            raise WorkflowError("workflow_domain_data_invalid")
+                        if _record_id(imported) != imported_cover_id:
+                            raise WorkflowError("workflow_domain_data_invalid")
+                        cover_record = imported
+                else:
+                    cover_record = None
+                overrides = self._upload_overrides(
+                    upload.get("target_overrides"),
+                    account_ids,
+                    platforms,
+                    cover_record,
+                    imported_cover_id,
+                )
+
+            if expected_upload_cover_id not in {None, imported_cover_id}:
+                raise WorkflowError("workflow_domain_data_invalid")
+
+            if select_cover_only:
+                if not prefer_download_cover or imported_cover_id is None:
+                    raise WorkflowError("workflow_domain_data_invalid")
+                return UploadPrepared(
+                    source_id=source_id,
+                    cover_id=imported_cover_id,
+                    job_ids=(),
+                )
+
+            if selected_cover is not None:
+                selected_path, selected_name, selected_sha256, selected_id = (
+                    selected_cover
+                )
+                imported = service.import_cover(
+                    selected_path,
+                    selected_name,
+                    expected_sha256=selected_sha256,
+                    managed_id=selected_id,
+                )
+                if (
+                    not isinstance(imported, Mapping)
+                    or _record_id(imported) != selected_id
+                ):
+                    raise WorkflowError("workflow_domain_data_invalid")
 
             source = service.import_source(
                 output_path,
                 output_name,
                 expected_sha256=output_sha256,
-                managed_id=_managed_import_id(
-                    workflow_id, "edit_video", output_id, output_sha256
-                ),
+                managed_id=source_id,
             )
-            source_id = _record_id(source)
+            if _record_id(source) != source_id:
+                raise WorkflowError("workflow_domain_data_invalid")
             jobs = service.create_jobs(
                 source_id=source_id,
                 account_ids=list(account_ids),
@@ -2216,11 +2482,7 @@ class LocalWorkflowAdapter:
                 source_credit=upload["source_credit"],
                 target_overrides=overrides,
                 expected_account_bindings=[dict(binding) for binding in bindings],
-                idempotency_key=(
-                    f"wf-{workflow_id}-upload-jobs"
-                    if segment_ordinal == 1
-                    else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
-                ),
+                idempotency_key=request_key,
             )
         except EditingError as error:
             _domain_failure(error, "editing_failed")
@@ -2255,6 +2517,199 @@ class LocalWorkflowAdapter:
             job_ids=tuple(job_ids),
         )
 
+    def _download_cover_identity(
+        self, download_asset_id: str
+    ) -> tuple[str, Path, str, str] | None:
+        """Resolve one registered source cover without accepting arbitrary files."""
+
+        resolver = self.download_cover_resolver
+        if resolver is None:
+            raise WorkflowError("workflow_source_cover_unavailable")
+        try:
+            resolved = resolver(download_asset_id)
+        except WorkflowError:
+            raise
+        except Exception:
+            raise WorkflowError("workflow_source_cover_unavailable") from None
+        if resolved is None:
+            return None
+        if not isinstance(resolved, Mapping) or set(resolved) != {
+            "artifact_id",
+            "asset_id",
+            "path",
+            "sha256",
+            "name",
+        }:
+            raise WorkflowError("workflow_source_cover_unavailable")
+        try:
+            artifact_id = _download_identifier(resolved.get("artifact_id"))
+            asset_id = _download_identifier(resolved.get("asset_id"))
+            expected_sha256 = _sha256(resolved.get("sha256"))
+        except WorkflowError:
+            raise WorkflowError("workflow_source_cover_unavailable") from None
+        path = resolved.get("path")
+        name = resolved.get("name")
+        suffix = Path(name).suffix.lower() if isinstance(name, str) else ""
+        if (
+            asset_id != download_asset_id
+            or not isinstance(path, Path)
+            or not isinstance(name, str)
+            or suffix not in {".jpg", ".jpeg", ".png", ".webp"}
+            or name != f"download-cover-{artifact_id}{suffix}"
+        ):
+            raise WorkflowError("workflow_source_cover_unavailable")
+        return artifact_id, path, expected_sha256, name
+
+    @staticmethod
+    def _workflow_request_cover_id(
+        jobs: Sequence[Mapping[str, Any]],
+        *,
+        source_id: str,
+        account_ids: Sequence[str],
+        platforms: Mapping[str, str],
+    ) -> str:
+        """Recover one frozen cover from an immutable Upload fan-out."""
+
+        if (
+            not isinstance(jobs, Sequence)
+            or isinstance(jobs, (str, bytes))
+            or len(jobs) != len(account_ids)
+        ):
+            raise WorkflowError("upload_request_mismatch")
+        observed_cover_ids: set[str] = set()
+        for job, account_id in zip(jobs, account_ids, strict=True):
+            if not isinstance(job, Mapping):
+                raise WorkflowError("upload_request_mismatch")
+            try:
+                job_id = _record_id(job)
+                bind_current_upload_target(
+                    job,
+                    {
+                        "job_id": job_id,
+                        "source_id": source_id,
+                        "account_id": account_id,
+                        "platform": platforms[account_id],
+                    },
+                )
+                cover_ids = [
+                    _hex_identifier(job.get(key))
+                    for key in _COVER_KEYS
+                    if job.get(key) is not None
+                ]
+            except (KeyError, UploadError, WorkflowError):
+                raise WorkflowError("upload_request_mismatch") from None
+            if len(cover_ids) != 1:
+                raise WorkflowError("upload_request_mismatch")
+            observed_cover_ids.add(cover_ids[0])
+        if len(observed_cover_ids) != 1:
+            raise WorkflowError("upload_request_mismatch")
+        return observed_cover_ids.pop()
+
+    @staticmethod
+    def _frozen_workflow_cover_copy(
+        service: Any,
+        workflow_id: str,
+        cover_id: str,
+        *,
+        edit_cover_id: str | None,
+        edit_cover_sha256: str | None,
+        edit_cover_name: str | None,
+        require_media: bool = True,
+        allow_missing: bool = False,
+    ) -> Mapping[str, Any] | None:
+        """Validate a frozen Upload cover against its deterministic owner."""
+
+        canonical_cover_id = _hex_identifier(cover_id)
+        if canonical_cover_id != edit_cover_id:
+            return LocalWorkflowAdapter._workflow_source_cover_copy(
+                service,
+                workflow_id,
+                canonical_cover_id,
+                require_media=require_media,
+                allow_missing=allow_missing,
+            )
+        if edit_cover_sha256 is None or edit_cover_name is None:
+            raise WorkflowError("upload_request_mismatch")
+        try:
+            cover = service.cover(canonical_cover_id)
+            if require_media:
+                service.cover_content(canonical_cover_id)
+        except UploadError as error:
+            if allow_missing and error.code == "cover_not_found":
+                return None
+            raise WorkflowError("upload_request_mismatch") from None
+        if (
+            not isinstance(cover, Mapping)
+            or cover.get("id") != canonical_cover_id
+            or cover.get("name") != edit_cover_name
+            or cover.get("sha256") != edit_cover_sha256
+            or (
+                require_media
+                and cover.get("media_present") is not True
+            )
+        ):
+            raise WorkflowError("upload_request_mismatch")
+        return cover
+
+    @staticmethod
+    def _workflow_source_cover_copy(
+        service: Any,
+        workflow_id: str,
+        cover_id: str | None,
+        *,
+        require_media: bool = True,
+        allow_missing: bool = False,
+    ) -> Mapping[str, Any] | None:
+        """Validate the frozen Upload copy without consulting mutable Download rows."""
+
+        try:
+            canonical_cover_id = _hex_identifier(cover_id)
+            cover = service.cover(canonical_cover_id)
+            if require_media:
+                service.cover_content(canonical_cover_id)
+        except UploadError as error:
+            if allow_missing and error.code == "cover_not_found":
+                return None
+            raise WorkflowError("upload_request_mismatch") from None
+        except WorkflowError:
+            raise WorkflowError("upload_request_mismatch") from None
+        if (
+            not isinstance(cover, Mapping)
+            or cover.get("id") != canonical_cover_id
+            or (
+                require_media
+                and cover.get("media_present") is not True
+            )
+        ):
+            raise WorkflowError("upload_request_mismatch")
+        name = cover.get("name")
+        match = (
+            re.fullmatch(
+                r"download-cover-([0-9a-f-]{36})\.(?:jpg|jpeg|png|webp)",
+                name,
+            )
+            if isinstance(name, str)
+            else None
+        )
+        try:
+            artifact_id = _download_identifier(
+                None if match is None else match.group(1)
+            )
+            cover_sha256 = _sha256(cover.get("sha256"))
+        except WorkflowError:
+            raise WorkflowError("upload_request_mismatch") from None
+        if (
+            _managed_import_id(
+                workflow_id,
+                "download_cover",
+                artifact_id,
+                cover_sha256,
+            )
+            != canonical_cover_id
+        ):
+            raise WorkflowError("upload_request_mismatch")
+        return cover
+
     def resolve_upload(
         self,
         upload: Mapping[str, Any],
@@ -2265,10 +2720,22 @@ class LocalWorkflowAdapter:
         if not isinstance(upload, Mapping) or set(upload) not in {
             frozenset(_UPLOAD_KEYS),
             frozenset(_UPLOAD_KEYS | {_UPLOAD_TITLE_MODE_KEY}),
+            frozenset(
+                _UPLOAD_KEYS | {_UPLOAD_PREFER_DOWNLOAD_COVER_KEY}
+            ),
+            frozenset(
+                _UPLOAD_KEYS
+                | {_UPLOAD_TITLE_MODE_KEY, _UPLOAD_PREFER_DOWNLOAD_COVER_KEY}
+            ),
         }:
             raise WorkflowError(_SOURCE_METADATA_ERROR)
         title_mode = upload.get(_UPLOAD_TITLE_MODE_KEY, "explicit")
         if not isinstance(title_mode, str):
+            raise WorkflowError(_SOURCE_METADATA_ERROR)
+        if (
+            _UPLOAD_PREFER_DOWNLOAD_COVER_KEY in upload
+            and upload.get(_UPLOAD_PREFER_DOWNLOAD_COVER_KEY) is not True
+        ):
             raise WorkflowError(_SOURCE_METADATA_ERROR)
         if title_mode == "explicit":
             concrete = dict(upload)
@@ -2739,6 +3206,8 @@ class LocalWorkflowAdapter:
         expected_account_bindings: Sequence[Mapping[str, str]],
         expected_upload: Mapping[str, Any],
         expected_cover_id: str | None,
+        expected_download_asset_id: str | None = None,
+        expected_upload_cover_id: str | None = None,
     ) -> CancellationSnapshot:
         """Discover an uncheckpointed upload fan-out and cancel it with prior roots."""
 
@@ -2762,9 +3231,53 @@ class LocalWorkflowAdapter:
             or not isinstance(expected_account_bindings, Sequence)
             or isinstance(expected_account_bindings, (str, bytes))
             or not isinstance(expected_upload, Mapping)
-            or set(expected_upload) != _UPLOAD_KEYS
+            or set(expected_upload) not in {
+                frozenset(_UPLOAD_KEYS),
+                frozenset(
+                    _UPLOAD_KEYS | {_UPLOAD_PREFER_DOWNLOAD_COVER_KEY}
+                ),
+            }
         ):
             return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        prefer_download_cover = expected_upload.get(
+            _UPLOAD_PREFER_DOWNLOAD_COVER_KEY, False
+        )
+        if (
+            type(prefer_download_cover) is not bool
+            or (
+                _UPLOAD_PREFER_DOWNLOAD_COVER_KEY in expected_upload
+                and prefer_download_cover is not True
+            )
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        if prefer_download_cover:
+            if expected_cover_id is None or expected_download_asset_id is None:
+                return CancellationSnapshot(
+                    "attention", code="upload_job_set_invalid"
+                )
+            try:
+                expected_cover_id = _hex_identifier(expected_cover_id)
+                expected_download_asset_id = _download_identifier(
+                    expected_download_asset_id
+                )
+            except WorkflowError:
+                return CancellationSnapshot(
+                    "attention", code="upload_job_set_invalid"
+                )
+        elif (
+            expected_download_asset_id is not None
+            or expected_upload_cover_id is not None
+        ):
+            return CancellationSnapshot("attention", code="upload_job_set_invalid")
+        if expected_upload_cover_id is not None:
+            try:
+                expected_upload_cover_id = _hex_identifier(
+                    expected_upload_cover_id
+                )
+            except WorkflowError:
+                return CancellationSnapshot(
+                    "attention", code="upload_job_set_invalid"
+                )
         try:
             account_ids = [_hex_identifier(value) for value in expected_account_ids]
         except WorkflowError:
@@ -2811,9 +3324,43 @@ class LocalWorkflowAdapter:
         )
         try:
             service = self.upload_manager.get()
-            output = self.editing_manager.invoke("asset", output_id)
         except UploadError as error:
             _domain_failure(error, "upload_failed")
+
+        claimed_jobs: list[dict] | None = None
+        if prefer_download_cover:
+            try:
+                claimed_jobs = service.claim_or_read_workflow_cancellation(
+                    request_key
+                )
+            except UploadError as error:
+                if error.code in {
+                    "invalid_idempotency_key",
+                    "upload_request_invalid",
+                    "job_not_found",
+                }:
+                    return CancellationSnapshot(
+                        "attention", code="upload_request_invalid"
+                    )
+                if error.code in {
+                    "upload_request_mismatch",
+                    "idempotency_conflict",
+                }:
+                    return CancellationSnapshot(
+                        "attention", code="upload_request_mismatch"
+                    )
+                _domain_failure(error, "upload_failed")
+            if not claimed_jobs:
+                if not existing_job_ids:
+                    return CancellationSnapshot("stopped")
+                return self.cancel_uploads(
+                    existing_job_ids,
+                    expected_targets=expected_targets,
+                    expected_account_bindings=expected_account_bindings,
+                )
+
+        try:
+            output = self.editing_manager.invoke("asset", output_id)
         except EditingError as error:
             if error.code in {"asset_not_found", "invalid_identifier"}:
                 return CancellationSnapshot("attention", code="edit_output_mismatch")
@@ -2832,8 +3379,10 @@ class LocalWorkflowAdapter:
             workflow_id, "edit_video", output_id, output_sha256
         )
 
-        cover_record: Mapping[str, Any] | None = None
-        imported_cover_id = None
+        edit_cover_record: Mapping[str, Any] | None = None
+        edit_cover_sha256 = None
+        edit_cover_name = None
+        edit_imported_cover_id = None
         if expected_cover_id is not None:
             try:
                 expected_cover_id = _hex_identifier(expected_cover_id)
@@ -2857,8 +3406,13 @@ class LocalWorkflowAdapter:
                 cover_sha256 = _sha256(candidate.get("sha256"))
             except WorkflowError:
                 return CancellationSnapshot("attention", code="edit_output_mismatch")
-            cover_record = candidate
-            imported_cover_id = _managed_import_id(
+            cover_name = candidate.get("name")
+            if not isinstance(cover_name, str):
+                return CancellationSnapshot("attention", code="edit_output_mismatch")
+            edit_cover_record = candidate
+            edit_cover_sha256 = cover_sha256
+            edit_cover_name = cover_name
+            edit_imported_cover_id = _managed_import_id(
                 workflow_id,
                 "edit_cover",
                 expected_cover_id,
@@ -2866,29 +3420,81 @@ class LocalWorkflowAdapter:
             )
 
         try:
-            overrides = self._upload_overrides(
-                expected_upload.get("target_overrides"),
-                account_ids,
-                binding_platforms,
-                cover_record,
-                imported_cover_id,
-            )
-            request_jobs = service.claim_workflow_request_for_cancellation(
-                request_key,
-                expected_request={
-                    "source_id": source_id,
-                    "account_ids": account_ids,
-                    "title": expected_upload.get("title"),
-                    "description": expected_upload.get("description"),
-                    "tags": expected_upload.get("tags"),
-                    "category_id": expected_upload.get("category_id"),
-                    "mode": expected_upload.get("mode"),
-                    "copyright": expected_upload.get("copyright"),
-                    "source_credit": expected_upload.get("source_credit"),
-                    "target_overrides": overrides,
-                },
-            )
-        except WorkflowError:
+            cover_record = edit_cover_record
+            imported_cover_id = edit_imported_cover_id
+            if prefer_download_cover:
+                if not claimed_jobs:
+                    raise WorkflowError("upload_request_mismatch")
+                imported_cover_id = self._workflow_request_cover_id(
+                    claimed_jobs,
+                    source_id=source_id,
+                    account_ids=account_ids,
+                    platforms=binding_platforms,
+                )
+                cover_record = self._frozen_workflow_cover_copy(
+                    service,
+                    workflow_id,
+                    imported_cover_id,
+                    edit_cover_id=edit_imported_cover_id,
+                    edit_cover_sha256=edit_cover_sha256,
+                    edit_cover_name=edit_cover_name,
+                    require_media=False,
+                )
+                if expected_upload_cover_id not in {None, imported_cover_id}:
+                    return CancellationSnapshot(
+                        "attention", code="upload_request_mismatch"
+                    )
+                overrides = self._upload_overrides(
+                    expected_upload.get("target_overrides"),
+                    account_ids,
+                    binding_platforms,
+                    cover_record,
+                    imported_cover_id,
+                )
+                request_jobs = service.claim_workflow_request_for_cancellation(
+                    request_key,
+                    expected_request={
+                        "source_id": source_id,
+                        "account_ids": account_ids,
+                        "title": expected_upload.get("title"),
+                        "description": expected_upload.get("description"),
+                        "tags": expected_upload.get("tags"),
+                        "category_id": expected_upload.get("category_id"),
+                        "mode": expected_upload.get("mode"),
+                        "copyright": expected_upload.get("copyright"),
+                        "source_credit": expected_upload.get("source_credit"),
+                        "target_overrides": overrides,
+                    },
+                )
+            else:
+                overrides = self._upload_overrides(
+                    expected_upload.get("target_overrides"),
+                    account_ids,
+                    binding_platforms,
+                    cover_record,
+                    imported_cover_id,
+                )
+                request_jobs = service.claim_workflow_request_for_cancellation(
+                    request_key,
+                    expected_request={
+                        "source_id": source_id,
+                        "account_ids": account_ids,
+                        "title": expected_upload.get("title"),
+                        "description": expected_upload.get("description"),
+                        "tags": expected_upload.get("tags"),
+                        "category_id": expected_upload.get("category_id"),
+                        "mode": expected_upload.get("mode"),
+                        "copyright": expected_upload.get("copyright"),
+                        "source_credit": expected_upload.get("source_credit"),
+                        "target_overrides": overrides,
+                    },
+                )
+        except WorkflowError as error:
+            if error.code in {
+                "workflow_source_cover_unavailable",
+                "workflow_source_cover_ambiguous",
+            }:
+                return CancellationSnapshot("attention", code=error.code)
             return CancellationSnapshot("attention", code="upload_request_mismatch")
         except UploadError as error:
             if error.code in {

@@ -1155,12 +1155,38 @@ class WorkflowService:
                 )
                 return True
             try:
+                upload = self._upload_for_execution(record)
+                upload_kwargs: dict[str, object] = {
+                    "segment_ordinal": pending["segment_ordinal"]
+                }
+                if upload.get("prefer_download_cover") is True:
+                    if not record["download_asset_id"]:
+                        raise WorkflowError("workflow_data_invalid")
+                    if record["upload_cover_id"] is None:
+                        selected_cover_id = self.adapter.select_upload_cover(
+                            workflow_id,
+                            pending["edit_output_id"],
+                            record["edit_cover_id"],
+                            upload,
+                            segment_ordinal=pending["segment_ordinal"],
+                            download_asset_id=record["download_asset_id"],
+                        )
+                        self._set_refs(
+                            workflow_id,
+                            expected=record,
+                            upload_cover_id=selected_cover_id,
+                        )
+                        return True
+                    upload_kwargs.update(
+                        download_asset_id=record["download_asset_id"],
+                        expected_upload_cover_id=record["upload_cover_id"],
+                    )
                 prepared = self.adapter.prepare_upload(
                     workflow_id,
                     pending["edit_output_id"],
                     record["edit_cover_id"],
-                    self._upload_for_execution(record),
-                    segment_ordinal=pending["segment_ordinal"],
+                    upload,
+                    **upload_kwargs,
                 )
             except WorkflowError as error:
                 self._attention(workflow_id, error.code, expected=record)
@@ -1283,6 +1309,21 @@ class WorkflowService:
             None,
         )
         if pending_upload is not None:
+            expected_upload = self._upload_for_execution(record)
+            discovery_kwargs: dict[str, object] = {
+                "expected_targets": self._upload_targets(record),
+                "expected_account_ids": record["profile"]["upload"]["account_ids"],
+                "expected_account_bindings": record["profile"]["upload"][
+                    "account_bindings"
+                ],
+                "expected_upload": expected_upload,
+                "expected_cover_id": record["edit_cover_id"],
+            }
+            if expected_upload.get("prefer_download_cover") is True:
+                discovery_kwargs.update(
+                    expected_download_asset_id=record["download_asset_id"],
+                    expected_upload_cover_id=record["upload_cover_id"],
+                )
             snapshot = self._cancel_via_discovery(
                 "cancel_uploads_for_workflow",
                 "upload_discovery_unavailable",
@@ -1290,13 +1331,7 @@ class WorkflowService:
                 pending_upload["edit_output_id"],
                 pending_upload["segment_ordinal"],
                 record["upload_job_ids"],
-                expected_targets=self._upload_targets(record),
-                expected_account_ids=record["profile"]["upload"]["account_ids"],
-                expected_account_bindings=record["profile"]["upload"][
-                    "account_bindings"
-                ],
-                expected_upload=self._upload_for_execution(record),
-                expected_cover_id=record["edit_cover_id"],
+                **discovery_kwargs,
             )
             if snapshot.status == "upload_completed":
                 return CancellationSnapshot(

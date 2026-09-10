@@ -1328,6 +1328,45 @@ class UploadService:
         _path, payload = self._verified_asset_media(row)
         return payload, row["mime_type"]
 
+    def inspect_managed_cover_import(
+        self,
+        path: Path,
+        name: str,
+        expected_sha256: str,
+        managed_id: str,
+    ) -> dict:
+        """Validate a deterministic cover import without changing Upload state."""
+
+        name = normalize_upload_text(name, 180, required=True)
+        if any(char in name for char in '/\\:\x00') or name in (".", ".."):
+            raise UploadError("invalid_cover_name")
+        suffix = Path(name).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            raise UploadError("unsupported_cover_type")
+        expected_sha256 = self._expected_sha256(expected_sha256)
+        if expected_sha256 is None:
+            raise UploadError("invalid_expected_sha256")
+        asset_id = _identifier(managed_id)
+        try:
+            before = _plain(path)
+        except OSError:
+            raise UploadError("cover_unavailable") from None
+        if not 0 < before.st_size <= MAX_COVER_BYTES:
+            raise UploadError("cover_size_invalid")
+        payload, digest = self._stable_cover_payload(path, before)
+        if digest != expected_sha256:
+            raise UploadError("cover_hash_mismatch")
+        mime_type, width, height = _cover_metadata(payload, suffix)
+        return {
+            "id": asset_id,
+            "name": name,
+            "size": len(payload),
+            "sha256": digest,
+            "mime_type": mime_type,
+            "width": width,
+            "height": height,
+        }
+
     @_requires_activity
     def import_cover(
         self,
@@ -2051,12 +2090,75 @@ class UploadService:
                     or not hmac.compare_digest(row["digest"], expected_digest)
                 ):
                     raise UploadError("upload_request_mismatch")
+            try:
+                existing_ids = json.loads(row["job_ids"])
+            except (TypeError, ValueError):
+                raise UploadError("upload_request_invalid") from None
+            if existing_ids == []:
+                # Cancellation tombstones are valid request records with no
+                # remote jobs.  Expose that state to recovery callers instead
+                # of making an already-stopped request look corrupt.
+                if (
+                    row["job_ids"] != "[]"
+                    or row["digest_version"] != 2
+                    or not isinstance(row["digest"], str)
+                    or _SHA256.fullmatch(row["digest"]) is None
+                ):
+                    raise UploadError("upload_request_invalid")
+                return []
             return self._request_jobs_from_row_in(
                 db,
                 row,
                 expected_source_id=expected_source_id,
                 expected_targets=expected_targets,
             )
+
+    @_requires_activity
+    def claim_or_read_workflow_cancellation(
+        self,
+        idempotency_key: str,
+    ) -> list[dict] | None:
+        """Atomically reserve an empty key or return its immutable job roots."""
+
+        if (
+            not isinstance(idempotency_key, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+        ):
+            raise UploadError("invalid_idempotency_key")
+        tombstone_digest = hashlib.sha256(
+            f"workflow-cancellation-v1:{idempotency_key}".encode()
+        ).hexdigest()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO requests(id,digest,job_ids,digest_version) "
+                    "VALUES(?,?,?,2)",
+                    (idempotency_key, tombstone_digest, "[]"),
+                )
+                return None
+            if (
+                row["digest_version"] != 2
+                or not isinstance(row["digest"], str)
+                or _SHA256.fullmatch(row["digest"]) is None
+            ):
+                raise UploadError("upload_request_invalid")
+            try:
+                existing_ids = json.loads(row["job_ids"])
+            except (TypeError, ValueError):
+                raise UploadError("upload_request_invalid") from None
+            if existing_ids == []:
+                if (
+                    row["job_ids"] != "[]"
+                    or not hmac.compare_digest(row["digest"], tombstone_digest)
+                ):
+                    raise UploadError("upload_request_invalid")
+                return []
+            return self._request_jobs_from_row_in(db, row)
 
     @_requires_activity
     def claim_workflow_request_for_cancellation(

@@ -267,3 +267,8 @@ class BatchService:
         self, asset_id: str
     ) -> list[dict[str, Any]]:
         return self.repository.list_ready_captions_for_asset(asset_id)
+
+    def list_registered_thumbnails_for_asset(
+        self, asset_id: str
+    ) -> list[dict[str, Any]]:
+        return self.repository.list_registered_thumbnails_for_asset(asset_id)

@@ -29,6 +29,17 @@
 - 下载域原有 yt-dlp 路径会把选中的平台 thumbnail 保存为 ready 资产的登记辅助文件；下载页
   以“来源封面（平台返回）”预览/下载，JPEG、PNG、WebP 可通过深链进入上传页。上传页只有在
   用户点击后才复核并复制到独立受管封面库，且不会自动选择封面、建立草稿或触发上传。
+- Workflow 可显式启用 `upload.prefer_download_cover`，但仍必须保留一份生成封面作为 fallback。
+  它只按 workflow 已冻结的 `download_asset_id` 查询同一 ready original 所属、登记关系完整且唯一的
+  ready thumbnail；没有候选时使用生成封面，多候选或登记/路径身份异常时失败关闭。安全 resolver
+  在候选分流前复核受管路径、MIME、大小并稳定读取实际字节核对登记 SHA-256；随后 Upload 的
+  无副作用图像检查和 `import_cover(expected_sha256=...)` 会分别再读、解码并散列。来源封面只有
+  同时兼容本次所选 Bilibili、抖音和视频号账号的
+  全部封面槽才会采用，否则回退生成封面。Workflow 会先无副作用选定确定性受管 ID 并以 CAS
+  写入 `upload_cover_id`，随后才允许 Upload 导入或建 jobs；已有请求则从不可变 jobs 的共同封面槽
+  恢复，封面媒体已在终态后合法删除时仍可只凭元数据收回 job IDs。尚无请求的取消会先原子写入
+  专用空 tombstone，重启不再依赖 Editing 成品或 Download 当前封面登记，并继续取消前序分段
+  jobs；sentinel digest 或请求身份异常时失败关闭。
 - 编辑域支持完整视频、1–10 个非破坏分段、封面取帧/文字、审核后渲染，以及可选的
   自动听写、中文与 English 翻译和标准音色配音。`segments: []` 表示完整视频；只做封面
   也会生成可上传的完整视频。自动流程可选择优先复用下载所得 SRT/WebVTT；候选会绑定原
@@ -51,7 +62,9 @@
   使用同一文件身份、匹配打开和有界散列原语，同时保留 Editing/Upload 各自错误与事务边界。
 - 架构精简 S1–S8 已按小提交完成：HTTP guard、公开 profile/metadata/identity 契约、AI/
   Upload/Edit snapshot 解释、verified media response、EditingManager、受管文件原语，以及
-  Workflow 上传表单与 recipe 的职责拆分。没有引入新服务、框架或通用调度基类。
+  Workflow 上传表单与 recipe 的职责拆分。来源封面偏好继续维持本地模块化单体，只在现有
+  Download repository/service、Workflow adapter 与 Upload 导入边界间增加窄 resolver；没有引入
+  新服务、数据库、Schema、runtime、依赖、框架或通用调度基类。
 
 ## 当前证据入口
 
@@ -62,7 +75,7 @@
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
+| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
 
@@ -86,9 +99,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
    Douyin `authentication_required` 和未执行平台都不是平台级支持或否定结论。固定 yt-dlp
    的 Bilibili 提取器可读取 `videoData.pic`，Douyin 提取器可列出 `cover`、`origin_cover`
-   等变体，但当前单 thumbnail 流程不保证得到 `origin_cover`，且两平台真实封面提取尚未验收。
-   视频号没有专用 yt-dlp extractor，本轮没有增加视频号网址封面能力。“来源封面（平台返回）”
-   也不代表发布者原始母版、最高分辨率或无损文件。
+   等变体，但当前单 thumbnail 流程不保证得到 `origin_cover`，且两平台真实封面提取及 Workflow
+   自动采用均未验收。视频号没有专用 yt-dlp extractor，本轮没有增加视频号网址封面能力。
+   “来源封面（平台返回）”也不代表发布者原始母版、最高分辨率或无损文件。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
@@ -105,7 +118,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 3. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
    明确授权、凭据留在 Git 外且精确候选固定后进行。每个结果按平台、来源类型、适配器版本、
    环境和 commit 单独记录。来源封面还需分别用 Bilibili 与 Douyin 的已授权样本对照平台可见
-   封面、下载 artifact 和导入副本；视频号保持未支持，不能用通用 extractor 结果替代专用证据。
+   封面、下载 artifact、Workflow 最终选用的受管封面和三平台后台实际封面；同时覆盖无候选、
+   比例不兼容与多分段/重启。视频号保持无专用下载 extractor，不能用通用 extractor 结果替代
+   专用证据。
    若样本返回字幕，还要分别记录语言、格式、人工/自动来源是否可知、导入 timeline、审核修订
    与是否触发 AI transcription fallback；一个平台的字幕结果不能代表其他平台。
 4. 功能反馈收敛后再创建 clean release candidate，执行源码与 wheel 独立安装、完整检查、

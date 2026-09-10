@@ -276,11 +276,23 @@ def normalize_workflow_profile(
         "target_overrides",
     }
     expected_upload = required_upload | ({"account_bindings"} if bound_accounts else set())
+    optional_upload = {"title_mode", "prefer_download_cover"}
     raw_upload_keys = frozenset(raw_upload)
-    if raw_upload_keys not in {frozenset(expected_upload), frozenset(expected_upload | {"title_mode"})}:
+    if (
+        not expected_upload.issubset(raw_upload_keys)
+        or not raw_upload_keys.issubset(expected_upload | optional_upload)
+    ):
         raise WorkflowError("invalid_workflow_profile")
     title_mode = raw_upload.get("title_mode", "explicit")
     if not isinstance(title_mode, str) or title_mode not in {"explicit", "source"}:
+        raise WorkflowError("invalid_workflow_profile")
+    prefer_download_cover = raw_upload.get("prefer_download_cover")
+    if (
+        "prefer_download_cover" in raw_upload
+        and prefer_download_cover is not True
+    ):
+        raise WorkflowError("invalid_workflow_profile")
+    if prefer_download_cover is True and parsed_recipe.cover is None:
         raise WorkflowError("invalid_workflow_profile")
     normalized_title = normalize_workflow_text(
         raw_upload.get("title"),
@@ -398,6 +410,8 @@ def normalize_workflow_profile(
     # available.
     if title_mode == "source":
         normalized["upload"]["title_mode"] = "source"
+    if prefer_download_cover is True:
+        normalized["upload"]["prefer_download_cover"] = True
     encoded, digest = canonical_workflow_mapping(normalized)
     return normalized, encoded, digest
 
@@ -426,6 +440,7 @@ def normalize_resolved_upload(
         "copyright",
         "source_credit",
         "account_bindings",
+        "prefer_download_cover",
     )
     if (
         not isinstance(profile_upload, Mapping)

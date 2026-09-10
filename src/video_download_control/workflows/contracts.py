@@ -238,7 +238,20 @@ class WorkflowDomainAdapter(Protocol):
         upload: Mapping[str, Any],
         *,
         segment_ordinal: int = 1,
+        download_asset_id: str | None = None,
+        expected_upload_cover_id: str | None = None,
     ) -> UploadPrepared: ...
+
+    def select_upload_cover(
+        self,
+        workflow_id: str,
+        output_id: str,
+        cover_id: str,
+        upload: Mapping[str, Any],
+        *,
+        segment_ordinal: int,
+        download_asset_id: str,
+    ) -> str: ...
 
     def inspect_upload(
         self,
@@ -272,4 +285,6 @@ class WorkflowDomainAdapter(Protocol):
         expected_account_bindings: Sequence[Mapping[str, str]],
         expected_upload: Mapping[str, Any],
         expected_cover_id: str | None,
+        expected_download_asset_id: str | None = None,
+        expected_upload_cover_id: str | None = None,
     ) -> CancellationSnapshot: ...

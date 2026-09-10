@@ -189,6 +189,8 @@ workflow.edit_project_id
 
 重启时，已成功导入的唯一来源 timeline 会先按 project 和完整 provenance 复用，不应仅因原 sidecar 随后不可读而创建第二条 timeline；同一 project 出现多条匹配来源 timeline 应按数据不一致处理。来源 timeline 已批准而 translation 失败时，显式 retry 只能创建 translation successor，并继续绑定同一 parent revision；若出现新的 transcribe task，记录两条 AI task lineage 和 workflow events，按回归处理。
 
+来源封面排障先核对显式 `upload.prefer_download_cover=true`、生成封面 fallback、冻结的 `download_asset_id` 与 `upload_cover_id`：只有可信 owner envelope 下的 0 个 thumbnail 才正常回退；多候选为 `workflow_source_cover_ambiguous`，登记/受管路径/owner 异常为 `workflow_source_cover_unavailable`，实际 hash 漂移由 Download resolver 与 Upload `expected_sha256` 双重拒绝。`preparing_upload` 已有 `upload_cover_id` 但本段尚无 source/job 是合法的两阶段 checkpoint；不要清空它。响应丢失后应从稳定 Upload request 的共同封面槽恢复，封面媒体已合法删除也不应阻止收回 job IDs；尚无本段请求的取消会先写专用空 tombstone，重复取消不得再查询 Editing/Download，也必须继续处理前序分段 jobs。sentinel digest 不匹配应进入 `upload_request_invalid`，不要改库“修复”。完整核对链见[来源封面偏好验证](../validation/iteration-0.28.0-workflow-source-cover-preference.md)。
+
 - `attention_required` 是需要核对的终止点，不等于失败可重试。
 - 自动确认只适用于该 workflow 的冻结 intent。重启、retry、legacy migration、running/canceling 和 unknown 有各自保守规则。
 - `outputs` 必须按 segment ordinal 排列；每个 output 的 targets 必须与冻结 account/platform 对应。不要只看兼容的单值 `edit_output_id`。

@@ -827,6 +827,108 @@ class BatchRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_registered_thumbnails_for_asset(
+        self, asset_id: str
+    ) -> list[dict[str, Any]]:
+        """Return the owner envelope and every potential thumbnail row."""
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    auxiliary.id AS artifact_id,
+                    asset.id AS asset_id,
+                    auxiliary.asset_id AS artifact_asset_id,
+                    auxiliary.kind,
+                    auxiliary.path AS artifact_path,
+                    auxiliary.mime_type,
+                    auxiliary.sha256,
+                    auxiliary.tool_name,
+                    auxiliary.tool_version,
+                    caption.language,
+                    caption.artifact_id AS caption_artifact_id,
+                    caption.status AS caption_status,
+                    auxiliary.parent_artifact_id,
+                    asset.status AS asset_status,
+                    asset.media_kind AS asset_media_kind,
+                    asset.sha256 AS asset_sha256,
+                    (
+                      SELECT COUNT(*)
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                    ) AS original_count,
+                    (
+                      SELECT original.id
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                      ORDER BY original.id
+                      LIMIT 1
+                    ) AS original_artifact_id,
+                    (
+                      SELECT original.sha256
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                      ORDER BY original.id
+                      LIMIT 1
+                    ) AS original_sha256,
+                    (
+                      SELECT original.path
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                      ORDER BY original.id
+                      LIMIT 1
+                    ) AS original_path,
+                    (
+                      SELECT original.parent_artifact_id
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                      ORDER BY original.id
+                      LIMIT 1
+                    ) AS original_parent_artifact_id,
+                    EXISTS (
+                      SELECT 1
+                      FROM job_assets AS ready_link
+                      JOIN download_jobs AS ready_job
+                        ON ready_job.id = ready_link.job_id
+                      WHERE ready_link.asset_id = asset.id
+                        AND ready_link.role = 'original'
+                        AND ready_job.status = 'ready'
+                    ) AS ready_original_link
+                FROM (SELECT ? AS requested_asset_id) AS requested
+                LEFT JOIN media_assets AS asset
+                  ON asset.id = requested.requested_asset_id
+                LEFT JOIN artifacts AS auxiliary
+                  ON (
+                        (
+                          auxiliary.kind = 'thumbnail'
+                          AND (
+                               auxiliary.asset_id = asset.id
+                               OR auxiliary.parent_artifact_id IN (
+                                    SELECT owner_original.id
+                                    FROM artifacts AS owner_original
+                                    WHERE owner_original.asset_id = asset.id
+                                      AND owner_original.kind = 'original'
+                               )
+                          )
+                        )
+                        OR auxiliary.path GLOB (
+                             'assets/' || requested.requested_asset_id
+                             || '/thumbnails/*'
+                        )
+                     )
+                LEFT JOIN captions AS caption
+                  ON caption.artifact_id = auxiliary.id
+                ORDER BY auxiliary.path, auxiliary.id
+                """,
+                (asset_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def count_rows(self, table: str) -> int:
         allowed = {"batches", "input_records", "source_items", "download_jobs"}
         if table not in allowed:
