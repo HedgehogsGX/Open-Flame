@@ -14,6 +14,23 @@ ACCOUNT_BINDING_KEYS = frozenset(
 UPLOAD_TARGET_KEYS = frozenset(
     {"job_id", "source_id", "account_id", "platform"}
 )
+UPLOAD_RETRY_PAYLOAD_KEYS = (
+    "account_id",
+    "source_id",
+    "platform",
+    "title",
+    "description",
+    "tags",
+    "category_id",
+    "mode",
+    "copyright",
+    "source_credit",
+    "cover_landscape_asset_id",
+    "cover_portrait_asset_id",
+    "publish_at_unix",
+    "publish_timezone_offset_minutes",
+    "platform_options",
+)
 _IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -170,11 +187,28 @@ def bind_current_upload_target(
     return {**expected, "job_id": current_id}
 
 
+def upload_retry_payload_matches(parent: object, successor: object) -> bool:
+    """Return whether a retry successor preserves the complete upload intent."""
+
+    if not isinstance(parent, Mapping) or not isinstance(successor, Mapping):
+        return False
+    if any(
+        field not in parent or field not in successor
+        for field in UPLOAD_RETRY_PAYLOAD_KEYS
+    ):
+        return False
+    return all(
+        successor[field] == parent[field] for field in UPLOAD_RETRY_PAYLOAD_KEYS
+    )
+
+
 __all__ = [
     "ACCOUNT_BINDING_KEYS",
+    "UPLOAD_RETRY_PAYLOAD_KEYS",
     "UPLOAD_TARGET_KEYS",
     "bind_current_upload_target",
     "normalize_account_bindings",
     "normalize_upload_job_batch",
     "normalize_upload_targets",
+    "upload_retry_payload_matches",
 ]

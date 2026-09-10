@@ -49,6 +49,7 @@ The concise current development state, risks and next actions live in
   [Upload snapshot](iteration-0.28.0-upload-snapshot-observation.md) and
   [AI snapshot](iteration-0.28.0-ai-snapshot-application.md)
 - [Upload identity contract](iteration-0.28.0-upload-identity-contract.md),
+  [upload retry payload identity](iteration-0.28.0-upload-retry-payload-identity.md),
   [Workflow profile contract](iteration-0.28.0-workflow-profile-contract.md) and
   [upload metadata contract](iteration-0.28.0-upload-metadata-contract.md)
 - [Download HTTP boundary](iteration-0.28.0-download-http-boundary.md) and

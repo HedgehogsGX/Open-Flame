@@ -52,7 +52,11 @@ from .contracts import (
     is_tencent_short_title_output,
     normalize_tencent_short_title,
 )
-from .identity import normalize_account_bindings, normalize_upload_job_batch
+from .identity import (
+    normalize_account_bindings,
+    normalize_upload_job_batch,
+    upload_retry_payload_matches,
+)
 from .login_progress import validate_update
 from .metadata import (
     DOUYIN_DECLARATIONS,
@@ -2002,10 +2006,7 @@ class UploadService:
                         raise UploadError("job_retry_lineage_invalid")
                     seen.add(successor_id)
                     successor = self._get_job(db, successor_id)
-                    if any(
-                        successor[field] != root[field]
-                        for field in ("account_id", "source_id", "platform")
-                    ):
+                    if not upload_retry_payload_matches(root, successor):
                         raise UploadError("job_retry_lineage_invalid")
                     current = successor
                 leaves.append(current)

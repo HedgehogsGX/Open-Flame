@@ -37,7 +37,8 @@
   时冻结，预设仅在账号、AI capability 和预设初始读取成功且操作者尚未修改表单时恢复。
 - 上传域支持首批三平台逐账号标题、简介、标签、封面、原创/转载、分区、声明、动态文案、
   视频号短标题/内容标签、草稿模式和平台允许范围内的定时发布。最多选择 3 个账号；
-  1–10 个输出最多形成 30 个上传 slot。
+  1–10 个输出最多形成 30 个上传 slot；重试后继必须保持账号、来源、平台及完整投稿参数
+  不变，标题、标签、封面、模式、发布时间或平台选项漂移都会失败关闭。
 - 本地 HTTP 写操作使用域独立 CSRF 与严格 loopback Host/Origin/Fetch-Site 防护；受管媒体
   使用同一文件身份、匹配打开和有界散列原语，同时保留 Editing/Upload 各自错误与事务边界。
 - 架构精简 S1–S8 已按小提交完成：HTTP guard、公开 profile/metadata/identity 契约、AI/
@@ -52,7 +53,7 @@
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md) |
-| 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
+| 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |

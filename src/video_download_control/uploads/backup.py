@@ -35,6 +35,7 @@ from .contracts import (
     is_tencent_short_title_output,
     normalize_tencent_short_title,
 )
+from .identity import upload_retry_payload_matches
 from .metadata import (
     DOUYIN_DECLARATIONS,
     TENCENT_CONTENT_LABELS,
@@ -1406,30 +1407,24 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
         if retry_of is not None:
             successors.add(retry_of)
     jobs_by_id = {row["id"]: row for row in jobs}
-    retry_fields = (
-        "account_id",
-        "source_id",
-        "title",
-        "description",
-        "category_id",
-        "mode",
-        "copyright",
-        "source_credit",
-        "cover_landscape_asset_id",
-        "cover_portrait_asset_id",
-        "publish_at_unix",
-        "publish_timezone_offset_minutes",
-    )
     for job_id, parent_id in retry_parent.items():
         if parent_id is None:
             continue
         job = jobs_by_id[job_id]
         parent = jobs_by_id[parent_id]
-        if (
-            any(job[field] != parent[field] for field in retry_fields)
-            or job_tags[job_id] != job_tags[parent_id]
-            or job_options[job_id] != job_options[parent_id]
-        ):
+        job_payload = {
+            **job,
+            "platform": account_platforms[job["account_id"]],
+            "tags": job_tags[job_id],
+            "platform_options": job_options[job_id],
+        }
+        parent_payload = {
+            **parent,
+            "platform": account_platforms[parent["account_id"]],
+            "tags": job_tags[parent_id],
+            "platform_options": job_options[parent_id],
+        }
+        if not upload_retry_payload_matches(parent_payload, job_payload):
             raise UploadBackupError("upload retry payload differs from its parent")
         if parent["state"] not in {"failed", "canceled", "unknown"}:
             raise UploadBackupError("upload retry parent state is invalid")
