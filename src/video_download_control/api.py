@@ -56,6 +56,7 @@ from .domain import ErrorCode, Platform
 from .editing.api import install_editing_routes
 from .editing.contracts import EditingError
 from .editing.media import MediaProcessor as EditingMediaProcessor
+from .editing.timeline import MAX_SUBTITLE_BYTES
 from .importers import MAX_IMPORT_BYTES, BatchImportError, parse_batch_file
 from .local_http_guard import install_local_http_guard
 from .local_short_links import LocalDirectShortLinkTransport
@@ -556,10 +557,18 @@ def _registered_auxiliary_file(
     mime_type: object,
     language: object,
     expected_sha256: object,
+    maximum_bytes: int = DEFAULT_MAX_AUXILIARY_FILE_BYTES,
 ) -> tuple[Path, os.stat_result, str, str, str]:
     """Resolve one registered sidecar without trusting its database path fields."""
 
     canonical_asset_id = _canonical_asset_id(asset_id)
+    if (
+        isinstance(maximum_bytes, bool)
+        or not isinstance(maximum_bytes, int)
+        or maximum_bytes < 1
+        or maximum_bytes > DEFAULT_MAX_AUXILIARY_FILE_BYTES
+    ):
+        raise ValueError("registered artifact size limit is invalid")
     if kind == "thumbnail":
         directory = "thumbnails"
         mime_types = THUMBNAIL_MIME_TYPES
@@ -647,7 +656,7 @@ def _registered_auxiliary_file(
         not stat.S_ISREG(final_info.st_mode)
         or final_info.st_nlink != 1
         or final_info.st_size < 1
-        or final_info.st_size > DEFAULT_MAX_AUXILIARY_FILE_BYTES
+        or final_info.st_size > maximum_bytes
     ):
         raise ValueError("registered artifact is not a bounded single-link file")
     resolved = current.resolve(strict=True)
@@ -665,6 +674,7 @@ def _registered_auxiliary_payload(
     mime_type: object,
     language: object,
     expected_sha256: object,
+    maximum_bytes: int = DEFAULT_MAX_AUXILIARY_FILE_BYTES,
 ) -> tuple[BinaryIO, int, str, str]:
     """Verify one sidecar into a bounded spool before any bytes are served."""
 
@@ -677,6 +687,7 @@ def _registered_auxiliary_payload(
             mime_type=mime_type,
             language=language,
             expected_sha256=expected_sha256,
+            maximum_bytes=maximum_bytes,
         )
     )
     spool: BinaryIO = tempfile.SpooledTemporaryFile(
@@ -698,7 +709,7 @@ def _registered_auxiliary_payload(
                 raise ValueError("registered artifact changed before reading")
             while chunk := handle.read(_VERIFIED_STREAM_CHUNK_BYTES):
                 total_bytes += len(chunk)
-                if total_bytes > DEFAULT_MAX_AUXILIARY_FILE_BYTES:
+                if total_bytes > maximum_bytes:
                     raise ValueError("registered artifact content is invalid")
                 digest.update(chunk)
                 spool.write(chunk)
@@ -1001,6 +1012,50 @@ def create_app(
             f"download-cover-{canonical_id}{upload_suffix}",
         )
 
+    def workflow_download_caption(artifact_id: str) -> dict[str, object]:
+        """Return one verified registered caption for local workflow import."""
+
+        canonical_id = _canonical_asset_id(artifact_id)
+        registered = service.get_ready_auxiliary_artifact(canonical_id)
+        if (
+            registered is None
+            or registered.get("artifact_id") != canonical_id
+            or registered.get("kind") != "caption"
+        ):
+            raise ValueError("download caption is not registered and ready")
+        handle: BinaryIO | None = None
+        try:
+            handle, size_bytes, mime_type, _suffix = _registered_auxiliary_payload(
+                resolved_settings.data_root,
+                asset_id=registered["asset_id"],
+                kind=registered["kind"],
+                relative_path=registered["artifact_path"],
+                mime_type=registered["mime_type"],
+                language=registered["language"],
+                expected_sha256=registered["sha256"],
+                maximum_bytes=MAX_SUBTITLE_BYTES,
+            )
+            payload = handle.read(size_bytes + 1)
+            if len(payload) != size_bytes or handle.read(1):
+                raise ValueError("verified download caption size changed")
+        except (KeyError, OSError, ValueError):
+            raise ValueError("download caption is unavailable") from None
+        finally:
+            if handle is not None:
+                handle.close()
+        return {
+            "artifact_id": canonical_id,
+            "asset_id": _canonical_asset_id(registered["asset_id"]),
+            "artifact_path": registered["artifact_path"],
+            "mime_type": mime_type,
+            "language": registered["language"],
+            "sha256": registered["sha256"],
+            "origin": registered.get("origin"),
+            "tool_name": registered.get("tool_name"),
+            "tool_version": registered.get("tool_version"),
+            "payload": payload,
+        }
+
     editing_processor_factory = None
     if (
         resolved_settings.tool_root is not None
@@ -1043,6 +1098,7 @@ def create_app(
         editing_manager=editing_manager,
         upload_manager=app.state.upload_manager,
         download_asset_resolver=upload_original_asset,
+        download_caption_resolver=workflow_download_caption,
         download_runtime_probe=lambda: current_worker_runtime_status().model_dump(),
         download_control=worker_repository,
     )

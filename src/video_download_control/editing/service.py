@@ -40,6 +40,7 @@ from .ai_pipeline import (
     AiPipelineError,
     CanonicalAiRequest,
     CanonicalTimeline,
+    MAX_TIMELINE_MILLISECONDS,
     canonical_ai_request,
     canonical_timeline,
     decode_ai_request,
@@ -48,7 +49,7 @@ from .ai_pipeline import (
     validate_translation_timeline,
 )
 from .schema import SCHEMA_VERSION, EditingSchemaError, ensure_editing_schema
-from .timeline import TimelineCue
+from .timeline import TimelineCue, TimelineError, parse_subtitles
 
 
 MAX_SOURCE_BYTES = 16 * 1024**3
@@ -63,6 +64,12 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _AI_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}$")
+_LANGUAGE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+_SOURCE_CAPTION_KINDS = {
+    "application/x-subrip": "srt",
+    "text/vtt": "vtt",
+}
+_SOURCE_CAPTION_MARKUP = re.compile(r"<[^>\n]{1,512}>|\{\\[^}\n]{1,512}\}")
 _EMPTY_RECIPE = EditRecipe().to_dict()
 _AI_CANCELLATION_EVIDENCE_CODES = frozenset({
     "ai_remote_result_unknown",
@@ -105,6 +112,18 @@ def _source_asset_identifier(value: object) -> str:
         raise EditingError("invalid_source_asset_id") from exc
     if str(parsed) != value:
         raise EditingError("invalid_source_asset_id")
+    return value
+
+
+def _source_artifact_identifier(value: object) -> str:
+    if not isinstance(value, str):
+        raise EditingError("invalid_source_artifact_id")
+    try:
+        parsed = UUID(value)
+    except ValueError as exc:
+        raise EditingError("invalid_source_artifact_id") from exc
+    if str(parsed) != value:
+        raise EditingError("invalid_source_artifact_id")
     return value
 
 
@@ -1222,6 +1241,212 @@ class EditingService:
         if expected.dubbing.enabled:
             dubbing["state"] = expected_dubbing["state"]
         return actual_recipe == expected_recipe
+
+    def import_transcription_timeline(
+        self,
+        project_id: str,
+        payload: bytes,
+        language: str,
+        mime_type: str,
+        expected_sha256: str,
+        source_asset_id: str,
+        source_artifact_id: str,
+        idempotency_key: str,
+        *,
+        clip_start_ms: int | None = None,
+        clip_end_ms: int | None = None,
+        segment_boundaries_ms: Sequence[int] = (),
+    ) -> dict[str, Any]:
+        """Import one verified download caption as a reviewable transcription.
+
+        The caller still owns verification that the registered sidecar belongs
+        to ``source_artifact_id``. This boundary additionally binds that
+        artifact to the download asset used by the editing project, verifies
+        its exact payload, and records durable provenance on the immutable
+        timeline revision.
+        """
+
+        project_id = _identifier(project_id)
+        source_asset_id = _source_asset_identifier(source_asset_id)
+        source_artifact_id = _source_artifact_identifier(source_artifact_id)
+        key = _request_id(idempotency_key)
+        if not isinstance(payload, bytes):
+            raise EditingError("source_caption_conflict")
+        if (
+            not isinstance(expected_sha256, str)
+            or not _SHA256.fullmatch(expected_sha256)
+            or not hmac.compare_digest(
+                hashlib.sha256(payload).hexdigest(), expected_sha256
+            )
+        ):
+            raise EditingError("source_caption_conflict")
+        if not isinstance(mime_type, str):
+            raise EditingError("source_caption_conflict")
+        subtitle_kind = _SOURCE_CAPTION_KINDS.get(mime_type)
+        if subtitle_kind is None:
+            raise EditingError("source_caption_conflict")
+        if not isinstance(language, str) or not _LANGUAGE.fullmatch(language):
+            raise EditingError("source_caption_conflict")
+
+        for boundary in (clip_start_ms, clip_end_ms):
+            if boundary is not None and (
+                isinstance(boundary, bool)
+                or not isinstance(boundary, int)
+                or boundary < 0
+                or boundary > MAX_TIMELINE_MILLISECONDS
+            ):
+                raise EditingError("source_caption_conflict")
+        if (
+            clip_start_ms is not None
+            and clip_end_ms is not None
+            and clip_end_ms <= clip_start_ms
+        ):
+            raise EditingError("source_caption_conflict")
+        if (
+            not isinstance(segment_boundaries_ms, Sequence)
+            or isinstance(segment_boundaries_ms, (str, bytes))
+        ):
+            raise EditingError("source_caption_conflict")
+        boundaries = tuple(segment_boundaries_ms)
+        lower = 0 if clip_start_ms is None else clip_start_ms
+        if (
+            any(
+                isinstance(boundary, bool)
+                or not isinstance(boundary, int)
+                or boundary <= lower
+                or boundary > MAX_TIMELINE_MILLISECONDS
+                or (clip_end_ms is not None and boundary >= clip_end_ms)
+                for boundary in boundaries
+            )
+            or tuple(sorted(set(boundaries))) != boundaries
+        ):
+            raise EditingError("source_caption_conflict")
+
+        try:
+            parsed = parse_subtitles(payload, subtitle_kind, language=language)
+            if any(_SOURCE_CAPTION_MARKUP.search(cue.source_text) for cue in parsed):
+                raise EditingError("source_caption_not_usable")
+            clipped: list[TimelineCue] = []
+            for cue in parsed:
+                overlaps = cue.end_ms > lower and (
+                    clip_end_ms is None or cue.start_ms < clip_end_ms
+                )
+                contained = cue.start_ms >= lower and (
+                    clip_end_ms is None or cue.end_ms <= clip_end_ms
+                )
+                if overlaps and not contained:
+                    raise EditingError("source_caption_not_usable")
+                if any(
+                    cue.start_ms < boundary < cue.end_ms
+                    for boundary in boundaries
+                ):
+                    raise EditingError("source_caption_not_usable")
+                if contained:
+                    clipped.append(
+                        TimelineCue(
+                            id=cue.id,
+                            order=len(clipped),
+                            start_ms=cue.start_ms,
+                            end_ms=cue.end_ms,
+                            source_text=cue.source_text,
+                            source_language=cue.source_language,
+                            speaker_id=cue.speaker_id,
+                        )
+                    )
+            timeline = canonical_timeline(clipped, language=language)
+        except EditingError:
+            raise
+        except (AiPipelineError, TimelineError, TypeError, ValueError):
+            raise EditingError("source_caption_not_usable") from None
+
+        provider = "download"
+        model = f"source-caption-v1:{source_artifact_id}:{expected_sha256}"
+        if not _AI_TOKEN.fullmatch(provider) or not _AI_TOKEN.fullmatch(model):
+            raise EditingError("source_caption_conflict")
+        operation = "import_transcription_timeline"
+        request_digest = _digest(
+            operation,
+            {
+                "project_id": project_id,
+                "source_asset_id": source_asset_id,
+                "source_artifact_id": source_artifact_id,
+                "mime_type": mime_type,
+                "language": language,
+                "payload_sha256": expected_sha256,
+                "clip_start_ms": clip_start_ms,
+                "clip_end_ms": clip_end_ms,
+                "segment_boundaries_ms": list(boundaries),
+                "cues_sha256": timeline.cues_sha256,
+            },
+        )
+
+        def matches(record: Mapping[str, Any]) -> bool:
+            return (
+                record.get("project_id") == project_id
+                and record.get("parent_id") is None
+                and record.get("kind") == "transcription"
+                and record.get("language") == language
+                and record.get("provider") == provider
+                and record.get("model") == model
+                and record.get("cues_sha256") == timeline.cues_sha256
+            )
+
+        def require_project_source(db: sqlite3.Connection) -> None:
+            source = db.execute(
+                "SELECT s.source_asset_id FROM projects p "
+                "JOIN sources s ON s.id=p.source_id WHERE p.id=?",
+                (project_id,),
+            ).fetchone()
+            if source is None:
+                exists = db.execute(
+                    "SELECT 1 FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+                if exists is None:
+                    raise EditingError("project_not_found")
+                raise EditingError("editing_data_invalid")
+            if source["source_asset_id"] != source_asset_id:
+                raise EditingError("source_caption_conflict")
+
+        with self._db() as db:
+            require_project_source(db)
+        existing = self._request_result(key, operation, request_digest)
+        if existing is not None:
+            result = self.timeline(existing)
+            if not matches(result):
+                raise EditingError("editing_data_invalid")
+            return result
+
+        revision_id, now = uuid4().hex, _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            replay = self._request_result_in(db, key, operation, request_digest)
+            require_project_source(db)
+            if replay is not None:
+                result = self._timeline_by_id(db, replay)
+                if not matches(result):
+                    raise EditingError("editing_data_invalid")
+                return result
+            db.execute(
+                "INSERT INTO timeline_revisions(id,project_id,parent_id,kind,language,"
+                "cues,cues_sha256,provider,model,state,review_version,code,created_at,"
+                "updated_at) VALUES(?,?,NULL,'transcription',?,?,?,?,?,'review',0,"
+                "'source_caption_review_required',?,?)",
+                (
+                    revision_id,
+                    project_id,
+                    language,
+                    timeline.cues_json,
+                    timeline.cues_sha256,
+                    provider,
+                    model,
+                    now,
+                    now,
+                ),
+            )
+            self._insert_request(
+                db, key, operation, request_digest, revision_id, now
+            )
+            return self._timeline_by_id(db, revision_id)
 
     def create_ai_task(
         self,

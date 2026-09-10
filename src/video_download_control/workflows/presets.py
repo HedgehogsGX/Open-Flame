@@ -66,6 +66,7 @@ _AI_KEYS = frozenset({
     "transcription_provider", "transcription_model",
     "transcription_authorization_sha256", "translation_authorization_sha256",
 })
+_AI_OPTIONAL_KEYS = frozenset({"transcription_mode"})
 _SYNTHESIS_DIGEST = "synthesis_authorization_sha256"
 
 
@@ -228,15 +229,23 @@ def _secret_free_profile(
     reusable = {key: normalized[key] for key in _PROFILE_KEYS}
     dubbing = reusable["edit_recipe"]["dubbing"]
     if reusable["ai"] is not None:
-        reusable["ai"] = {key: reusable["ai"][key] for key in _AI_KEYS}
+        source_ai = reusable["ai"]
+        reusable["ai"] = {key: source_ai[key] for key in _AI_KEYS}
+        for key in _AI_OPTIONAL_KEYS:
+            if key in source_ai:
+                reusable["ai"][key] = source_ai[key]
         authorization = recipe_from_mapping(normalized["edit_recipe"]).dubbing.authorization
         reusable["ai"][_SYNTHESIS_DIGEST] = authorization.sha256
     dubbing.pop("authorization", None)
     return reusable
 
 
-def _stored_profile(profile: object) -> dict[str, Any]:
+def _stored_profile(
+    profile: object, *, schema: int = _SCHEMA
+) -> dict[str, Any]:
     """Validate digest-only templates, including readable historical AI intent."""
+    if schema not in {_LEGACY_SCHEMA, _SCHEMA}:
+        raise WorkflowPresetError("workflow_preset_invalid")
     if not isinstance(profile, Mapping) or set(profile) != _PROFILE_KEYS:
         raise WorkflowPresetError("workflow_preset_invalid")
     encoded = _canonical(profile)
@@ -246,9 +255,17 @@ def _stored_profile(profile: object) -> dict[str, Any]:
     candidate = json.loads(encoded)
     raw_ai = candidate["ai"]
     if raw_ai is not None:
-        if not isinstance(raw_ai, dict) or set(raw_ai) not in {
-            _AI_KEYS, _AI_KEYS | {_SYNTHESIS_DIGEST},
-        }:
+        raw_ai_keys = frozenset(raw_ai) if isinstance(raw_ai, dict) else frozenset()
+        if (
+            not isinstance(raw_ai, dict)
+            or (
+                schema == _LEGACY_SCHEMA
+                and bool(raw_ai_keys & _AI_OPTIONAL_KEYS)
+            )
+            or raw_ai_keys - _AI_OPTIONAL_KEYS not in {
+                _AI_KEYS, _AI_KEYS | {_SYNTHESIS_DIGEST},
+            }
+        ):
             raise WorkflowPresetError("workflow_preset_invalid")
         if _SYNTHESIS_DIGEST in raw_ai:
             _digest(raw_ai.pop(_SYNTHESIS_DIGEST))
@@ -418,7 +435,7 @@ def _record(value: object, *, schema: int = _SCHEMA) -> dict[str, Any]:
     )
     if not isinstance(value, Mapping) or set(value) != expected_keys:
         raise WorkflowPresetError("workflow_preset_invalid")
-    profile = _stored_profile(value["profile"])
+    profile = _stored_profile(value["profile"], schema=schema)
     digest = _digest(value.get("profile_sha256"))
     if not hmac.compare_digest(digest, _sha256(profile)):
         raise WorkflowPresetError("workflow_preset_invalid")
@@ -585,7 +602,19 @@ class WorkflowPresetStore:
         normalized = _current_profile(profile)
         current = _secret_free_profile(profile)
         saved = preset["profile"]
-        if saved["ai"] != current["ai"]:
+        saved_ai = saved["ai"]
+        current_ai = current["ai"]
+        saved_ai_binding = (
+            None
+            if saved_ai is None
+            else {key: value for key, value in saved_ai.items() if key not in _AI_OPTIONAL_KEYS}
+        )
+        current_ai_binding = (
+            None
+            if current_ai is None
+            else {key: value for key, value in current_ai.items() if key not in _AI_OPTIONAL_KEYS}
+        )
+        if saved_ai_binding != current_ai_binding:
             raise WorkflowPresetError("workflow_preset_authorization_changed")
         materialized = normalized
         recipe = json.loads(_canonical(saved["edit_recipe"]))
@@ -593,6 +622,12 @@ class WorkflowPresetStore:
         if "authorization" in current_dubbing:
             recipe["dubbing"]["authorization"] = current_dubbing["authorization"]
         materialized["edit_recipe"] = recipe
+        if saved_ai is not None:
+            materialized_ai = dict(materialized["ai"])
+            materialized_ai.pop("transcription_mode", None)
+            if "transcription_mode" in saved_ai:
+                materialized_ai["transcription_mode"] = saved_ai["transcription_mode"]
+            materialized["ai"] = materialized_ai
         materialized["upload"] = _materialize_schedules(
             saved["upload"], preset["schedule_policies"], schedule_base_unix
         )

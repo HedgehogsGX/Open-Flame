@@ -1,8 +1,15 @@
 # Open-Flame 后续执行计划
 
-路线制定：2026-09-05；进度更新：2026-09-10。本文保留工作包、验收门槛与依赖顺序；当前源码身份、能力边界、风险和唯一下一入口以 [HANDOFF](../HANDOFF.md) 为准，逐项结果以 [validation 索引](../validation/README.md) 链接的独立 evidence 为准。当前开发版本为 0.28.0：Download/Editing/Upload/Workflow Schema 分别为 11/4/3/3，Workflow preset Schema 为 2，上传备份格式为 2；首批上传平台仍限 Bilibili、抖音和视频号。0592b6f 的五件制品与包外 receipt 只证明该冻结构建，之后源码尚无新 clean receipt；真实 OpenAI、真人试听、三平台发布与目标 Linux/Docker 验收均未完成。
+路线制定：2026-09-05；进度更新：2026-09-11。本文保留工作包、验收门槛与依赖顺序；当前源码身份、能力边界、风险和唯一下一入口以 [HANDOFF](../HANDOFF.md) 为准，逐项结果以 [validation 索引](../validation/README.md) 链接的独立 evidence 为准。当前开发版本为 0.28.0：Download/Editing/Upload/Workflow Schema 分别为 11/4/3/3，Workflow preset Schema 为 2，上传备份格式为 2；首批上传平台仍限 Bilibili、抖音和视频号。0592b6f 的五件制品与包外 receipt 只证明该冻结构建，之后源码尚无新 clean receipt；真实 OpenAI、真人试听、三平台发布与目标 Linux/Docker 验收均未完成。
 
 架构精简 S1–S8 已按可独立回退的小切片完成：HTTP guard，公开 profile/metadata/identity 契约，AI/Upload/Edit snapshot 解释，verified media response，EditingManager，受管文件身份/读取，以及 Workflow 上传表单与 recipe 分责均已收敛；各域权限、事务、错误、确认与 capability 边界保持。HANDOFF 现只保留当前身份、能力、风险与下一入口，validation README 只做证据索引；历史结果继续留在各自 evidence 和 Git 历史。仓库 hook 与 hosted CI 已复核为共用 scripts/verify_commit_scope.py，分别检查 staged diff 与事件 merge-base 净差，允许只删除旧测试。下一入口统一为接收外部测试反馈、修复可复现问题，再固定精确 clean candidate；真实 OpenAI、真人试听与三平台发布仍需对具体动作另行明确授权。WorkflowStore 或更短 handler 只在能够删除现有重复且故障恢复语义可逐项证明时再提取。
+
+2026-09-11 的发布后轻量切片新增可选来源字幕优先策略：Workflow 按 editing project 中的
+source asset 枚举已登记 ready caption，只对唯一匹配的 SRT/WebVTT 进行 2 MiB 有界读取和
+完整 identity/hash 复核，再通过 Editing Schema 4 既有 timeline/requests 导入为待审核
+transcription。批准后复用既有 translation、dubbing、render、upload 路径；不适用时才回退
+已冻结授权的 AI transcription。该切片没有增加 Schema、服务、runtime、依赖或通用抽象，
+详见[来源字幕优先复用证据](../validation/iteration-0.28.0-workflow-source-caption-reuse.md)。
 
 ## 1. 目标、边界与完成定义
 
@@ -346,7 +353,7 @@ Upload Schema 3 和上传备份格式 2 保存封面引用、时间、平台参�
 ### T19 / 当前阶段：AI 字幕、翻译、配音与自动流程
 
 1. 建立与核心 `.venv`、上传 runtime 分离的 `data-ai-runtime`；builder 只接受官方 CPython 3.12/3.13 Windows x64 embeddable ZIP，并冻结 worker/provider 文件 SHA-256。模型为供应商云端 alias，不捆绑模型权重。
-2. 当前听写使用 OpenAI `whisper-1` 的 segment timestamps；本机生成 mono AAC 派生音频，provider 调用前的有效硬上限为 30 分钟且 25 MiB。`/workflows` 允许完整视频、一个分段或首尾连续的多个分段；有分段时只派生首段起点至末段终点的连续音频，并把返回时间加回源时间轴。编辑页直接建听写任务时仍默认完整编辑源。既有 SRT/VTT 导入和本地 faster-whisper 尚未实现，列入后续。
+2. 当前听写使用 OpenAI `whisper-1` 的 segment timestamps；本机生成 mono AAC 派生音频，provider 调用前的有效硬上限为 30 分钟且 25 MiB。`/workflows` 允许完整视频、一个分段或首尾连续的多个分段；有分段时只派生首段起点至末段终点的连续音频，并把返回时间加回源时间轴。编辑页直接建听写任务时仍默认完整编辑源。自动 Workflow 可选优先导入下载登记的 SRT/VTT 为待审核 transcription timeline；cue 跨越外层或内部任一分段边界时失败关闭。本地 faster-whisper 尚未实现，列入后续。
 3. 翻译使用 `gpt-5.6-luna` Responses API，保持 cue ID、顺序、整数毫秒时间、来源文字、译文、provider/model 和审核状态；页面第一批提供中文与 English 目标语言。单 cue 上限统一为 4096 字符，时间轴 JSON 限 3 MiB，为隔离 runtime 的 4 MiB envelope 留出固定空间。
 4. 配音使用 `gpt-4o-mini-tts` 的 13 个标准音色，禁用声音克隆；逐 cue 生成 WAV、测量时长并按每个分段重新归零构造 PCM 时间线。分段边界切入 cue 时拒绝；空 cue 的 B-roll 段生成空 VTT 与本地静音，不调用 TTS；溢出时失败关闭，不静默截断或覆盖下一 cue。保留原声时固定压到 22% 后混入配音。
 5. 编辑页提供完整听写/译文时间轴审核、批准/拒绝、任务取消/后继重试，以及绑定已批准修订的处理计划。当前 Schema 4 账本先冻结 owner、operation、ordinal/attempt、authorization/owner/request 摘要和调用单位；发送后无法确认结果时标为 `unknown`，页面只提供 `not_accepted`、`accepted_without_result`、`abandoned` 三项 revision-fenced 人工 reconciliation。它不保存 provider request ID 或响应正文，也不复用部分结果。逐 cue 音频试听和单 cue 重新生成尚未实现。

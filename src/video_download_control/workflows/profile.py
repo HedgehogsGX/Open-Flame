@@ -156,16 +156,22 @@ def normalize_workflow_profile(
             "transcription_authorization",
             "translation_authorization",
         }
+        transcription_mode_key = "transcription_mode"
+        transcription_modes = {"ai", "prefer_source_caption"}
         raw_ai_keys = frozenset(raw_ai) if isinstance(raw_ai, Mapping) else frozenset()
+        raw_ai_core_keys = raw_ai_keys - {transcription_mode_key}
         if (
             not isinstance(raw_ai, Mapping)
-            or raw_ai_keys
+            or raw_ai_core_keys
             not in {
                 frozenset(legacy_ai_keys),
                 frozenset(digest_ai_keys),
                 frozenset(bound_ai_keys),
             }
-            or (require_ai_authorization and raw_ai_keys != frozenset(bound_ai_keys))
+            or (
+                require_ai_authorization
+                and raw_ai_core_keys != frozenset(bound_ai_keys)
+            )
         ):
             raise WorkflowError("invalid_workflow_profile")
         transcription_provider = raw_ai.get("transcription_provider")
@@ -190,7 +196,18 @@ def normalize_workflow_profile(
             "transcription_provider": transcription_provider,
             "transcription_model": transcription_model,
         }
-        if raw_ai_keys in {frozenset(digest_ai_keys), frozenset(bound_ai_keys)}:
+        if transcription_mode_key in raw_ai_keys:
+            transcription_mode = raw_ai.get(transcription_mode_key)
+            if (
+                not isinstance(transcription_mode, str)
+                or transcription_mode not in transcription_modes
+            ):
+                raise WorkflowError("invalid_workflow_profile")
+            normalized_ai[transcription_mode_key] = transcription_mode
+        if raw_ai_core_keys in {
+            frozenset(digest_ai_keys),
+            frozenset(bound_ai_keys),
+        }:
             for field in (
                 "transcription_authorization_sha256",
                 "translation_authorization_sha256",
@@ -199,7 +216,7 @@ def normalize_workflow_profile(
                 if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
                     raise WorkflowError("invalid_workflow_profile")
                 normalized_ai[field] = digest
-        if raw_ai_keys == frozenset(bound_ai_keys):
+        if raw_ai_core_keys == frozenset(bound_ai_keys):
             transcription_authorization = _bound_ai_authorization(
                 raw_ai.get("transcription_authorization"),
                 operation="transcribe",

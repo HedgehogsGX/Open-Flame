@@ -717,7 +717,10 @@ class BatchRepository:
                     auxiliary.path AS artifact_path,
                     auxiliary.mime_type,
                     auxiliary.sha256,
-                    caption.language
+                    auxiliary.tool_name,
+                    auxiliary.tool_version,
+                    caption.language,
+                    caption.origin
                 FROM artifacts AS auxiliary
                 JOIN media_assets AS asset
                   ON asset.id = auxiliary.asset_id
@@ -765,6 +768,64 @@ class BatchRepository:
                 (artifact_id,),
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def list_ready_captions_for_asset(
+        self, asset_id: str
+    ) -> list[dict[str, Any]]:
+        """List registered ready captions owned by one ready original asset."""
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    auxiliary.id AS artifact_id,
+                    auxiliary.asset_id,
+                    auxiliary.kind,
+                    auxiliary.path AS artifact_path,
+                    auxiliary.mime_type,
+                    auxiliary.sha256,
+                    auxiliary.tool_name,
+                    auxiliary.tool_version,
+                    caption.language,
+                    caption.origin
+                FROM artifacts AS auxiliary
+                JOIN captions AS caption
+                  ON caption.artifact_id = auxiliary.id
+                JOIN media_assets AS asset
+                  ON asset.id = auxiliary.asset_id
+                WHERE auxiliary.asset_id = ?
+                  AND auxiliary.kind = 'caption'
+                  AND caption.status = 'ready'
+                  AND asset.status = 'ready'
+                  AND asset.sha256 IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM artifacts AS original
+                      WHERE original.id = auxiliary.parent_artifact_id
+                        AND original.asset_id = auxiliary.asset_id
+                        AND original.kind = 'original'
+                        AND original.sha256 = asset.sha256
+                  )
+                  AND (
+                      SELECT COUNT(*)
+                      FROM artifacts AS original
+                      WHERE original.asset_id = asset.id
+                        AND original.kind = 'original'
+                  ) = 1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM job_assets AS ready_link
+                      JOIN download_jobs AS ready_job
+                        ON ready_job.id = ready_link.job_id
+                      WHERE ready_link.asset_id = asset.id
+                        AND ready_link.role = 'original'
+                        AND ready_job.status = 'ready'
+                  )
+                ORDER BY auxiliary.path, auxiliary.id
+                """,
+                (asset_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def count_rows(self, table: str) -> int:
         allowed = {"batches", "input_records", "source_items", "download_jobs"}

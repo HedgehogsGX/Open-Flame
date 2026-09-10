@@ -95,6 +95,18 @@ _UPLOAD_KEYS = _UPLOAD_INPUT_KEYS | {"account_bindings"}
 _UPLOAD_TITLE_MODE_KEY = "title_mode"
 _SOURCE_METADATA_ERROR = "workflow_source_metadata_unavailable"
 _COVER_KEYS = {"cover_landscape_asset_id", "cover_portrait_asset_id"}
+_TRANSCRIPTION_MODE_KEY = "transcription_mode"
+_TRANSCRIPTION_MODES = frozenset({"ai", "prefer_source_caption"})
+_SOURCE_CAPTION_MODEL = re.compile(
+    r"^source-caption-v1:([0-9a-f-]{36}):([0-9a-f]{64})$"
+)
+_SOURCE_CAPTION_MIME_TYPES = {
+    "application/x-subrip": "srt",
+    "text/vtt": "vtt",
+}
+_CAPTION_LANGUAGE = re.compile(
+    r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"
+)
 _LEGACY_AI_KEYS = frozenset({"transcription_provider", "transcription_model"})
 _DIGEST_AI_KEYS = _LEGACY_AI_KEYS | frozenset({
     "transcription_authorization_sha256",
@@ -119,6 +131,7 @@ class DownloadControl(Protocol):
 
 
 DownloadAssetResolver = Callable[[str], tuple[Path, str]]
+DownloadCaptionResolver = Callable[[str], Mapping[str, Any]]
 DownloadRuntimeProbe = Callable[[], Mapping[str, Any]]
 
 
@@ -178,6 +191,21 @@ def _record_id(record: object) -> str:
     return _hex_identifier(record.get("id"))
 
 
+def _ai_shape(ai: Mapping[str, Any]) -> tuple[frozenset[object], str]:
+    """Return the stable AI contract keys and its optional caption policy."""
+
+    try:
+        keys = frozenset(ai)
+    except TypeError:
+        raise WorkflowError("workflow_domain_data_invalid") from None
+    mode = ai.get(_TRANSCRIPTION_MODE_KEY, "ai")
+    if not isinstance(mode, str) or mode not in _TRANSCRIPTION_MODES:
+        raise WorkflowError("workflow_domain_data_invalid")
+    if _TRANSCRIPTION_MODE_KEY in keys:
+        keys = keys - {_TRANSCRIPTION_MODE_KEY}
+    return keys, mode
+
+
 def _validate_retry_successors(
     record_ids: Sequence[str],
     successors: Mapping[str, str],
@@ -208,6 +236,7 @@ class LocalWorkflowAdapter:
     download_asset_resolver: DownloadAssetResolver
     download_runtime_probe: DownloadRuntimeProbe | None = None
     download_control: DownloadControl | None = None
+    download_caption_resolver: DownloadCaptionResolver | None = None
 
     def preflight(
         self,
@@ -290,11 +319,12 @@ class LocalWorkflowAdapter:
             normalized = recipe_from_mapping(recipe)
         except EditingError as error:
             _domain_failure(error, "invalid_recipe")
+        ai_keys, _transcription_mode = _ai_shape(ai)
         if (
             not normalized.translation.enabled
             or not normalized.dubbing.enabled
             or normalized.dubbing.authorization is None
-            or set(ai) != _BOUND_AI_KEYS
+            or ai_keys != _BOUND_AI_KEYS
         ):
             raise WorkflowError("workflow_domain_data_invalid")
         operations = (
@@ -810,7 +840,7 @@ class LocalWorkflowAdapter:
             or not isinstance(ai, Mapping)
         ):
             raise WorkflowError("workflow_domain_data_invalid")
-        ai_keys = set(ai)
+        ai_keys, transcription_mode = _ai_shape(ai)
         if ai_keys in {_LEGACY_AI_KEYS, _DIGEST_AI_KEYS}:
             return AiSnapshot("attention", code="ai_authorization_required")
         if ai_keys != _BOUND_AI_KEYS:
@@ -836,29 +866,46 @@ class LocalWorkflowAdapter:
         authorization = [authorize]
         clip_options = self._transcription_clip_options(normalized)
         try:
-            transcription = self.editing_manager.create_ai_task(
-                project_id,
-                "transcribe",
-                transcription_provider,
-                transcription_model,
-                {
-                    "language": None if language.casefold() == "auto" else language,
-                    "word_timestamps": True,
-                    "vad": True,
-                    **clip_options,
-                },
-                f"wf-{workflow_id}-transcribe",
-                expected_authorization_sha256=transcription_authorization_sha256,
-            )
-            transcript = self._advance_ai_task(
-                transcription,
-                authorization=authorization,
-                explicit=explicit,
-                confirmation_code="ai_transcription_confirmation_required",
-                review_code="ai_transcription_review_required",
-            )
-            if isinstance(transcript, AiSnapshot):
-                return transcript
+            transcript: Mapping[str, Any] | AiSnapshot | None = None
+            if transcription_mode == "prefer_source_caption":
+                transcript = self._preferred_source_caption(
+                    workflow_id,
+                    project_id,
+                    language,
+                    normalized.translation.target_language,
+                    clip_options,
+                    segment_boundaries_ms=tuple(
+                        segment.end_ms for segment in normalized.segments[:-1]
+                    ),
+                    authorization=authorization,
+                    explicit=explicit,
+                )
+                if isinstance(transcript, AiSnapshot):
+                    return transcript
+            if transcript is None:
+                transcription = self.editing_manager.create_ai_task(
+                    project_id,
+                    "transcribe",
+                    transcription_provider,
+                    transcription_model,
+                    {
+                        "language": None if language.casefold() == "auto" else language,
+                        "word_timestamps": True,
+                        "vad": True,
+                        **clip_options,
+                    },
+                    f"wf-{workflow_id}-transcribe",
+                    expected_authorization_sha256=transcription_authorization_sha256,
+                )
+                transcript = self._advance_ai_task(
+                    transcription,
+                    authorization=authorization,
+                    explicit=explicit,
+                    confirmation_code="ai_transcription_confirmation_required",
+                    review_code="ai_transcription_review_required",
+                )
+                if isinstance(transcript, AiSnapshot):
+                    return transcript
 
             source_language = transcript.get("language")
             source_revision_id = _hex_identifier(transcript.get("id"))
@@ -954,6 +1001,277 @@ class LocalWorkflowAdapter:
             )
         except EditingError as error:
             _domain_failure(error, "ai_pipeline_failed")
+
+    def _preferred_source_caption(
+        self,
+        workflow_id: str,
+        project_id: str,
+        source_language: str,
+        target_language: str,
+        clip_options: Mapping[str, int],
+        *,
+        segment_boundaries_ms: Sequence[int],
+        authorization: list[bool],
+        explicit: bool,
+    ) -> Mapping[str, Any] | AiSnapshot | None:
+        """Reuse one verified download caption before creating a transcription task."""
+
+        try:
+            project = self.editing_manager.invoke("project", project_id)
+        except EditingError as error:
+            _domain_failure(error, "ai_pipeline_failed")
+        if not isinstance(project, Mapping) or project.get("id") != project_id:
+            raise WorkflowError("workflow_domain_data_invalid")
+        source_asset_id = _download_identifier(project.get("source_asset_id"))
+        timeline = self._existing_source_caption(project_id)
+        newly_imported = False
+        if timeline is None:
+            if self._transcription_fallback_started(project_id):
+                return None
+            candidate = self._select_source_caption(
+                source_asset_id, source_language, target_language
+            )
+            if candidate is None:
+                return None
+            if self.download_caption_resolver is None:
+                raise WorkflowError("download_caption_unavailable")
+            try:
+                resolved = self.download_caption_resolver(candidate["artifact_id"])
+            except Exception:
+                raise WorkflowError("download_caption_unavailable") from None
+            if not isinstance(resolved, Mapping):
+                raise WorkflowError("download_caption_unavailable")
+            payload = resolved.get("payload")
+            if not isinstance(payload, bytes) or any(
+                resolved.get(key) != candidate[key]
+                for key in (
+                    "artifact_id",
+                    "asset_id",
+                    "artifact_path",
+                    "mime_type",
+                    "language",
+                    "sha256",
+                    "origin",
+                    "tool_name",
+                    "tool_version",
+                )
+            ):
+                raise WorkflowError("download_caption_unavailable")
+            try:
+                timeline = self.editing_manager.invoke(
+                    "import_transcription_timeline",
+                    project_id,
+                    payload,
+                    candidate["language"],
+                    candidate["mime_type"],
+                    candidate["sha256"],
+                    candidate["asset_id"],
+                    candidate["artifact_id"],
+                    f"wf-{workflow_id}-source-caption",
+                    clip_start_ms=clip_options.get("clip_start_ms"),
+                    clip_end_ms=clip_options.get("clip_end_ms"),
+                    segment_boundaries_ms=segment_boundaries_ms,
+                )
+            except EditingError as error:
+                if error.code == "source_caption_not_usable":
+                    return None
+                _domain_failure(error, "download_caption_unavailable")
+            if not isinstance(timeline, Mapping):
+                raise WorkflowError("workflow_domain_data_invalid")
+            newly_imported = True
+
+        state = timeline.get("state")
+        if state == "rejected":
+            # Rejection is an explicit signal to use the already-authorized AI
+            # transcription fallback on the next advancement.
+            return None
+        revision_id = _record_id(timeline)
+        if timeline.get("project_id") != project_id:
+            raise WorkflowError("workflow_domain_data_invalid")
+        if state == "review":
+            if newly_imported or not explicit or not authorization[0]:
+                return AiSnapshot(
+                    "review", code="ai_source_caption_review_required"
+                )
+            review_version = timeline.get("review_version")
+            if review_version != 0 or isinstance(review_version, bool):
+                raise WorkflowError("workflow_domain_data_invalid")
+            timeline = self.editing_manager.invoke(
+                "review_timeline", revision_id, "approved", review_version
+            )
+            authorization[0] = False
+            state = timeline.get("state")
+        if state != "approved" or timeline.get("id") != revision_id:
+            raise WorkflowError("workflow_domain_data_invalid")
+        return timeline
+
+    def _existing_source_caption(
+        self, project_id: str
+    ) -> Mapping[str, Any] | None:
+        try:
+            timelines = self.editing_manager.invoke(
+                "timelines", project_id=project_id
+            )
+        except EditingError as error:
+            _domain_failure(error, "ai_pipeline_failed")
+        if not isinstance(timelines, list):
+            raise WorkflowError("workflow_domain_data_invalid")
+        matches: list[Mapping[str, Any]] = []
+        for timeline in timelines:
+            if not isinstance(timeline, Mapping):
+                raise WorkflowError("workflow_domain_data_invalid")
+            if timeline.get("provider") != "download":
+                continue
+            model = timeline.get("model")
+            if (
+                timeline.get("project_id") != project_id
+                or timeline.get("kind") != "transcription"
+                or timeline.get("parent_id") is not None
+                or not isinstance(model, str)
+            ):
+                raise WorkflowError("workflow_domain_data_invalid")
+            match = _SOURCE_CAPTION_MODEL.fullmatch(model)
+            if match is None:
+                raise WorkflowError("workflow_domain_data_invalid")
+            try:
+                if str(UUID(match.group(1))) != match.group(1):
+                    raise ValueError
+            except (AttributeError, ValueError):
+                raise WorkflowError("workflow_domain_data_invalid") from None
+            matches.append(timeline)
+        if len(matches) > 1:
+            raise WorkflowError("workflow_domain_data_invalid")
+        return matches[0] if matches else None
+
+    def _transcription_fallback_started(self, project_id: str) -> bool:
+        """Keep the source-caption decision stable after AI fallback begins."""
+
+        try:
+            tasks = self.editing_manager.invoke("ai_tasks", project_id=project_id)
+        except EditingError as error:
+            _domain_failure(error, "ai_pipeline_failed")
+        if not isinstance(tasks, list):
+            raise WorkflowError("workflow_domain_data_invalid")
+        seen: set[str] = set()
+        fallback_started = False
+        for task in tasks:
+            if not isinstance(task, Mapping) or task.get("project_id") != project_id:
+                raise WorkflowError("workflow_domain_data_invalid")
+            task_id = _record_id(task)
+            if task_id in seen:
+                raise WorkflowError("workflow_domain_data_invalid")
+            seen.add(task_id)
+            operation = task.get("operation")
+            if operation not in {"transcribe", "translate"}:
+                raise WorkflowError("workflow_domain_data_invalid")
+            fallback_started = fallback_started or operation == "transcribe"
+        return fallback_started
+
+    def _select_source_caption(
+        self, asset_id: str, source_language: str, target_language: str
+    ) -> dict[str, Any] | None:
+        """Select a single unambiguous SRT/VTT artifact from this workflow."""
+
+        asset_id = _download_identifier(asset_id)
+        try:
+            artifacts = self.batch_service.list_ready_captions_for_asset(asset_id)
+        except Exception:
+            raise WorkflowError("download_caption_unavailable") from None
+        if not isinstance(artifacts, list):
+            raise WorkflowError("download_caption_unavailable")
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                raise WorkflowError("download_caption_unavailable")
+            if (
+                artifact.get("kind") != "caption"
+                or artifact.get("asset_id") != asset_id
+                or artifact.get("origin") != "platform"
+            ):
+                raise WorkflowError("download_caption_unavailable")
+            artifact_id = _download_identifier(artifact.get("artifact_id"))
+            if artifact_id in seen:
+                raise WorkflowError("download_caption_unavailable")
+            seen.add(artifact_id)
+            mime_type = artifact.get("mime_type")
+            language = artifact.get("language")
+            digest = artifact.get("sha256")
+            artifact_path = artifact.get("artifact_path")
+            if (
+                not isinstance(mime_type, str)
+                or not isinstance(language, str)
+                or _CAPTION_LANGUAGE.fullmatch(language) is None
+                or not isinstance(digest, str)
+                or _SHA256.fullmatch(digest) is None
+                or not isinstance(artifact_path, str)
+                or not artifact_path
+            ):
+                raise WorkflowError("download_caption_unavailable")
+            if mime_type not in _SOURCE_CAPTION_MIME_TYPES:
+                continue
+            candidates.append(
+                {
+                    "artifact_id": artifact_id,
+                    "asset_id": asset_id,
+                    "artifact_path": artifact_path,
+                    "mime_type": mime_type,
+                    "language": language,
+                    "sha256": digest,
+                    "origin": artifact.get("origin"),
+                    "tool_name": artifact.get("tool_name"),
+                    "tool_version": artifact.get("tool_version"),
+                }
+            )
+        if not candidates:
+            return None
+
+        desired = source_language.replace("_", "-").casefold()
+        if desired == "auto":
+            target = target_language.replace("_", "-").casefold()
+            if target in {"zh", "zh-cn", "zh-hans", "zh-sg"}:
+                desired = "en"
+            elif target == "en" or target.startswith("en-"):
+                desired = "zh-cn"
+            else:
+                eligible = [
+                    candidate
+                    for candidate in candidates
+                    if self._caption_language_rank(target, candidate["language"])
+                    is None
+                ]
+                return eligible[0] if len(eligible) == 1 else None
+        ranked: list[tuple[int, dict[str, Any]]] = []
+        for candidate in candidates:
+            rank = self._caption_language_rank(desired, candidate["language"])
+            if rank is not None:
+                ranked.append((rank, candidate))
+        if not ranked:
+            return None
+        best = min(rank for rank, _candidate in ranked)
+        winners = [candidate for rank, candidate in ranked if rank == best]
+        return winners[0] if len(winners) == 1 else None
+
+    @staticmethod
+    def _caption_language_rank(desired: str, available: str) -> int | None:
+        normalized = available.replace("_", "-").casefold()
+        if normalized == desired:
+            return 0
+        equivalents = {
+            "zh-cn": ("zh-hans", "zh"),
+            "zh-sg": ("zh-hans", "zh"),
+            "zh-hans": ("zh-cn", "zh-sg", "zh"),
+            "zh-tw": ("zh-hant", "zh"),
+            "zh-hk": ("zh-hant", "zh"),
+            "zh-mo": ("zh-hant", "zh"),
+            "zh-hant": ("zh-tw", "zh-hk", "zh-mo", "zh"),
+        }.get(desired)
+        if equivalents is not None and normalized in equivalents:
+            return equivalents.index(normalized) + 1
+        if "-" not in desired and normalized.startswith(f"{desired}-"):
+            return 1
+        return None
 
     def _advance_ai_task(
         self,
@@ -1129,7 +1447,7 @@ class LocalWorkflowAdapter:
             or not isinstance(ai, Mapping)
         ):
             raise WorkflowError("workflow_domain_data_invalid")
-        ai_keys = set(ai)
+        ai_keys, transcription_mode = _ai_shape(ai)
         if ai_keys in {_LEGACY_AI_KEYS, _DIGEST_AI_KEYS}:
             raise WorkflowError("ai_authorization_required")
         if ai_keys != _BOUND_AI_KEYS:
@@ -1150,49 +1468,62 @@ class LocalWorkflowAdapter:
             raise WorkflowError("workflow_domain_data_invalid")
         try:
             clip_options = self._transcription_clip_options(normalized)
-            transcription = self.editing_manager.create_ai_task(
-                project_id,
-                "transcribe",
-                provider,
-                model,
-                {
-                    "language": (
-                        None
-                        if normalized.translation.source_language.casefold() == "auto"
-                        else normalized.translation.source_language
-                    ),
-                    "word_timestamps": True,
-                    "vad": True,
-                    **clip_options,
-                },
-                f"wf-{workflow_id}-transcribe",
-                expected_authorization_sha256=transcription_authorization_sha256,
-            )
-            current = self._latest_ai_task(transcription)
-            if self._ai_task_retry_blocked(current):
-                raise WorkflowError("ai_remote_retry_blocked")
-            if current.get("state") in {"review", "queued", "running", "canceling"}:
-                return
-            if current.get("state") in {"failed", "canceled"}:
-                self.editing_manager.invoke(
-                    "retry_ai_task",
-                    _record_id(current),
-                    f"wf-{workflow_id}-retry-{_record_id(current)}",
+            source: Mapping[str, Any] | None = None
+            if transcription_mode == "prefer_source_caption":
+                source = self._existing_source_caption(project_id)
+                if source is not None and source.get("state") == "rejected":
+                    source = None
+                elif source is not None and source.get("state") != "approved":
+                    raise WorkflowError("workflow_ai_retry_not_available")
+            if source is None:
+                transcription = self.editing_manager.create_ai_task(
+                    project_id,
+                    "transcribe",
+                    provider,
+                    model,
+                    {
+                        "language": (
+                            None
+                            if normalized.translation.source_language.casefold() == "auto"
+                            else normalized.translation.source_language
+                        ),
+                        "word_timestamps": True,
+                        "vad": True,
+                        **clip_options,
+                    },
+                    f"wf-{workflow_id}-transcribe",
+                    expected_authorization_sha256=transcription_authorization_sha256,
                 )
-                return
-            if current.get("state") != "succeeded":
-                raise WorkflowError("workflow_ai_retry_not_available")
-            source_revision_id = _hex_identifier(current.get("result_revision_id"))
-            source = self.editing_manager.invoke("timeline", source_revision_id)
-            if isinstance(source, Mapping) and source.get("state") == "rejected":
-                self.editing_manager.invoke(
-                    "retry_ai_task",
-                    _record_id(current),
-                    f"wf-{workflow_id}-retry-{_record_id(current)}",
+                current = self._latest_ai_task(transcription)
+                if self._ai_task_retry_blocked(current):
+                    raise WorkflowError("ai_remote_retry_blocked")
+                if current.get("state") in {"review", "queued", "running", "canceling"}:
+                    return
+                if current.get("state") in {"failed", "canceled"}:
+                    self.editing_manager.invoke(
+                        "retry_ai_task",
+                        _record_id(current),
+                        f"wf-{workflow_id}-retry-{_record_id(current)}",
+                    )
+                    return
+                if current.get("state") != "succeeded":
+                    raise WorkflowError("workflow_ai_retry_not_available")
+                source_revision_id = _hex_identifier(
+                    current.get("result_revision_id")
                 )
-                return
-            if not isinstance(source, Mapping) or source.get("state") != "approved":
-                raise WorkflowError("workflow_ai_retry_not_available")
+                source = self.editing_manager.invoke(
+                    "timeline", source_revision_id
+                )
+                if isinstance(source, Mapping) and source.get("state") == "rejected":
+                    self.editing_manager.invoke(
+                        "retry_ai_task",
+                        _record_id(current),
+                        f"wf-{workflow_id}-retry-{_record_id(current)}",
+                    )
+                    return
+                if not isinstance(source, Mapping) or source.get("state") != "approved":
+                    raise WorkflowError("workflow_ai_retry_not_available")
+            source_revision_id = _record_id(source)
             source_language = source.get("language")
             if not isinstance(source_language, str):
                 raise WorkflowError("workflow_domain_data_invalid")

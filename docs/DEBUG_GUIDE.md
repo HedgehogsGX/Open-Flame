@@ -158,6 +158,30 @@ created → downloading → preparing_edit → awaiting_ai_review
 → awaiting_upload_confirmation → uploading → completed
 ```
 
+### 来源字幕优先复用
+
+只有冻结 profile 含 `ai.transcription_mode=prefer_source_caption` 时，Workflow 才会先寻找下载字幕；字段缺失或值为 `ai` 时直接使用原有 AI transcribe 路径。排查时按以下登记链从右向左核对，不要只看页面是否列出字幕：
+
+```text
+workflow.edit_project_id
+→ editing project.source_asset_id
+→ Download media_assets.id（ready）
+→ 唯一 original artifact + ready download job 的 original link
+→ caption artifact.parent_artifact_id
+→ captions.status=ready / origin=platform
+→ artifact path + SHA-256 + MIME + tool name/version
+```
+
+候选必须属于同一 `source_asset_id`，且首版只接受 `application/x-subrip`（SRT）或 `text/vtt`。显式源语言优先精确匹配，再按受支持的中文变体或基础语言排序；并列第一名视为歧义。源语言为 `auto` 时，目标为中文会优先英文字幕，目标为英文会优先 `zh-CN`/`zh-Hans`/`zh`，其他目标只有唯一候选时才复用。无候选、不支持格式、语言不匹配或选择歧义属于正常 AI transcribe fallback，不是下载损坏。
+
+成功导入的 transcription timeline 应为 `provider=download`、`state=review`、`code=source_caption_review_required`，model 形如 `source-caption-v1:<artifact UUID>:<完整字幕 SHA-256>`。Workflow 对外显示 `ai_source_caption_review_required`；此时不应已有 transcribe AI task 或远端 ledger 记录。`ready` 与 `origin=platform` 只证明登记来源和文件完整性，不能区分人工字幕与自动字幕，也不能证明文本正确。首次导入即使同时勾选 `auto_confirm_edit` 也必须停下；后台推进以 `authorize=false` 只观察审核结果，不能替操作者批准。生产 Workflow 页面会引导操作者核对 cue 文字、语言和绝对时间后在 Editing 页批准；服务/API 的通用显式确认也只能在首次停下后的后续调用中批准。批准只消费这一步确认，随后 translation 仍走自己的确认和审核。明确拒绝会保留该 immutable timeline，下一次推进改走 AI transcribe。
+
+以下内容问题返回 `source_caption_not_usable` 并安全回退 AI transcribe：字幕为空或超过上限、不是 UTF-8、SRT/VTT 结构无效、选定分段内没有完整 cue、cue 跨越外层或内部任一分段边界，以及明显 HTML/SSA override 标记。实现不会裁切跨界文字或静默剥除标记。确认 fallback 后应只有一个 transcribe root task，并继续执行原有 authorization、data-egress 和调用账本规则；一旦该 task 已建立，后续轮询即固定沿 AI 回退链继续，不能因候选列表随后变化而切换来源并遗留听写任务。
+
+登记或身份漂移必须失败关闭：resolver 返回的 asset/artifact/path/MIME/language/SHA/tool 身份与候选不同通常表现为 `download_caption_unavailable`；payload hash、project 与 source asset 绑定、artifact 身份或同一幂等键定义冲突会保留 `source_caption_conflict` 或更精确的 idempotency/data code。这些情况不得自动 transcribe，因为它们表示读取对象可能已换绑或被修改。先保留 workflow/project/asset/artifact ID，核对只读 API、资产 manifest 和停止应用后复制出的数据库/WAL 副本；不要替换 sidecar、改库或伪造 hash。确认下载资产本身不再可信时，重新下载并建立新 workflow。
+
+重启时，已成功导入的唯一来源 timeline 会先按 project 和完整 provenance 复用，不应仅因原 sidecar 随后不可读而创建第二条 timeline；同一 project 出现多条匹配来源 timeline 应按数据不一致处理。来源 timeline 已批准而 translation 失败时，显式 retry 只能创建 translation successor，并继续绑定同一 parent revision；若出现新的 transcribe task，记录两条 AI task lineage 和 workflow events，按回归处理。
+
 - `attention_required` 是需要核对的终止点，不等于失败可重试。
 - 自动确认只适用于该 workflow 的冻结 intent。重启、retry、legacy migration、running/canceling 和 unknown 有各自保守规则。
 - `outputs` 必须按 segment ordinal 排列；每个 output 的 targets 必须与冻结 account/platform 对应。不要只看兼容的单值 `edit_output_id`。

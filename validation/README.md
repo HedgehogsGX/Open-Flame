@@ -61,6 +61,7 @@ The concise current development state, risks and next actions live in
   [AI authorization](iteration-0.28.0-post-release-ai-authorization.md) and
   [AI invocation ledger](iteration-0.28.0-ai-invocation-ledger.md)
 - [Workflow presets](iteration-0.28.0-workflow-presets.md),
+  [source-caption reuse](iteration-0.28.0-workflow-source-caption-reuse.md),
   [relative publish schedules](iteration-0.28.0-workflow-relative-schedules.md),
   [source-title freezing](iteration-0.28.0-workflow-source-title.md),
   [multi-segment workflow](iteration-0.28.0-multisegment-workflow.md) and

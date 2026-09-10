@@ -1,6 +1,6 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-10（Australia/Adelaide）
+> 最后更新：2026-09-11（Australia/Adelaide）
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
@@ -31,7 +31,11 @@
   用户点击后才复核并复制到独立受管封面库，且不会自动选择封面、建立草稿或触发上传。
 - 编辑域支持完整视频、1–10 个非破坏分段、封面取帧/文字、审核后渲染，以及可选的
   自动听写、中文与 English 翻译和标准音色配音。`segments: []` 表示完整视频；只做封面
-  也会生成可上传的完整视频。
+  也会生成可上传的完整视频。自动流程可选择优先复用下载所得 SRT/WebVTT；候选会绑定原
+  asset、重新校验文件身份与 SHA-256 并作为待审核 transcription timeline 导入。首次导入
+  即使启用自动确认编辑也会先停下；生产 Workflow 页面会引导操作者在 Editing 页批准，
+  服务/API 也只允许在首次停下后的单独显式确认中批准。不适用或被拒绝时才回退已授权的
+  AI 听写。
 - Workflow 支持 URL → 下载 → 编辑 → 所选账号上传的持久化编排、恢复、取消和精确确认。
   保存一次完整预设后可只更换 URL；来源标题、绑定 asset 与逐账号最终标题在下载 ready
   时冻结，预设仅在账号、AI capability 和预设初始读取成功且操作者尚未修改表单时恢复。
@@ -56,7 +60,7 @@
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
+| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
 
@@ -83,6 +87,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    等变体，但当前单 thumbnail 流程不保证得到 `origin_cover`，且两平台真实封面提取尚未验收。
    视频号没有专用 yt-dlp extractor，本轮没有增加视频号网址封面能力。“来源封面（平台返回）”
    也不代表发布者原始母版、最高分辨率或无损文件。
+7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
+   不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
+   时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
 
 ## 下一入口
 
@@ -97,6 +104,8 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    明确授权、凭据留在 Git 外且精确候选固定后进行。每个结果按平台、来源类型、适配器版本、
    环境和 commit 单独记录。来源封面还需分别用 Bilibili 与 Douyin 的已授权样本对照平台可见
    封面、下载 artifact 和导入副本；视频号保持未支持，不能用通用 extractor 结果替代专用证据。
+   若样本返回字幕，还要分别记录语言、格式、人工/自动来源是否可知、导入 timeline、审核修订
+   与是否触发 AI transcription fallback；一个平台的字幕结果不能代表其他平台。
 4. 功能反馈收敛后再创建 clean release candidate，执行源码与 wheel 独立安装、完整检查、
    隐私/许可证扫描和包外 receipt；历史 receipt 不覆盖新候选。
 

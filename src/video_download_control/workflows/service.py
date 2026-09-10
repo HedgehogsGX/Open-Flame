@@ -52,6 +52,7 @@ _HEX_IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _WORKFLOW_PROGRESS_LIMIT = MAX_WORKFLOW_SEGMENTS * 2 + 12
 _CANCELLATION_REQUESTED = "workflow_cancellation_requested"
+_SOURCE_CAPTION_REVIEW_CODE = "ai_source_caption_review_required"
 _SERVICE_LOCKS_GUARD = RLock()
 _SERVICE_LOCKS: WeakValueDictionary[str, Any] = WeakValueDictionary()
 _ACTIVE_STATES = {
@@ -183,10 +184,19 @@ def _migration_profile_is_valid(value: Mapping[str, object]) -> bool:
     """Apply the exact legacy profile contract before a Schema 1/2 migration."""
 
     upload = value.get("upload") if isinstance(value, Mapping) else None
-    if not isinstance(upload, Mapping) or "title_mode" in upload:
-        # Schema 1 and 2 predate source-derived titles.  A legacy database that
-        # already contains this key is forged or corrupt and must not be
-        # reinterpreted under the newer contract.
+    ai = value.get("ai") if isinstance(value, Mapping) else None
+    if (
+        not isinstance(upload, Mapping)
+        or "title_mode" in upload
+        or (
+            isinstance(ai, Mapping)
+            and "transcription_mode" in ai
+        )
+    ):
+        # Schema 1 and 2 predate source-derived titles and source-caption
+        # selection. A legacy database that already contains either future key
+        # is forged or corrupt and must not be reinterpreted under the newer
+        # contract.
         return False
     try:
         normalize_workflow_profile(value, bound_accounts=True)
@@ -1048,7 +1058,10 @@ class WorkflowService:
                     workflow_id, "workflow_data_invalid", expected=record
                 )
                 return False
-            if record["code"] and (
+            observing_source_caption = (
+                record["code"] == _SOURCE_CAPTION_REVIEW_CODE
+            )
+            if record["code"] and not observing_source_caption and (
                 not record["auto_confirm_edit"]
                 or record["code"] not in _AUTO_AI_REVIEW_CODES
             ):
@@ -1058,7 +1071,10 @@ class WorkflowService:
                 record["edit_project_id"],
                 record["profile"]["edit_recipe"],
                 record["profile"]["ai"],
-                authorize=record["auto_confirm_edit"],
+                authorize=(
+                    record["auto_confirm_edit"]
+                    and not observing_source_caption
+                ),
                 explicit=False,
             )
             disposition = self._apply_ai_snapshot(

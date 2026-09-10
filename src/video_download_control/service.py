@@ -262,3 +262,8 @@ class BatchService:
         self, artifact_id: str
     ) -> dict[str, Any] | None:
         return self.repository.get_ready_auxiliary_artifact(artifact_id)
+
+    def list_ready_captions_for_asset(
+        self, asset_id: str
+    ) -> list[dict[str, Any]]:
+        return self.repository.list_ready_captions_for_asset(asset_id)
