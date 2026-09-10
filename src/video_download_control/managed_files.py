@@ -10,6 +10,7 @@ import hashlib
 import os
 import stat
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO, TypeAlias
 
@@ -45,6 +46,15 @@ class BoundedSha256:
     size: int
     hexdigest: str
     chunk_digests: tuple[bytes, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BoundedBytesSnapshot:
+    """Immutable bytes and their digest captured in one bounded read."""
+
+    payload: bytes
+    size: int
+    hexdigest: str
 
 
 def file_signature(info: os.stat_result) -> FileSignature:
@@ -103,15 +113,14 @@ def open_matching_binary(
     return OpenedManagedFile(handle=handle, info=info)
 
 
-def hash_open_binary(
+def _consume_open_binary(
     handle: BinaryIO,
     *,
     maximum: int,
-    chunk_size: int = DEFAULT_HASH_CHUNK_BYTES,
-    collect_chunk_digests: bool = False,
+    chunk_size: int,
+    collect_chunk_digests: bool,
+    snapshot: BytesIO | None,
 ) -> BoundedSha256:
-    """Hash a blocking file handle with one growth sentinel; never seek or close."""
-
     if maximum < 0 or chunk_size < 1:
         raise ValueError("invalid managed file read limit")
     digest = hashlib.sha256()
@@ -122,10 +131,54 @@ def hash_open_binary(
         if total > maximum:
             raise ManagedFileSizeExceeded
         digest.update(chunk)
+        if snapshot is not None:
+            snapshot.write(chunk)
         if collect_chunk_digests:
             chunk_digests.append(hashlib.sha256(chunk).digest())
     return BoundedSha256(
         size=total,
         hexdigest=digest.hexdigest(),
         chunk_digests=tuple(chunk_digests),
+    )
+
+
+def hash_open_binary(
+    handle: BinaryIO,
+    *,
+    maximum: int,
+    chunk_size: int = DEFAULT_HASH_CHUNK_BYTES,
+    collect_chunk_digests: bool = False,
+) -> BoundedSha256:
+    """Hash a blocking file handle with one growth sentinel; never seek or close."""
+
+    return _consume_open_binary(
+        handle,
+        maximum=maximum,
+        chunk_size=chunk_size,
+        collect_chunk_digests=collect_chunk_digests,
+        snapshot=None,
+    )
+
+
+def snapshot_open_binary(
+    handle: BinaryIO,
+    *,
+    maximum: int,
+    chunk_size: int = DEFAULT_HASH_CHUNK_BYTES,
+) -> BoundedBytesSnapshot:
+    """Capture immutable bytes and their hash in one pass; never seek or close."""
+
+    with BytesIO() as payload:
+        hashed = _consume_open_binary(
+            handle,
+            maximum=maximum,
+            chunk_size=chunk_size,
+            collect_chunk_digests=False,
+            snapshot=payload,
+        )
+        captured = payload.getvalue()
+    return BoundedBytesSnapshot(
+        payload=captured,
+        size=hashed.size,
+        hexdigest=hashed.hexdigest,
     )

@@ -35,6 +35,7 @@ from ..managed_files import (
     lstat_plain,
     open_matching_binary,
     require_matching_fstat,
+    snapshot_open_binary,
 )
 
 from .activity_lock import (
@@ -649,19 +650,23 @@ class UploadService:
         try:
             opened = open_matching_binary(path, expected=expected)
             with opened.handle as handle:
-                payload = handle.read(MAX_COVER_BYTES + 1)
+                try:
+                    snapshot = snapshot_open_binary(handle, maximum=MAX_COVER_BYTES)
+                except ManagedFileSizeExceeded:
+                    require_matching_fstat(handle, expected=expected)
+                    raise
                 require_matching_fstat(handle, expected=expected)
-            if len(payload) > MAX_COVER_BYTES:
-                raise UploadError("cover_size_invalid")
-            if len(payload) != before.st_size or file_signature(_plain(path)) != expected:
+            if snapshot.size != before.st_size or file_signature(_plain(path)) != expected:
                 raise UploadError("cover_changed")
         except UploadError:
             raise
+        except ManagedFileSizeExceeded:
+            raise UploadError("cover_size_invalid") from None
         except ManagedFileChanged:
             raise UploadError("cover_changed") from None
         except OSError:
             raise UploadError("cover_unavailable") from None
-        return payload, hashlib.sha256(payload).hexdigest()
+        return snapshot.payload, snapshot.hexdigest
 
     def _release_lifetime_activity(self) -> None:
         with self._activity_lease_guard:
@@ -1205,17 +1210,21 @@ class UploadService:
             expected = file_signature(before)
             opened = open_matching_binary(path, expected=expected)
             with opened.handle as handle:
-                payload = handle.read(MAX_COVER_BYTES + 1)
+                try:
+                    snapshot = snapshot_open_binary(handle, maximum=MAX_COVER_BYTES)
+                except ManagedFileSizeExceeded:
+                    require_matching_fstat(handle, expected=expected)
+                    raise
                 require_matching_fstat(handle, expected=expected)
+            payload = snapshot.payload
             try:
                 mime_type, width, height = _cover_metadata(payload, row["suffix"])
             except UploadError:
                 raise UploadError("cover_changed") from None
-            digest = hashlib.sha256(payload).hexdigest()
             after = _plain(path)
             valid = (
-                digest == row["sha256"]
-                and len(payload) == row["size"]
+                snapshot.hexdigest == row["sha256"]
+                and snapshot.size == row["size"]
                 and mime_type == row["mime_type"]
                 and width == row["width"]
                 and height == row["height"]
@@ -1226,7 +1235,7 @@ class UploadService:
                 raise UploadError("cover_changed")
         except FileNotFoundError:
             raise UploadError("cover_reimport_required") from None
-        except ManagedFileChanged:
+        except (ManagedFileChanged, ManagedFileSizeExceeded):
             raise UploadError("cover_changed") from None
         except OSError:
             raise UploadError("cover_unavailable") from None

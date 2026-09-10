@@ -21,6 +21,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
 
+from ..managed_files import (
+    ManagedFileSizeExceeded,
+    hash_open_binary,
+    snapshot_open_binary,
+)
 from ..subprocess_runner import CommandCancelled
 from .ai import (
     ProviderCapability,
@@ -183,36 +188,25 @@ def _file_snapshot(
     """Copy a bounded ordinary file into memory while hashing the same bytes."""
 
     signature = _plain_file(path, maximum, code)
-    digest = hashlib.sha256()
-    snapshot = io.BytesIO()
-    total = 0
     try:
         with path.open("rb") as handle:
             if _signature(os.fstat(handle.fileno())) != signature:
                 raise EditingError(code)
-            while chunk := handle.read(_STREAM_BYTES):
-                total += len(chunk)
-                if total > maximum:
-                    raise EditingError(code)
-                digest.update(chunk)
-                snapshot.write(chunk)
+            captured = snapshot_open_binary(
+                handle,
+                maximum=maximum,
+                chunk_size=_STREAM_BYTES,
+            )
             finished = _signature(os.fstat(handle.fileno()))
-    except EditingError:
-        snapshot.close()
-        raise
-    except (MemoryError, OSError) as exc:
-        snapshot.close()
-        raise EditingError(code) from exc
-    if total != signature.size or finished != signature:
-        snapshot.close()
-        raise EditingError(code)
-    try:
+        if captured.size != signature.size or finished != signature:
+            raise EditingError(code)
         _assert_signature(path, signature, code)
-    except BaseException:
-        snapshot.close()
+        snapshot = io.BytesIO(captured.payload)
+    except EditingError:
         raise
-    snapshot.seek(0)
-    return snapshot, signature, digest.hexdigest()
+    except (ManagedFileSizeExceeded, MemoryError, OSError) as exc:
+        raise EditingError(code) from exc
+    return snapshot, signature, captured.hexdigest
 
 
 def _verified_wave_file(path: Path, cue: TimelineCue, code: str) -> _WaveInfo:
@@ -743,26 +737,26 @@ def _window_cues(
 
 def _hash_file(path: Path, maximum: int, code: str) -> tuple[int, str]:
     signature = _plain_file(path, maximum, code)
-    digest = hashlib.sha256()
-    total = 0
     try:
         with path.open("rb") as handle:
             if _signature(os.fstat(handle.fileno())) != signature:
                 raise EditingError(code)
-            while chunk := handle.read(_STREAM_BYTES):
-                total += len(chunk)
-                if total > maximum:
-                    raise EditingError(code)
-                digest.update(chunk)
+            hashed = hash_open_binary(
+                handle,
+                maximum=maximum,
+                chunk_size=_STREAM_BYTES,
+            )
             finished = _signature(os.fstat(handle.fileno()))
     except EditingError:
         raise
+    except ManagedFileSizeExceeded as exc:
+        raise EditingError(code) from exc
     except OSError as exc:
         raise EditingError(code) from exc
-    if total != signature.size or finished != signature:
+    if hashed.size != signature.size or finished != signature:
         raise EditingError(code)
     _assert_signature(path, signature, code)
-    return total, digest.hexdigest()
+    return hashed.size, hashed.hexdigest
 
 
 def _write_exclusive(path: Path, payload: bytes) -> tuple[int, str]:
