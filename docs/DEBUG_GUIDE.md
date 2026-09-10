@@ -130,6 +130,13 @@ $canonicalAppRoot = (& .\.venv\Scripts\python.exe -I -c `
 4. workflow/AI task/plan 持久化的 authorization SHA 是否仍匹配当前 capability。
 5. `ai_invocations` 中该 owner 的调用状态。
 
+`ai_task_set_invalid` 表示 Workflow 无法从 editing project 的完整 AI 任务集合安全确定当前重试
+leaf。它会拒绝缺失起始任务或父任务、重复/无效 ID、同一父任务多个 successor、自引用、循环、
+跨项目记录，以及 parent/child 的 operation、source revision 或 request SHA 漂移。同一项目存在
+多个彼此独立且各自有效的 transcribe/translate 根任务是合法情况。保留 workflow/project/task
+ID 和固定错误码，正常停止应用后用 SQLite backup API 复制数据库与 WAL 到隔离目录再审计；
+不要删除旧任务、改 `retry_of`、重算摘要或直接确认猜测出的 leaf。
+
 语速排错时同时核对编辑计划或 workflow 卡片显示的实际值、持久化 recipe 中的 `dubbing.rate`（缺失表示兼容默认 `1.0`）以及 provider request fingerprint。authorization SHA 不随语速改变，因为它绑定 runtime/model/operation/上限；recipe/profile SHA 应在非默认语速变化时改变。若页面恢复预设后改变了区间内合法小数，或输入变化后旧的数据外发勾选仍保留，应按前端回归处理。
 
 远程调用账本语义：

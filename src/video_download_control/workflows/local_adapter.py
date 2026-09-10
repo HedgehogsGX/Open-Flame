@@ -899,6 +899,7 @@ class LocalWorkflowAdapter:
                 )
                 transcript = self._advance_ai_task(
                     transcription,
+                    expected_project_id=project_id,
                     authorization=authorization,
                     explicit=explicit,
                     confirmation_code="ai_transcription_confirmation_required",
@@ -930,6 +931,7 @@ class LocalWorkflowAdapter:
             )
             translated = self._advance_ai_task(
                 translation,
+                expected_project_id=project_id,
                 authorization=authorization,
                 explicit=explicit,
                 confirmation_code="ai_translation_confirmation_required",
@@ -1277,6 +1279,7 @@ class LocalWorkflowAdapter:
         self,
         task: Mapping[str, Any],
         *,
+        expected_project_id: str | None = None,
         authorization: list[bool],
         explicit: bool,
         confirmation_code: str,
@@ -1284,7 +1287,9 @@ class LocalWorkflowAdapter:
     ) -> Mapping[str, Any] | AiSnapshot:
         if not isinstance(task, Mapping):
             raise WorkflowError("workflow_domain_data_invalid")
-        task = self._latest_ai_task(task)
+        task = self._latest_ai_task(
+            task, expected_project_id=expected_project_id
+        )
         task_id = _record_id(task)
         state = task.get("state")
         if self._ai_task_retry_blocked(task):
@@ -1377,31 +1382,84 @@ class LocalWorkflowAdapter:
             return AiSnapshot("attention", code="ai_timeline_state_unknown")
         return timeline
 
-    def _latest_ai_task(self, task: Mapping[str, Any]) -> Mapping[str, Any]:
-        task_id = _record_id(task)
-        project_id = _hex_identifier(task.get("project_id"))
+    def _latest_ai_task(
+        self,
+        task: Mapping[str, Any],
+        *,
+        expected_project_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        error_code = "ai_task_set_invalid"
+        try:
+            task_id = _record_id(task)
+            project_id = _hex_identifier(task.get("project_id"))
+            if expected_project_id is not None:
+                expected_project_id = _hex_identifier(expected_project_id)
+        except WorkflowError:
+            raise WorkflowError(error_code) from None
+        if expected_project_id is not None and project_id != expected_project_id:
+            raise WorkflowError(error_code)
         rows = self.editing_manager.invoke("ai_tasks", project_id=project_id)
         if not isinstance(rows, list):
-            raise WorkflowError("workflow_domain_data_invalid")
-        successors: dict[str, Mapping[str, Any]] = {}
+            raise WorkflowError(error_code)
+
+        records: dict[str, Mapping[str, Any]] = {}
         for row in rows:
-            if not isinstance(row, Mapping):
-                raise WorkflowError("workflow_domain_data_invalid")
+            if not isinstance(row, Mapping) or row.get("project_id") != project_id:
+                raise WorkflowError(error_code)
+            try:
+                current_id = _record_id(row)
+            except WorkflowError:
+                raise WorkflowError(error_code) from None
+            if current_id in records:
+                raise WorkflowError(error_code)
+            records[current_id] = row
+
+        start = records.get(task_id)
+        if start is None or any(
+            start.get(field) != task.get(field)
+            for field in (
+                "project_id",
+                "operation",
+                "source_revision_id",
+                "request_sha256",
+            )
+        ):
+            raise WorkflowError(error_code)
+
+        successors: dict[str, str] = {}
+        for current_id, row in records.items():
             retry_of = row.get("retry_of")
-            if retry_of is not None:
-                retry_of = _hex_identifier(retry_of)
-                if retry_of in successors:
-                    raise WorkflowError("workflow_domain_data_invalid")
-                successors[retry_of] = row
-        current = task
-        seen: set[str] = set()
-        while task_id in successors:
-            if task_id in seen:
-                raise WorkflowError("workflow_domain_data_invalid")
-            seen.add(task_id)
-            current = successors[task_id]
-            task_id = _record_id(current)
-        return current
+            if retry_of is None:
+                continue
+            try:
+                parent_id = _hex_identifier(retry_of)
+            except WorkflowError:
+                raise WorkflowError(error_code) from None
+            if (
+                parent_id not in records
+                or parent_id == current_id
+                or parent_id in successors
+            ):
+                raise WorkflowError(error_code)
+            parent = records[parent_id]
+            if any(
+                row.get(field) != parent.get(field)
+                for field in (
+                    "operation",
+                    "source_revision_id",
+                    "request_sha256",
+                )
+            ):
+                raise WorkflowError(error_code)
+            successors[parent_id] = current_id
+
+        _validate_retry_successors(
+            tuple(records), successors, error_code=error_code
+        )
+        current_id = task_id
+        while current_id in successors:
+            current_id = successors[current_id]
+        return records[current_id]
 
     def _ai_task_retry_blocked(self, task: Mapping[str, Any]) -> bool:
         """Read the full project-level recursive block set, independent of paging."""
@@ -1494,7 +1552,9 @@ class LocalWorkflowAdapter:
                     f"wf-{workflow_id}-transcribe",
                     expected_authorization_sha256=transcription_authorization_sha256,
                 )
-                current = self._latest_ai_task(transcription)
+                current = self._latest_ai_task(
+                    transcription, expected_project_id=project_id
+                )
                 if self._ai_task_retry_blocked(current):
                     raise WorkflowError("ai_remote_retry_blocked")
                 if current.get("state") in {"review", "queued", "running", "canceling"}:
@@ -1541,7 +1601,9 @@ class LocalWorkflowAdapter:
                 source_revision_id=source_revision_id,
                 expected_authorization_sha256=translation_authorization_sha256,
             )
-            current = self._latest_ai_task(translation)
+            current = self._latest_ai_task(
+                translation, expected_project_id=project_id
+            )
             if self._ai_task_retry_blocked(current):
                 raise WorkflowError("ai_remote_retry_blocked")
             if current.get("state") in {"review", "queued", "running", "canceling"}:
