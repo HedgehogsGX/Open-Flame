@@ -53,6 +53,8 @@ from .contracts import (
     normalize_tencent_short_title,
 )
 from .identity import (
+    UPLOAD_RETRY_PAYLOAD_KEYS,
+    bind_current_upload_target,
     normalize_account_bindings,
     normalize_upload_job_batch,
     upload_retry_payload_matches,
@@ -2027,31 +2029,49 @@ class UploadService:
         with self._db() as db:
             for root_id in normalized:
                 root = self._get_job(db, root_id)
-                current = root
-                seen = {root_id}
-                while True:
-                    successors = list(
-                        db.execute(
-                            "SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid",
-                            (current["id"],),
-                        )
-                    )
-                    if not successors:
-                        break
-                    if len(successors) != 1:
-                        raise UploadError("job_retry_lineage_invalid")
-                    successor_id = _identifier(successors[0]["id"])
-                    if successor_id in seen:
-                        raise UploadError("job_retry_lineage_invalid")
-                    seen.add(successor_id)
-                    successor = self._get_job(db, successor_id)
-                    if not upload_retry_payload_matches(root, successor):
-                        raise UploadError("job_retry_lineage_invalid")
-                    current = successor
-                leaves.append(current)
+                leaves.append(self._latest_retry_job_in(db, root))
         if len({job["id"] for job in leaves}) != len(leaves):
             raise UploadError("job_retry_lineage_invalid")
         return leaves
+
+    def _latest_retry_job_in(
+        self, db: sqlite3.Connection, root: Mapping[str, object]
+    ) -> dict:
+        """Resolve one immutable retry lineage inside the caller's transaction."""
+
+        return self._retry_lineage_in(db, root)[-1]
+
+    def _retry_lineage_in(
+        self, db: sqlite3.Connection, root: Mapping[str, object]
+    ) -> list[dict]:
+        """Read a complete, unique retry lineage inside one transaction."""
+
+        root_id = _identifier(root.get("id"))
+        current = dict(root)
+        lineage = [current]
+        seen = {root_id}
+        while True:
+            successors = list(
+                db.execute(
+                    "SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid",
+                    (current["id"],),
+                )
+            )
+            if not successors:
+                return lineage
+            if len(successors) != 1:
+                raise UploadError("job_retry_lineage_invalid")
+            if current.get("state") not in {"failed", "canceled", "unknown"}:
+                raise UploadError("job_retry_lineage_invalid")
+            successor_id = _identifier(successors[0]["id"])
+            if successor_id in seen:
+                raise UploadError("job_retry_lineage_invalid")
+            seen.add(successor_id)
+            successor = self._get_job(db, successor_id)
+            if not upload_retry_payload_matches(root, successor):
+                raise UploadError("job_retry_lineage_invalid")
+            current = successor
+            lineage.append(current)
 
     def jobs_for_request(
         self,
@@ -2213,6 +2233,50 @@ class UploadService:
                 expected_targets=targets,
             )
 
+    @staticmethod
+    def _workflow_request_digest_from_jobs(
+        jobs: Sequence[Mapping[str, object]],
+    ) -> str:
+        """Rebuild a v2 request digest from its immutable root jobs."""
+
+        if not jobs:
+            raise UploadError("upload_request_invalid")
+        source_ids: set[str] = set()
+        account_ids: set[str] = set()
+        targets: list[dict[str, object]] = []
+        for job in jobs:
+            try:
+                source_ids.add(_identifier(job["source_id"]))
+                account_id = _identifier(job["account_id"])
+                target = {
+                    key: job[key]
+                    for key in UPLOAD_RETRY_PAYLOAD_KEYS
+                    if key != "source_id"
+                }
+            except (KeyError, TypeError, UploadError):
+                raise UploadError("upload_request_invalid") from None
+            if account_id in account_ids:
+                raise UploadError("upload_request_invalid")
+            account_ids.add(account_id)
+            targets.append(target)
+        if len(source_ids) != 1:
+            raise UploadError("upload_request_invalid")
+        try:
+            encoded = json.dumps(
+                {
+                    "source_id": source_ids.pop(),
+                    "targets": sorted(
+                        targets, key=lambda item: str(item["account_id"])
+                    ),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        except (KeyError, TypeError, ValueError):
+            raise UploadError("upload_request_invalid") from None
+        return hashlib.sha256(encoded).hexdigest()
+
     def _request_jobs_from_row_in(
         self,
         db: sqlite3.Connection,
@@ -2246,6 +2310,15 @@ class UploadService:
             if error.code == "job_not_found":
                 raise UploadError("upload_request_invalid") from None
             raise
+        if any(job.get("retry_of") is not None for job in jobs):
+            # A request ledger owns the immutable roots it originally created.
+            # A retry descendant deliberately has the same payload, so the
+            # digest alone cannot detect a tampered job_ids relation.
+            raise UploadError("upload_request_invalid")
+        if row["digest_version"] == 2:
+            observed_digest = self._workflow_request_digest_from_jobs(jobs)
+            if not hmac.compare_digest(row["digest"], observed_digest):
+                raise UploadError("upload_request_mismatch")
         if expected_targets is not None and expected_source_id is not None:
             if len(jobs) != len(expected_targets) or any(
                 job.get("source_id") != expected_source_id
@@ -2949,15 +3022,28 @@ class UploadService:
             raise UploadError("job_requires_new_draft")
         if not self.backend.inspect().get("ready"):
             raise UploadError("runtime_missing")
+        self._validate_job_definition_in(db, job, require_ready_account=True)
+
+    def _validate_job_definition_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+        *,
+        require_ready_account: bool,
+    ) -> None:
+        """Recheck a frozen upload definition before retry or dispatch."""
+
         account = db.execute(
             "SELECT * FROM accounts WHERE id=?",
             (job["account_id"],),
         ).fetchone()
         if account is None:
-            raise UploadError("account_not_found")
+            raise UploadError(
+                "account_not_found" if require_ready_account else "account_disconnected"
+            )
         if account["lifecycle_state"] != "active":
             raise UploadError("account_disconnected")
-        if account["auth_state"] != "ready":
+        if require_ready_account and account["auth_state"] != "ready":
             raise UploadError("account_not_ready")
         # A draft may survive an application upgrade or be restored from an
         # older database.  Re-run the current per-platform contract before
@@ -3140,6 +3226,213 @@ class UploadService:
                 stop.set()
         return jobs
 
+    def _validate_retry_job_in(
+        self, db: sqlite3.Connection, job: Mapping[str, object]
+    ) -> None:
+        self._validate_job_definition_in(db, job, require_ready_account=False)
+
+    def _insert_retry_job_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+        *,
+        now: str,
+    ) -> dict:
+        new_id = uuid4().hex
+        db.execute(
+            "INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,"
+            "mode,copyright,source_credit,created_at,updated_at,retry_of,"
+            "cover_landscape_asset_id,cover_portrait_asset_id,publish_at_unix,"
+            "publish_timezone_offset_minutes,platform_options) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                new_id,
+                job["account_id"],
+                job["source_id"],
+                job["title"],
+                job["description"],
+                json.dumps(job["tags"], ensure_ascii=False),
+                job["category_id"],
+                job["mode"],
+                job["copyright"],
+                job["source_credit"],
+                now,
+                now,
+                job["id"],
+                job["cover_landscape_asset_id"],
+                job["cover_portrait_asset_id"],
+                job["publish_at_unix"],
+                job["publish_timezone_offset_minutes"],
+                json.dumps(
+                    job["platform_options"],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            ),
+        )
+        return self._get_job(db, new_id)
+
+    @_requires_activity
+    def retry_many(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        expected_account_bindings: Sequence[Mapping[str, str]],
+        expected_request_keys: Sequence[str],
+    ) -> list[dict]:
+        """Create failed upload successors atomically while preserving other slots."""
+
+        normalized_ids, normalized_targets = normalize_upload_job_batch(
+            job_ids,
+            expected_targets,
+            maximum_jobs=32,
+        )
+        if normalized_targets is None:
+            raise UploadError("invalid_job_batch")
+        if (
+            not isinstance(expected_request_keys, Sequence)
+            or isinstance(expected_request_keys, (str, bytes))
+            or len(expected_request_keys) != len(normalized_ids)
+            or any(
+                not isinstance(key, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", key) is None
+                for key in expected_request_keys
+            )
+        ):
+            raise UploadError("invalid_job_batch")
+        normalized_request_keys = tuple(expected_request_keys)
+        if (
+            not isinstance(expected_account_bindings, Sequence)
+            or isinstance(expected_account_bindings, (str, bytes))
+            or any(
+                not isinstance(binding, Mapping)
+                for binding in expected_account_bindings
+            )
+        ):
+            raise UploadError("invalid_account_bindings")
+        normalized_bindings = [dict(binding) for binding in expected_account_bindings]
+
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            request_roots: dict[str, list[dict]] = {}
+            for request_key in dict.fromkeys(normalized_request_keys):
+                request = db.execute(
+                    "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                    (request_key,),
+                ).fetchone()
+                if request is None:
+                    raise UploadError("upload_request_mismatch")
+                if request["digest_version"] != 2:
+                    raise UploadError("upload_request_invalid")
+                request_roots[request_key] = self._request_jobs_from_row_in(
+                    db, request
+                )
+
+            roots: list[dict] = []
+            used_roots: dict[str, set[str]] = {
+                request_key: set() for request_key in request_roots
+            }
+            for request_key, target in zip(
+                normalized_request_keys, normalized_targets, strict=True
+            ):
+                matches = [
+                    root
+                    for root in request_roots[request_key]
+                    if root["source_id"] == target["source_id"]
+                    and root["account_id"] == target["account_id"]
+                    and root["platform"] == target["platform"]
+                ]
+                if len(matches) != 1 or matches[0]["id"] in used_roots[request_key]:
+                    raise UploadError("upload_request_mismatch")
+                roots.append(matches[0])
+                used_roots[request_key].add(matches[0]["id"])
+            if any(
+                used_roots[request_key]
+                != {root["id"] for root in roots_for_request}
+                for request_key, roots_for_request in request_roots.items()
+            ):
+                raise UploadError("upload_request_mismatch")
+
+            lineages = [self._retry_lineage_in(db, root) for root in roots]
+            if any(
+                supplied_id not in {job["id"] for job in lineage}
+                for supplied_id, lineage in zip(
+                    normalized_ids, lineages, strict=True
+                )
+            ):
+                raise UploadError("invalid_job_batch")
+            leaves = [lineage[-1] for lineage in lineages]
+            if len({job["id"] for job in leaves}) != len(leaves):
+                raise UploadError("job_retry_lineage_invalid")
+            for leaf, target in zip(leaves, normalized_targets, strict=True):
+                bind_current_upload_target(leaf, target)
+
+            allowed_states = {
+                "draft",
+                "queued",
+                "running",
+                "submitted",
+                "draft_saved",
+                "failed",
+                "canceled",
+            }
+            if any(job["state"] == "unknown" for job in leaves):
+                raise UploadError("verify_remote_result_first")
+            if any(job["state"] not in allowed_states for job in leaves):
+                raise UploadError("retry_not_allowed")
+            if any(
+                job["id"] != supplied_id
+                and job["state"] in {"failed", "canceled"}
+                for supplied_id, job in zip(normalized_ids, leaves, strict=True)
+            ):
+                raise UploadError("job_retry_lineage_changed")
+            if any(
+                (job["state"] == "submitted" and job["mode"] != "publish")
+                or (job["state"] == "draft_saved" and job["mode"] != "draft")
+                for job in leaves
+            ):
+                raise UploadError("job_retry_lineage_invalid")
+
+            candidates = [
+                leaf
+                for supplied_id, leaf in zip(normalized_ids, leaves, strict=True)
+                if leaf["id"] == supplied_id
+                and leaf["state"] in {"failed", "canceled"}
+            ]
+            has_existing_successor = any(
+                leaf["id"] != supplied_id
+                for supplied_id, leaf in zip(normalized_ids, leaves, strict=True)
+            )
+            if not candidates and not has_existing_successor:
+                raise UploadError("retry_not_allowed")
+
+            accounts_by_id = {
+                account_id: db.execute(
+                    "SELECT * FROM accounts WHERE id=?", (account_id,)
+                ).fetchone()
+                for account_id in {job["account_id"] for job in leaves}
+            }
+            if any(account is None for account in accounts_by_id.values()):
+                raise UploadError("account_not_found")
+            self._validate_workflow_account_bindings(
+                db,
+                accounts_by_id,
+                normalized_bindings,
+                verify_account_ids={job["account_id"] for job in candidates},
+            )
+            for job in candidates:
+                self._validate_retry_job_in(db, job)
+
+            replacements = {job["id"]: job for job in leaves}
+            now = _now()
+            for job in candidates:
+                replacements[job["id"]] = self._insert_retry_job_in(
+                    db, job, now=now
+                )
+            return [replacements[job["id"]] for job in leaves]
+
     @_requires_activity
     def retry(self, job_id: str, acknowledge_unknown: bool = False) -> dict:
         with self._db() as db:
@@ -3149,47 +3442,13 @@ class UploadService:
                 raise UploadError("retry_not_allowed")
             if job["state"] == "unknown" and acknowledge_unknown is not True:
                 raise UploadError("verify_remote_result_first")
-            # Repeated requests for the same retry return the existing successor.
-            successor = db.execute("SELECT id FROM jobs WHERE retry_of=? ORDER BY rowid LIMIT 1", (job_id,)).fetchone()
-            if successor:
-                return self._get_job(db, successor["id"])
-            validate_publish_schedule(
-                job["platform"], job["publish_at_unix"],
-                job["publish_timezone_offset_minutes"],
-                now=int(time.time()),
-            )
-            account = db.execute("SELECT lifecycle_state FROM accounts WHERE id=?",
-                                 (job["account_id"],)).fetchone()
-            if account is None or account["lifecycle_state"] != "active":
-                raise UploadError("account_disconnected")
-            source = db.execute("SELECT * FROM sources WHERE id=?", (job["source_id"],)).fetchone()
-            if source is None:
-                raise UploadError("source_not_found")
-            self._verified_source_media_path(source)
-            self._verified_job_cover_rows(
-                db,
-                job["platform"],
-                job["cover_landscape_asset_id"],
-                job["cover_portrait_asset_id"],
-            )
-            new_id, now = uuid4().hex, _now()
-            db.execute(
-                "INSERT INTO jobs(id,account_id,source_id,title,description,tags,category_id,"
-                "mode,copyright,source_credit,created_at,updated_at,retry_of,"
-                "cover_landscape_asset_id,cover_portrait_asset_id,publish_at_unix,"
-                "publish_timezone_offset_minutes,platform_options) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (new_id, job["account_id"], job["source_id"], job["title"],
-                 job["description"], json.dumps(job["tags"], ensure_ascii=False),
-                 job["category_id"], job["mode"], job["copyright"], job["source_credit"],
-                 now, now, job_id, job["cover_landscape_asset_id"],
-                 job["cover_portrait_asset_id"], job["publish_at_unix"],
-                 job["publish_timezone_offset_minutes"], json.dumps(
-                     job["platform_options"], ensure_ascii=False,
-                     separators=(",", ":"), sort_keys=True,
-                 )),
-            )
-            return self._get_job(db, new_id)
+            # Repeated requests for the same retry return the existing unique
+            # leaf, including a response-loss replay after later retries.
+            leaf = self._latest_retry_job_in(db, job)
+            if leaf["id"] != job_id:
+                return leaf
+            self._validate_retry_job_in(db, job)
+            return self._insert_retry_job_in(db, job, now=_now())
 
     def _claim(self) -> tuple[str, dict] | None:
         with self._active_guard, self._db() as db:

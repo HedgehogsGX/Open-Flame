@@ -105,6 +105,12 @@ def _edit_confirmation_code(code: str) -> str:
 
 
 _AUTO_UPLOAD_REVIEW_CODES = frozenset({"", "upload_restart_confirmation_required"})
+_UPLOAD_RETRY_REVIEW_CODES = frozenset(
+    {
+        "upload_retry_confirmation_required",
+        "upload_retry_mixed_confirmation_required",
+    }
+)
 _SOURCE_METADATA_RETRY_CODE = "workflow_source_metadata_unavailable"
 _PREFLIGHT_RETRY_CODES = frozenset(
     {
@@ -777,13 +783,17 @@ class WorkflowService:
             return self.advance(workflow_id)
 
     def retry(self, workflow_id: str, *, expected_revision: int) -> dict[str, Any]:
-        """Create an explicitly reviewable successor for failed AI or rendering."""
+        """Create explicitly reviewable successors for a failed workflow step."""
 
         with self._lock:
             record = self._expected(workflow_id, expected_revision)
-            if record["state"] != "attention_required" or not record["edit_project_id"]:
+            if record["state"] != "attention_required":
                 raise WorkflowError("workflow_retry_not_available")
             if record["code"] in _AI_LEDGER_REVIEW_CODES:
+                raise WorkflowError("workflow_retry_not_available")
+            if record["upload_job_ids"]:
+                return self._retry_upload(record)
+            if not record["edit_project_id"]:
                 raise WorkflowError("workflow_retry_not_available")
             if record["edit_plan_id"] is not None:
                 if record["edit_output_ids"] or record["upload_job_ids"]:
@@ -857,6 +867,105 @@ class WorkflowService:
                 expected=record,
             )
             return self.get(workflow_id)
+
+    def _retry_upload(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Retry a complete failed upload fan-out behind a fresh confirmation."""
+
+        workflow_id = record["id"]
+        if record["code"] != "upload_job_failed":
+            raise WorkflowError("workflow_retry_not_available")
+        outputs = record["outputs"]
+        account_ids = record["profile"]["upload"]["account_ids"]
+        expected_job_count = len(outputs) * len(account_ids)
+        if (
+            not outputs
+            or not account_ids
+            or any(output["upload_source_id"] is None for output in outputs)
+            or any(len(output["targets"]) != len(account_ids) for output in outputs)
+            or len(record["upload_job_ids"]) != expected_job_count
+        ):
+            return self._attention(
+                workflow_id,
+                "workflow_domain_data_invalid",
+                expected=record,
+            )
+
+        snapshot, classification, _job_ids_changed = self._observe_upload(record)
+        if classification.disposition == "ready":
+            self._record_upload_outcome(record, snapshot)
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_active":
+            self._transition(
+                workflow_id, "uploading", classification.code, expected=record
+            )
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_confirmation":
+            if classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
+                return self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
+            self._transition(
+                workflow_id,
+                "awaiting_upload_confirmation",
+                classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        if classification.disposition == "invalid":
+            return self._attention(
+                workflow_id,
+                "workflow_domain_data_invalid",
+                expected=record,
+            )
+        if classification.code != "upload_job_failed":
+            return self._attention(
+                workflow_id, classification.code, expected=record
+            )
+
+        retry_snapshot = self.adapter.retry_uploads(
+            record["upload_job_ids"],
+            expected_targets=self._upload_targets(record),
+            account_bindings=record["profile"]["upload"]["account_bindings"],
+            expected_request_keys=self._upload_request_keys(record),
+        )
+        self._sync_upload_job_ids(record, retry_snapshot)
+        retry_classification = classify_upload_snapshot(retry_snapshot)
+        if retry_classification.disposition == "ready":
+            self._record_upload_outcome(record, retry_snapshot)
+            return self.get(workflow_id)
+        if retry_classification.disposition == "waiting_active":
+            self._transition(
+                workflow_id,
+                "uploading",
+                retry_classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        if retry_classification.disposition == "waiting_confirmation":
+            if retry_classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
+                return self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
+            self._transition(
+                workflow_id,
+                "awaiting_upload_confirmation",
+                retry_classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        return self._attention(
+            workflow_id,
+            (
+                retry_classification.code
+                if retry_classification.disposition == "attention"
+                else "workflow_domain_data_invalid"
+            ),
+            expected=record,
+        )
 
     def require_attention(
         self,
@@ -1602,6 +1711,23 @@ class WorkflowService:
             }
             for output in record["outputs"]
             for target in output["targets"]
+        ]
+
+    @staticmethod
+    def _upload_request_keys(record: Mapping[str, Any]) -> list[str]:
+        """Return each upload slot's immutable per-segment request key."""
+
+        return [
+            (
+                f"wf-{record['id']}-upload-jobs"
+                if output["segment_ordinal"] == 1
+                else (
+                    f"wf-{record['id']}-upload-jobs-"
+                    f"{output['segment_ordinal']:03d}"
+                )
+            )
+            for output in record["outputs"]
+            for _target in output["targets"]
         ]
 
     def _inspect_upload(self, record: Mapping[str, Any]) -> UploadSnapshot:

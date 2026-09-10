@@ -3025,10 +3025,24 @@ class LocalWorkflowAdapter:
             # A recovered queued retry also carries the generic restart code.
             # Lineage wins so automatic restart continuation remains limited to
             # the workflow's original, pre-authorized upload jobs.
-            if any(job.get("retry_of") is not None for job in jobs):
+            retry_drafts = [
+                job
+                for job in jobs
+                if job.get("state") == "draft" and job.get("retry_of") is not None
+            ]
+            original_drafts = [
+                job
+                for job in jobs
+                if job.get("state") == "draft" and job.get("retry_of") is None
+            ]
+            if retry_drafts:
                 return UploadSnapshot(
                     "waiting",
-                    code="upload_retry_confirmation_required",
+                    code=(
+                        "upload_retry_mixed_confirmation_required"
+                        if original_drafts
+                        else "upload_retry_confirmation_required"
+                    ),
                     job_ids=current_ids,
                     needs_confirmation=True,
                 )
@@ -3082,6 +3096,82 @@ class LocalWorkflowAdapter:
             or [row.get("id") for row in confirmed] != list(normalized)
         ):
             raise WorkflowError("workflow_domain_data_invalid")
+
+    def retry_uploads(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        account_bindings: Sequence[Mapping[str, str]],
+        expected_request_keys: Sequence[str],
+    ) -> UploadSnapshot:
+        """Atomically replace only failed upload leaves with reviewable drafts."""
+
+        try:
+            normalized_ids, normalized_targets = normalize_upload_job_batch(
+                job_ids,
+                expected_targets,
+                maximum_jobs=MAX_WORKFLOW_SEGMENTS * MAX_WORKFLOW_ACCOUNTS,
+            )
+        except UploadError:
+            return UploadSnapshot("attention", code="upload_job_set_invalid")
+        if normalized_targets is None:
+            return UploadSnapshot("attention", code="upload_job_set_invalid")
+        if (
+            not isinstance(expected_request_keys, Sequence)
+            or isinstance(expected_request_keys, (str, bytes))
+            or len(expected_request_keys) != len(normalized_ids)
+            or any(not isinstance(key, str) for key in expected_request_keys)
+        ):
+            return UploadSnapshot("attention", code="upload_job_set_invalid")
+        if (
+            not isinstance(account_bindings, Sequence)
+            or isinstance(account_bindings, (str, bytes))
+            or any(not isinstance(binding, Mapping) for binding in account_bindings)
+        ):
+            return UploadSnapshot("attention", code="upload_job_set_invalid")
+        try:
+            retried = self.upload_manager.get().retry_many(
+                normalized_ids,
+                expected_targets=normalized_targets,
+                expected_account_bindings=[dict(item) for item in account_bindings],
+                expected_request_keys=list(expected_request_keys),
+            )
+        except UploadError as error:
+            if error.code in {"job_retry_lineage_changed", "retry_not_allowed"}:
+                return self.inspect_upload(
+                    normalized_ids,
+                    expected_targets=normalized_targets,
+                )
+            if error.code == "verify_remote_result_first":
+                return UploadSnapshot("attention", code="upload_result_unknown")
+            if error.code == "account_session_changed":
+                return UploadSnapshot("attention", code="account_session_changed")
+            if error.code in {"upload_request_invalid", "upload_request_mismatch"}:
+                return UploadSnapshot("attention", code=error.code)
+            if error.code in {"job_retry_lineage_invalid", "invalid_job_batch"}:
+                return UploadSnapshot("attention", code="upload_job_set_invalid")
+            _domain_failure(error, "upload_failed")
+        if not isinstance(retried, list) or len(retried) != len(normalized_ids):
+            raise WorkflowError("workflow_domain_data_invalid")
+        replacement_ids: list[str] = []
+        rebound_targets: list[dict[str, str]] = []
+        for row, target in zip(retried, normalized_targets, strict=True):
+            if not isinstance(row, Mapping):
+                raise WorkflowError("workflow_domain_data_invalid")
+            replacement_id = _record_id(row)
+            try:
+                bound = bind_current_upload_target(row, target)
+            except UploadError:
+                raise WorkflowError("workflow_domain_data_invalid") from None
+            if bound["job_id"] != replacement_id:
+                raise WorkflowError("workflow_domain_data_invalid")
+            replacement_ids.append(replacement_id)
+            rebound_targets.append(bound)
+        return self.inspect_upload(
+            replacement_ids,
+            expected_targets=rebound_targets,
+        )
 
     def cancel_uploads(
         self,

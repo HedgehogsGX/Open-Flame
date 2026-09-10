@@ -58,6 +58,13 @@
   视频号短标题/内容标签、草稿模式和平台允许范围内的定时发布。最多选择 3 个账号；
   1–10 个输出最多形成 30 个上传 slot；重试后继必须保持账号、来源、平台及完整投稿参数
   不变，标题、标签、封面、模式、发布时间或平台选项漂移都会失败关闭。
+- 完整 Workflow fan-out 出现 `upload_job_failed` 时可在流程页建立批量重试。Upload 域在单一
+  `BEGIN IMMEDIATE` 事务中先按稳定 request key/digest、request-owned root、完整 retry lineage、账号 session、媒体、
+  schedule 与当前平台合同核对全部 slot，再只为 failed/canceled leaf 创建新草稿；成功、平台草稿
+  与 active slot 原位保留，任一 `unknown` 整批阻断。新草稿始终要求再次明确确认；同批另有原
+  draft 时使用独立 mixed review code，避免把其确认原因伪装成重试。Workflow 先观察并 checkpoint
+  当前 leaf，因此 Upload 已提交而 Workflow 尚未写回的窗口不会重复建后继。该切片没有新增表、
+  Schema、服务、线程、队列、runtime、依赖或框架。
 - 本地 HTTP 写操作使用域独立 CSRF 与严格 loopback Host/Origin/Fetch-Site 防护；受管媒体
   使用同一文件身份、匹配打开和有界散列原语，同时保留 Editing/Upload 各自错误与事务边界。
 - 架构精简 S1–S8 已按小提交完成：HTTP guard、公开 profile/metadata/identity 契约、AI/
@@ -75,7 +82,7 @@
 | 文件与 HTTP 边界 | [受管文件读取](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
+| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
 

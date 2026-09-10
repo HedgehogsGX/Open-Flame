@@ -216,6 +216,17 @@ workflow.edit_project_id
 - cancellation：draft/queued 可安全取消；running 只发取消请求。若 backend 已调用且结果不能确认，最终必须是 `unknown`。
 - `submitted` / `draft_saved`：到平台后台按唯一测试编号核对。部分账号成功、部分取消/失败时不能把整个 workflow 写成 canceled。
 
+`upload_job_failed` 的 Workflow 重试只适用于所有分段都已完成上传准备的完整 fan-out。点击“建立失败投稿重试”后，先到 `/uploads` 核对当前每个 slot；系统只为 failed/canceled leaf 建立新 draft，submitted、draft_saved、queued、running 与原有 draft 不会被复制。新 draft 即使来自预授权 workflow 也必须再次明确确认。
+
+- `upload_retry_confirmation_required`：本批只有 retry draft 等待确认。
+- `upload_retry_mixed_confirmation_required`：除了新 retry draft，同批还有原任务 draft；最终确认会把两类 draft 一起排队，必须先逐项核对原因。
+- `upload_result_unknown` / `verify_remote_result_first`：停止重试，到平台后台按账号、标题、时间和测试编号核对。Workflow 不允许 acknowledge 后直接重发。
+- `upload_request_mismatch`：稳定 request 摘要与 root job 的标题、标签、封面、模式、发布时间或平台参数不一致；不要改数据库，保留副本并重建 workflow。
+- `upload_request_invalid` / `upload_job_set_invalid` / `job_retry_lineage_invalid`：request 或 retry lineage 不完整、分叉、循环或身份异常；保留 Upload/Workflow 数据库、WAL 与日志，停止确认和重试。
+- `account_session_changed`、source/cover 校验失败或发布时间已过：修复账号或素材后重建 workflow；冻结投稿参数不会在 retry 中被静默替换。
+
+如果 Upload 已建立 successor，但 Workflow 仍保存父 job ID，先刷新或点一次“立即对账/建立失败投稿重试”。正常恢复会沿唯一 lineage 写回当前 leaf 并停在确认门，不会再建一代；不要手工改 `upload_job_ids` 或 `retry_of`。完整本地验证见[Workflow 投稿重试记录](../validation/iteration-0.28.0-workflow-upload-retry.md)。
+
 不确定结果处理顺序：停止自动重试 → 记录本地 job/code/time → 到平台后台搜索测试编号 → 记录 `received/not received/unknown` → 仅在确定未收到且产品允许时创建显式 retry。
 
 ## 9. Web/UI Debug

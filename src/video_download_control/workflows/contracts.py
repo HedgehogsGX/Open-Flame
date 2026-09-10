@@ -265,6 +265,15 @@ class WorkflowDomainAdapter(Protocol):
         account_bindings: Sequence[Mapping[str, str]],
     ) -> None: ...
 
+    def retry_uploads(
+        self,
+        job_ids: Sequence[str],
+        *,
+        expected_targets: Sequence[Mapping[str, str]],
+        account_bindings: Sequence[Mapping[str, str]],
+        expected_request_keys: Sequence[str],
+    ) -> UploadSnapshot: ...
+
     def cancel_uploads(
         self,
         job_ids: Sequence[str],
