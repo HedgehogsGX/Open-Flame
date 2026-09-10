@@ -483,6 +483,7 @@ class EditingManager:
                 output_dir = service.output_dir_for_plan(plan_id, token)
                 if recipe.translation.enabled or recipe.dubbing.enabled:
                     speech_provider = None
+                    speech_checkpoint_binding = None
                     if recipe.dubbing.enabled:
                         speech_provider = self._ai_executor.speech_provider(
                             recipe.dubbing.provider,
@@ -491,6 +492,10 @@ class EditingManager:
                             service=service,
                             render_plan_id=plan_id,
                             owner_claim_token=token,
+                        )
+                        speech_checkpoint_binding = service.speech_checkpoint_binding(
+                            plan_id,
+                            token,
                         )
                     result = AiRenderProcessor(service.processor).render(
                         source,
@@ -501,6 +506,7 @@ class EditingManager:
                         cancel_event=cancel_event,
                         expected_source_size=source_size,
                         expected_source_sha256=source_sha256,
+                        speech_checkpoint_binding=speech_checkpoint_binding,
                     )
                 else:
                     result = render_ordinary_plan(

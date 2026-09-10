@@ -181,6 +181,23 @@ def _request_fingerprint(request: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _speech_payload(
+    text: str, output: Path, options: SpeechOptions
+) -> dict[str, object]:
+    """Build the one synthesis payload used for preflight and execution."""
+
+    return {
+        "text": text,
+        "output_path": str(Path(output).absolute()),
+        "options": {
+            "voice_id": options.voice_id,
+            "language": options.language,
+            "rate": options.rate,
+            "style": options.style,
+        },
+    }
+
+
 def operation_data_egress(
     provider: RuntimeProvider, operation: str
 ) -> tuple[str, ...]:
@@ -1063,6 +1080,28 @@ class RuntimeSpeechProvider:
                 in {value.casefold() for value in voice.languages}
             )
 
+    def request_fingerprint(self, text: str, options: SpeechOptions) -> str:
+        """Return the same stable fingerprint used by the remote ledger."""
+
+        try:
+            request = validate_request(
+                {
+                    "schema": PROTOCOL_SCHEMA,
+                    "request_id": "0" * 32,
+                    "operation": "synthesize",
+                    "provider_id": self.provider_id,
+                    "model_id": self.model_id,
+                    "payload": _speech_payload(
+                        text,
+                        self.bridge.work_root / "fingerprint.wav",
+                        options,
+                    ),
+                }
+            )
+        except AiProtocolError as exc:
+            raise AiBridgeError(exc.code) from exc
+        return _request_fingerprint(request)
+
     def synthesize(
         self,
         text: str,
@@ -1136,16 +1175,7 @@ class RuntimeSpeechProvider:
             operation="synthesize",
             provider_id=self.provider_id,
             model_id=self.model_id,
-            payload={
-                "text": text,
-                "output_path": str(Path(output).absolute()),
-                "options": {
-                    "voice_id": options.voice_id,
-                    "language": options.language,
-                    "rate": options.rate,
-                    "style": options.style,
-                },
-            },
+            payload=_speech_payload(text, output, options),
             progress=progress,
             cancelled=cancelled,
             audio_destination=Path(output),

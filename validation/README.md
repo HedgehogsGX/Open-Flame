@@ -24,6 +24,9 @@ results belong outside Git or under ignored `validation/local/`.
   dedicated WeChat Channels extractor.
 - Workflow now has an explicit source-cover preference with a generated-cover
   fallback; see the scoped [validation record](iteration-0.28.0-workflow-source-cover-preference.md).
+- Explicit dubbing render retries can reuse individually verified cue WAV
+  checkpoints from the same immutable retry lineage; see the scoped
+  [validation record](iteration-0.28.0-speech-checkpoint-retry.md).
 - Hosted CI now reaches the full Windows/Linux and CPython 3.12/3.13 pytest
   stage, but the matrix remains red because frozen historical tests conflict
   with current HTTP security, Schema and version contracts. See the CI record;
@@ -61,7 +64,8 @@ The concise current development state, risks and next actions live in
 
 - [AI Workflow](iteration-0.28.0-ai-workflow-evidence.md),
   [AI authorization](iteration-0.28.0-post-release-ai-authorization.md) and
-  [AI invocation ledger](iteration-0.28.0-ai-invocation-ledger.md)
+  [AI invocation ledger](iteration-0.28.0-ai-invocation-ledger.md), plus
+  [per-cue dubbing retry checkpoints](iteration-0.28.0-speech-checkpoint-retry.md)
 - [Workflow presets](iteration-0.28.0-workflow-presets.md),
   [source-caption reuse](iteration-0.28.0-workflow-source-caption-reuse.md),
   [source-cover preference](iteration-0.28.0-workflow-source-cover-preference.md),

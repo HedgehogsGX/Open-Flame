@@ -35,6 +35,8 @@ from .contracts import (
     recipe_from_mapping,
 )
 from .ai import TranslationRevision
+from .ai_authorization import AiOperationAuthorization
+from .ai_render import MAX_CUE_WAV_BYTES, SpeechCheckpointBinding
 from .ai_ledger import AiInvocationLedger, AiInvocationLedgerError
 from .ai_pipeline import (
     AiPipelineError,
@@ -70,6 +72,8 @@ _SOURCE_CAPTION_KINDS = {
     "text/vtt": "vtt",
 }
 _SOURCE_CAPTION_MARKUP = re.compile(r"<[^>\n]{1,512}>|\{\\[^}\n]{1,512}\}")
+_SPEECH_CHECKPOINT_OPERATION = "speech_checkpoint_v1"
+_SPEECH_CHECKPOINT_RESULT = re.compile(r"^([0-9a-f]{32}):([0-9a-f]{64})$")
 _EMPTY_RECIPE = EditRecipe().to_dict()
 _AI_CANCELLATION_EVIDENCE_CODES = frozenset({
     "ai_remote_result_unknown",
@@ -2772,6 +2776,412 @@ class EditingService:
             raise EditingError("plan_not_found")
         return self._verified_source_row(row), row["size"], row["sha256"]
 
+    @staticmethod
+    def _speech_checkpoint_request_id(plan_id: str, ordinal: int) -> str:
+        return f"__speech_checkpoint_v1__:{plan_id}:{ordinal:06d}"
+
+    def _speech_checkpoint_lineage(
+        self, db: sqlite3.Connection, plan_id: str
+    ) -> tuple[str, tuple[str, ...], sqlite3.Row]:
+        """Return current-to-root plans after checking retry identity."""
+
+        current = db.execute(
+            "SELECT * FROM render_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+        if current is None:
+            raise EditingError("plan_not_found")
+        expected_plan = tuple(
+            current[key]
+            for key in (
+                "project_id",
+                "draft_version",
+                "recipe",
+                "recipe_sha256",
+            )
+        )
+        expected_binding = db.execute(
+            "SELECT revision_id,cues_sha256,parent_id,parent_cues_sha256,"
+            "source_language,target_language FROM plan_timeline_bindings "
+            "WHERE plan_id=?",
+            (plan_id,),
+        ).fetchone()
+        if expected_binding is None:
+            raise EditingError("ai_timeline_binding_required")
+        expected_binding_value = tuple(expected_binding)
+        lineage: list[str] = []
+        seen: set[str] = set()
+        row = current
+        child_id: str | None = None
+        while True:
+            row_id = _identifier(row["id"])
+            if row_id in seen or len(lineage) >= 1_000:
+                raise EditingError("editing_data_invalid")
+            seen.add(row_id)
+            lineage.append(row_id)
+            if tuple(
+                row[key]
+                for key in (
+                    "project_id",
+                    "draft_version",
+                    "recipe",
+                    "recipe_sha256",
+                )
+            ) != expected_plan:
+                raise EditingError("editing_data_invalid")
+            binding = db.execute(
+                "SELECT revision_id,cues_sha256,parent_id,parent_cues_sha256,"
+                "source_language,target_language FROM plan_timeline_bindings "
+                "WHERE plan_id=?",
+                (row_id,),
+            ).fetchone()
+            if binding is None or tuple(binding) != expected_binding_value:
+                raise EditingError("editing_data_invalid")
+            children = db.execute(
+                "SELECT id FROM render_plans WHERE retry_of=? ORDER BY id",
+                (row_id,),
+            ).fetchall()
+            if child_id is None:
+                if children:
+                    raise EditingError("editing_data_invalid")
+            elif (
+                row["state"] not in {"failed", "canceled"}
+                or len(children) != 1
+                or children[0]["id"] != child_id
+            ):
+                raise EditingError("editing_data_invalid")
+            parent_id = row["retry_of"]
+            if parent_id is None:
+                return row_id, tuple(lineage), current
+            parent_id = _identifier(parent_id)
+            child_id = row_id
+            row = db.execute(
+                "SELECT * FROM render_plans WHERE id=?", (parent_id,)
+            ).fetchone()
+            if row is None:
+                raise EditingError("editing_data_invalid")
+
+    def _speech_checkpoint_context(
+        self,
+        db: sqlite3.Connection,
+        plan_id: str,
+        claim_token: str,
+    ) -> tuple[str, tuple[str, ...], AiOperationAuthorization]:
+        root_id, lineage, current = self._speech_checkpoint_lineage(db, plan_id)
+        if (
+            current["state"] not in {"running", "canceling"}
+            or not hmac.compare_digest(
+                str(current["claim_token"] or ""), claim_token
+            )
+        ):
+            raise EditingError("stale_render_claim")
+        recipe = self._recipe_from_row(current)
+        authorization = recipe.dubbing.authorization
+        if not recipe.dubbing.enabled or authorization is None:
+            raise EditingError("ai_authorization_binding_required")
+        return root_id, lineage, authorization
+
+    @staticmethod
+    def _speech_checkpoint_values(
+        ordinal: int,
+        request_key: str,
+        invocation_fingerprint: str,
+        authorization_sha256: str,
+        execution: str,
+    ) -> tuple[int, str, str, str, str]:
+        if (
+            isinstance(ordinal, bool)
+            or not isinstance(ordinal, int)
+            or not 0 <= ordinal <= 999_999
+            or not isinstance(request_key, str)
+            or _SHA256.fullmatch(request_key) is None
+            or not isinstance(invocation_fingerprint, str)
+            or _SHA256.fullmatch(invocation_fingerprint) is None
+            or not isinstance(authorization_sha256, str)
+            or _SHA256.fullmatch(authorization_sha256) is None
+            or execution not in {"local", "remote"}
+        ):
+            raise EditingError("ai_speech_checkpoint_invalid")
+        return (
+            ordinal,
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        )
+
+    @staticmethod
+    def _speech_checkpoint_manifest_digest(
+        request_key: str,
+        invocation_fingerprint: str,
+        authorization_sha256: str,
+        execution: str,
+    ) -> str:
+        payload = "\x00".join(
+            (
+                _SPEECH_CHECKPOINT_OPERATION,
+                request_key,
+                invocation_fingerprint,
+                authorization_sha256,
+                execution,
+            )
+        ).encode("ascii")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _assert_speech_invocation_responded(
+        db: sqlite3.Connection,
+        *,
+        plan_id: str,
+        ordinal: int,
+        invocation_fingerprint: str,
+        authorization_sha256: str,
+    ) -> None:
+        rows = db.execute(
+            "SELECT id FROM ai_invocations WHERE render_plan_id=? "
+            "AND operation='synthesize' AND ordinal=? AND request_units=1 "
+            "AND request_fingerprint=? AND authorization_sha256=? "
+            "AND state='responded' AND legacy=0",
+            (
+                plan_id,
+                ordinal,
+                invocation_fingerprint,
+                authorization_sha256,
+            ),
+        ).fetchall()
+        if len(rows) != 1:
+            raise EditingError("ai_speech_checkpoint_invalid")
+
+    def _lookup_speech_checkpoint(
+        self,
+        plan_id: str,
+        claim_token: str,
+        ordinal: int,
+        request_key: str,
+        invocation_fingerprint: str,
+        authorization_sha256: str,
+        execution: str,
+    ) -> tuple[str, ...]:
+        values = self._speech_checkpoint_values(
+            ordinal,
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        )
+        (
+            ordinal,
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        ) = values
+        manifest_digest = self._speech_checkpoint_manifest_digest(
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        )
+        with self._db() as db:
+            _root_id, lineage, authorization = self._speech_checkpoint_context(
+                db, plan_id, claim_token
+            )
+            if (
+                authorization.sha256 != authorization_sha256
+                or authorization.execution != execution
+            ):
+                raise EditingError("ai_speech_checkpoint_invalid")
+            digests: list[str] = []
+            for producer_id in lineage:
+                request_id = self._speech_checkpoint_request_id(
+                    producer_id, ordinal
+                )
+                row = db.execute(
+                    "SELECT operation,digest,result_id FROM requests WHERE id=?",
+                    (request_id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                result = _SPEECH_CHECKPOINT_RESULT.fullmatch(
+                    str(row["result_id"] or "")
+                )
+                if (
+                    row["operation"] != _SPEECH_CHECKPOINT_OPERATION
+                    or result is None
+                    or result.group(1) != producer_id
+                ):
+                    raise EditingError("ai_speech_checkpoint_invalid")
+                if row["digest"] != manifest_digest:
+                    continue
+                if execution == "remote":
+                    self._assert_speech_invocation_responded(
+                        db,
+                        plan_id=producer_id,
+                        ordinal=ordinal,
+                        invocation_fingerprint=invocation_fingerprint,
+                        authorization_sha256=authorization_sha256,
+                    )
+                digest = result.group(2)
+                if digest not in digests:
+                    digests.append(digest)
+            return tuple(digests)
+
+    def _record_speech_checkpoint(
+        self,
+        plan_id: str,
+        claim_token: str,
+        ordinal: int,
+        request_key: str,
+        invocation_fingerprint: str,
+        authorization_sha256: str,
+        execution: str,
+        audio_sha256: str,
+    ) -> None:
+        values = self._speech_checkpoint_values(
+            ordinal,
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        )
+        (
+            ordinal,
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        ) = values
+        manifest_digest = self._speech_checkpoint_manifest_digest(
+            request_key,
+            invocation_fingerprint,
+            authorization_sha256,
+            execution,
+        )
+        if (
+            not isinstance(audio_sha256, str)
+            or _SHA256.fullmatch(audio_sha256) is None
+        ):
+            raise EditingError("ai_speech_checkpoint_invalid")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            root_id, _lineage, authorization = self._speech_checkpoint_context(
+                db, plan_id, claim_token
+            )
+            if (
+                authorization.sha256 != authorization_sha256
+                or authorization.execution != execution
+            ):
+                raise EditingError("ai_speech_checkpoint_invalid")
+            if execution == "remote":
+                self._assert_speech_invocation_responded(
+                    db,
+                    plan_id=plan_id,
+                    ordinal=ordinal,
+                    invocation_fingerprint=invocation_fingerprint,
+                    authorization_sha256=authorization_sha256,
+                )
+            checkpoint_path = (
+                self.staging_root
+                / root_id
+                / "speech-checkpoints"
+                / f"cue-{ordinal:06d}-{request_key}-{audio_sha256}.wav"
+            )
+            try:
+                size, digest = _hash_plain_file(
+                    checkpoint_path, maximum=MAX_CUE_WAV_BYTES
+                )
+            except EditingError as exc:
+                raise EditingError("ai_speech_checkpoint_invalid") from exc
+            if size <= 0 or digest != audio_sha256:
+                raise EditingError("ai_speech_checkpoint_invalid")
+            request_id = self._speech_checkpoint_request_id(plan_id, ordinal)
+            result_id = f"{plan_id}:{audio_sha256}"
+            existing = db.execute(
+                "SELECT operation,digest,result_id FROM requests WHERE id=?",
+                (request_id,),
+            ).fetchone()
+            if existing is None:
+                self._insert_request(
+                    db,
+                    request_id,
+                    _SPEECH_CHECKPOINT_OPERATION,
+                    manifest_digest,
+                    result_id,
+                    _now(),
+                )
+            elif tuple(existing) != (
+                _SPEECH_CHECKPOINT_OPERATION,
+                manifest_digest,
+                result_id,
+            ):
+                raise EditingError("ai_speech_checkpoint_conflict")
+
+    def speech_checkpoint_binding(
+        self, plan_id: str, claim_token: str
+    ) -> SpeechCheckpointBinding:
+        """Create a fenced cache binding for one running dubbing plan."""
+
+        plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
+        with self._db() as db:
+            root_id, _lineage, _authorization = self._speech_checkpoint_context(
+                db, plan_id, claim_token
+            )
+        root = self.staging_root / root_id
+        directory = root / "speech-checkpoints"
+        try:
+            _plain(self.staging_root, directory=True)
+            if root.exists() or root.is_symlink():
+                _plain(root, directory=True)
+            else:
+                root.mkdir()
+                _plain(root, directory=True)
+            if directory.exists() or directory.is_symlink():
+                _plain(directory, directory=True)
+            else:
+                directory.mkdir()
+                _plain(directory, directory=True)
+        except (OSError, EditingError) as exc:
+            raise EditingError("editing_storage_unavailable") from exc
+        return SpeechCheckpointBinding(
+            directory=directory,
+            lookup=lambda ordinal, key, fingerprint, authorization, execution: (
+                self._lookup_speech_checkpoint(
+                    plan_id,
+                    claim_token,
+                    ordinal,
+                    key,
+                    fingerprint,
+                    authorization,
+                    execution,
+                )
+            ),
+            record=(
+                lambda ordinal, key, fingerprint, authorization, execution, digest: (
+                    self._record_speech_checkpoint(
+                        plan_id,
+                        claim_token,
+                        ordinal,
+                        key,
+                        fingerprint,
+                        authorization,
+                        execution,
+                        digest,
+                    )
+                )
+            ),
+        )
+
+    def _discard_speech_checkpoints(self, plan_id: str) -> None:
+        try:
+            with self._db() as db:
+                root_id, _lineage, _current = self._speech_checkpoint_lineage(
+                    db, _identifier(plan_id)
+                )
+        except EditingError:
+            return
+        self._remove_output_dir(
+            self.staging_root / root_id / "speech-checkpoints"
+        )
+
     def output_dir_for_plan(self, plan_id: str, claim_token: str) -> Path:
         plan_id, claim_token = _identifier(plan_id), _identifier(claim_token)
         with self._db() as db:
@@ -2899,6 +3309,7 @@ class EditingService:
                 self._discard_unregistered_file(row["path"])
             raise
         self._remove_output_dir(output_dir)
+        self._discard_speech_checkpoints(plan_id)
         return completed
 
     def fail_plan(
@@ -3137,6 +3548,13 @@ class EditingService:
                 and _ID.fullmatch(row["id"])
                 and _ID.fullmatch(row["claim_token"])
             }
+            ready_plans = tuple(
+                row["id"]
+                for row in db.execute(
+                    "SELECT id FROM render_plans WHERE state='ready' ORDER BY id"
+                )
+                if isinstance(row["id"], str) and _ID.fullmatch(row["id"])
+            )
         for root, registered, suffixes in (
             (self.source_root, registered_sources, _VIDEO_SUFFIXES),
             (self.asset_root, registered_assets, _ASSET_SUFFIXES),
@@ -3194,6 +3612,8 @@ class EditingService:
                 except EditingError:
                     continue
                 self._remove_output_dir(claim_directory)
+        for plan_id in ready_plans:
+            self._discard_speech_checkpoints(plan_id)
 
     def _verified_source_row(self, row: sqlite3.Row) -> Path:
         _identifier(row["id"])

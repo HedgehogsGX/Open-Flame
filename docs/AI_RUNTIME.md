@@ -173,6 +173,14 @@ Owner 完成前必须没有 `reserved`、`dispatched` 或 `unknown`。这些状�
 
 听写 operation 记录 1 个单位；配音按每个有文字的 cue 建立 ordinal 记录，每项 1 个单位。翻译把整项 task 记录为一个 invocation envelope，`request_units=ceil(cues/50)`，上限 20。这个数用于在真正执行前冻结本地 authorization 工作量；OpenAI provider 还会根据 4 MiB 请求 envelope 缩小每批 cue，因此实际 HTTP 请求可能多于这个估算。`request_units` 不是精确 HTTP 请求计数、token usage、价格估算、供应商 request ID 或账单收据。
 
+### 4.3 配音失败后的逐 cue 断点
+
+每个通过完整 PCM、轨道格式、总大小与当前时间槽校验的配音 cue 会复制到当前 render retry lineage 的临时 checkpoint 目录，并在既有 `requests` 表登记不可变 manifest。manifest 与文件名共同绑定计划谱系、批准时间轴、cue 序号与内容、provider/model、音色、语言、语速、authorization、execution、规范化后的远程 request fingerprint 和实际 WAV SHA-256。实现没有增加数据库表、Schema、常驻服务、线程、队列或依赖。
+
+只有 `failed`、`canceled` 或 `render_interrupted` 计划通过显式“建立重试”产生的唯一后继，才会查找同一严格谱系中的 checkpoint。父计划必须处于终态，project、draft、recipe 和完整 `plan_timeline_bindings` 必须相同，谱系不能分叉或循环。远程 cue 还必须能在其生产计划下找到唯一 `responded` invocation，`reserved`、`dispatched`、`unknown` 及阻止重试的 reconciliation 结论不能由 checkpoint 绕过。
+
+命中时会从一次有界读取建立不可变内存 snapshot，同时核对普通文件身份、大小与 SHA-256，并从同一 snapshot 检查 PCM WAV 头和完整 frame 数据；实际写轨前再次建立 snapshot、比对已验证 SHA，再核对当前轨道格式、总大小及 cue 时间槽。命中不建立新远程 invocation。文件缺失、普通文件内容损坏或轨道条件不符只视为 cache miss：当前已再次确认的后继会重新生成该 cue，并在全部条件通过后写入自己的 manifest；更早的有效祖先仍可继续查找。未知文件名、symlink、reparse point、目录与无法证明归属的路径不会被跟随或当成音频使用。原子 create-if-absent 写入在进程中断后会识别并收束唯一可证明的临时硬链接状态。计划成功提交成品与 `ready` 状态后删除整条谱系的 checkpoint；若进程在数据库提交后、清理前退出，下一次 exclusive recovery 会补清理。失败、取消和中断保留已经验证的 cue，供下一次显式重试使用。
+
 ## 5. 媒体处理与时间轴审核
 
 听写前，Open-Flame 在本机使用固定 FFmpeg 从不可变编辑源派生临时音频：移除视频、字幕、数据和 metadata，编码为 **mono、24 kHz、32 kbit/s AAC M4A**，并在上传前再次核对文件身份、大小和 SHA-256。发送给听写 API 的是该派生音频，不是原始视频文件。`/workflows` 会把 recipe 的第一个分段作为听写 clip，只编码并发送该范围，再把返回时间加回源时间轴；编辑页直接建立听写任务时当前没有 clip 控件，默认编码完整编辑源。本地派生器仍有 90 分钟的媒体处理边界，但当前 authorization 在首次 provider 请求前施加更严格的 **30 分钟且 25 MiB** 有效上限；不会偷偷截断、分片或降级上传，超过任一上限就失败并要求操作者调整输入。
@@ -199,12 +207,12 @@ OpenAI provider 是远程 provider。当前执行会发送：
 
 这些内容会离开本机并由 OpenAI API 处理。manifest 对可能外发的数据类型作保守声明，页面在任务确认处显示该范围。请在发起前确认媒体和文字有权交给云服务处理，并根据当前供应商条款、保留政策和所在地区要求作出决定。
 
-每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。当前固定输入/调用硬上限与 Schema 4 账本用于阻止越权工作量和不确定结果的静默重放，但仍不提供准确价格预估、供应商账单核对、token/音频 usage ledger 或远程 request ID reconciliation。操作者仍应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled`、`unknown` 或人工 reconciliation 当作供应商已撤销、已返回结果或未计费的证明。允许的重试仍会建立待确认后继并重新执行完整步骤；已完成的批次/cue 可能再次计费。
+每次听写、翻译批次和逐 cue 配音都可能产生 API 费用；长时间轴会产生多次翻译和配音请求。当前固定输入/调用硬上限与 Schema 4 账本用于阻止越权工作量和不确定结果的静默重放，但仍不提供准确价格预估、供应商账单核对、token/音频 usage ledger 或远程 request ID reconciliation。操作者仍应在 OpenAI 账户侧设置可接受的配额和告警。取消会终止本机等待和后续处理，但服务端已接受的请求仍可能完成并计费；不要把本地 `canceled`、`unknown` 或人工 reconciliation 当作供应商已撤销、已返回结果或未计费的证明。允许的 render 重试仍先建立待确认后继；同一严格谱系中已验证且远程账本为 `responded` 的 cue 可从本地 checkpoint 复用，缺失、损坏或身份不符的 cue 会再次调用并可能再次计费。听写与翻译仍按各自现有重试合同重新执行。
 
 ## 7. 当前验证边界
 
 构建成功、`--check` 返回 `ready`、页面列出 provider/model 或本地渲染 smoke 通过，只能证明对应本机 runtime 结构、散列、协议和本地媒体路径满足当前代码合同。
 
-当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger 与配音语速的 ignored 本地 validator、多分段 workflow、预授权 queued 工作安全重启续跑、Python compileall、页面内联 JavaScript、依赖一致性和本机浏览器检查用于证明本地合同；测试文件按仓库策略未修改。详见[配音语速记录](../validation/iteration-0.28.0-speech-rate.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)与 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
+当前 0.28.0 发布后源码证据边界为：**未提供真实 OpenAI 凭据；未执行真实 OpenAI API 听写、翻译或配音；未执行 Bilibili、抖音或视频号的真实媒体上传与发布验收；未生成绑定当前开发提交的新 release receipt。** authorization/budget/ledger、配音语速与逐 cue 断点的 ignored 本地 validator、多分段 workflow、预授权 queued 工作安全重启续跑、Python compileall、页面内联 JavaScript、依赖一致性和本机浏览器检查用于证明本地合同；测试文件按仓库策略未修改。详见[配音断点重试记录](../validation/iteration-0.28.0-speech-checkpoint-retry.md)、[配音语速记录](../validation/iteration-0.28.0-speech-rate.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)与 [Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)。这些本地结果不能据此声称云模型在当前账号可用、远端 alias 未漂移、生成质量已由真人接受、费用已核对，或任一国内平台已经接收并公开发布视频。真实 API 与平台验收必须绑定同一冻结构建、明确授权的样本和平台后台结果另行记录。
 
 2026-09-09 追加的普通 Start 密钥边界验证仅使用合成 sentinel 和本地重建 runtime：它确认 sentinel 只进入 control child，不进入下载 Worker；三项能力从 `blocked / ai_provider_auth_missing` 转为 `unverified / provider_health_required`；验证期间网络入口被强制拒绝，输出中没有 sentinel。该结果不是 provider health 或真实 API 验收。

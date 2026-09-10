@@ -102,7 +102,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 
 启用已批准的翻译或配音时，时间轴按每个分段单独处理：只保留完整落入该段的 cue，把时间减去分段起点，再分别生成 `caption-001.vtt`、`dubbed-video-001.mp4` 等成品；只有一个输出窗口时字幕名为 `caption.vtt`。分段边界若切入任一 cue，会以 `ai_segment_boundary_splits_cue` 拒绝整项，不能把一句字幕或配音无提示地截断。某段没有 cue 时仍可作为纯 B-roll 输出空 WebVTT 和本地确定性静音，不调用 TTS。
 
-每段配音轨从本段 0 ms 开始独立构造，临时 cue WAV 与轨道在该段渲染后删除。选择“压低原声后叠加”时，原声固定为 22%，配音保持原电平，`amix` 不做自动归一化并在输出前限幅；选择替换时只使用配音轨。这个固定混音只描述实现参数，最终响度和可懂度仍须真人试听。
+每段配音轨从本段 0 ms 开始独立构造；本次 claim 内的 cue WAV 与合成轨在该段渲染后删除。每个通过校验的 cue 另以内容摘要复制到 render retry lineage 的临时 checkpoint：失败、取消或中断时保留，显式建立且再次确认的同定义后继可以复用；成品与 `ready` 状态提交后删除，启动恢复会补清理提交后遗留。选择“压低原声后叠加”时，原声固定为 22%，配音保持原电平，`amix` 不做自动归一化并在输出前限幅；选择替换时只使用配音轨。这个固定混音只描述实现参数，最终响度和可懂度仍须真人试听。
 
 ## 3. 当前封面能力
 
@@ -151,7 +151,7 @@ stateDiagram-v2
 - 已经 `ready` 的成品不会因再次调用取消而被撤销或删除。
 - 一项 recipe 中任一分段、封面、ffprobe 或发布校验失败时，不发布该次执行的部分成品。
 - `failed` 或 `canceled` 只能创建一个新的 `review` 重试计划；重试复制原计划的不可变 recipe，仍须再次明确确认。
-- AI task 重试和包含远程 TTS 的 render plan 重试都先建立唯一后继并停在待确认状态。后继沿用旧任务/recipe 的 authorization，但只有该 authorization 仍与当前 runtime 精确一致时才可再次确认；缺少绑定的旧记录必须重建。Schema 4 账本的 `reserved`、`dispatched`、`unknown` 阻止 owner 完成和重试；`reconciled/accepted_without_result` 与 `reconciled/abandoned` 仍阻止重试。`responded`、`released` 或 `reconciled/not_accepted` 只恢复原有重试资格评估，仍须满足 failed/canceled、唯一后继及再次确认。账本不保存远程 request ID 或复用部分结果，已经完成的翻译批次或配音 cue 仍可能产生费用。
+- AI task 重试和包含远程 TTS 的 render plan 重试都先建立唯一后继并停在待确认状态。后继沿用旧任务/recipe 的 authorization，但只有该 authorization 仍与当前 runtime 精确一致时才可再次确认；缺少绑定的旧记录必须重建。Schema 4 账本的 `reserved`、`dispatched`、`unknown` 阻止 owner 完成和重试；`reconciled/accepted_without_result` 与 `reconciled/abandoned` 仍阻止重试。`responded`、`released` 或 `reconciled/not_accepted` 只恢复原有重试资格评估，仍须满足 failed/canceled、唯一后继及再次确认。账本不保存远程 request ID；render plan 可复用同一严格谱系中已通过 WAV/hash 校验且远程 invocation 为 `responded` 的逐 cue checkpoint，其他 cue 会重新生成。翻译 task 仍按原合同重做，checkpoint 也不是供应商账单或未计费证明。
 - 应用在取得编辑根独占 lease 后执行重启恢复：`running` 和 `canceling` 会变为 `failed`，错误码为 `render_interrupted`；`queued` 会退回 `review`，清除旧确认并标记 `restart_confirmation_required`。恢复会删除 `sources/` 与 `assets/` 中“严格小写受管 ID + 精确小写允许后缀”但数据库未登记的崩溃残留，也会清理严格 `<plan_id>/<claim_token>` 且不属于活动 claim 的 staging，包括计划已进入终态但上次尚未完成删除的目录。case-only 文件名、未知名称、非普通文件、link/reparse 与其他不安全条目保持原样。该域不会直接重放；上层 `/workflows` 仅能用原始、不可变的预授权重新确认没有 `retry_of` 的 restart 记录，手动编辑和所有 retry 仍须重新确认。
 - 停止应用后不再接受新服务操作。如果 worker 或已经进入服务层的 API 操作未能在等待时间内结束，独占 lease 会继续保留；最后一个活动方退出后才通过同一幂等路径交还，避免另一实例在文件已复制但尚未登记时执行恢复。
 - claim token 不匹配的旧 worker 不能登记结果；这类结果以 `stale_render_claim` 拒绝。
