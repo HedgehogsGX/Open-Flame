@@ -4,6 +4,10 @@
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
+新开发任务可直接复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、
+数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
+提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
+
 ## 当前源码身份
 
 | 项目 | 当前值 |
@@ -121,6 +125,7 @@
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
 | 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
+| 当前系统结构 | [当前架构](docs/CURRENT_ARCHITECTURE.md)、[继续开发提示词](docs/HANDOFF_PROMPT.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
@@ -157,19 +162,27 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
+8. **两个本地 P2 失败路径仍待修复。** `WorkflowManager.get()` 在首次 `Thread.start()` 抛错时
+   尚未回滚已发布的 service/owner 状态；Editing 与 verified response 的部分构造失败清理仍可能
+   由 `handle.close()` 异常覆盖原始校验错误。未跟踪评审中的隔离探针曾复现两项，当前源码复核
+   仍能确认相应路径存在；没有真实环境事故或数据丢失证据。当前源码的完整说明与保持条件见
+   [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)。
 
 ## 下一入口
 
-1. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
+1. 若没有新的外部测试反馈，先把上述两个 P2 失败路径分别做成小修提交：先处理 Workflow
+   首次线程启动回滚，再处理 close 清理不覆盖原异常。复用现有回归；新的故障注入只能放在
+   已忽略的 `validation/local/`，不能修改 tracked tests。
+2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)
    返回环境、精确 commit、步骤、脱敏日志与结果。不要提交 Cookie、token、URL 样本、媒体、
    本机路径或 `validation/local/` 内容。
-2. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交并直推
+3. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交并直推
    `origin/main`。首批上传范围保持 Bilibili、抖音、视频号。
    对 `unknown` 上传先保存数据库与日志、读取本次 receipt 并在对应平台后台核对；只有固定
    `not_accepted` 结论落库后才能建立 retry 草稿，不得使用旧请求体或手工改库直接重传。
-3. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
+4. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
    明确授权、凭据留在 Git 外且精确候选固定后进行。每个结果按平台、来源类型、适配器版本、
    环境和 commit 单独记录。来源封面还需分别用 Bilibili 与 Douyin 的已授权样本对照平台可见
    封面、下载 artifact、Workflow 最终选用的受管封面和三平台后台实际封面；同时覆盖无候选、
@@ -177,7 +190,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    专用证据。
    若样本返回字幕，还要分别记录语言、格式、人工/自动来源是否可知、导入 timeline、审核修订
    与是否触发 AI transcription fallback；一个平台的字幕结果不能代表其他平台。
-4. 功能反馈收敛后再创建 clean release candidate，执行源码与 wheel 独立安装、完整检查、
+5. 功能反馈收敛后再创建 clean release candidate，执行源码与 wheel 独立安装、完整检查、
    隐私/许可证扫描和包外 receipt；历史 receipt 不覆盖新候选。
 
 ## 开发约束
@@ -196,3 +209,16 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
   ignored 本地验证结果或合成数据描述成真实平台验收。
 
 完整历史证据索引与 Stage 0 规则见 [`validation/README.md`](validation/README.md)。
+
+## 建议使用的本地 skills
+
+按任务需要从当前宿主提供的 Skills catalog 解析同名 `SKILL.md`，不要把某台机器的绝对路径写入
+仓库。skill 的建议不能覆盖用户当前请求或本仓库 `AGENTS.md`。
+
+| Skill | 适用范围 |
+| --- | --- |
+| `diagnose` | 两个已复现 P2、外部缺陷与性能回归的最小复现和修复 |
+| `improve-codebase-architecture` | 按领域语言、当前重复和 deletion test 继续收敛架构 |
+| `review` | 固定提交后的 Standards/Spec 双轴审查 |
+| `handoff` | 继续更新精简交接，并引用已有证据而非复制算法 |
+| `emil-design-eng` | Editorial Glass 生产页面的组件与动效细节 |
