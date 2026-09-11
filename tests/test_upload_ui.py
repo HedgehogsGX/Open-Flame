@@ -1110,7 +1110,7 @@ const target=[...$('jobs').children].find(item=>item.dataset.jobId===running.id)
 return {found:!!target,text:target?.textContent||'',resolveRequests:__test.requests.filter(item=>item.url.includes('/jobs/resolve?')).length,posts:__test.requests.filter(item=>item.method==='POST').length};
 """)
     assert result["found"]
-    assert "上游报告投稿完成" in result["text"]
+    assert "上游工具报告投稿完成" in result["text"]
     assert "执行中" not in result["text"]
     assert result["resolveRequests"] == 1
     assert result["posts"] == 0
@@ -1175,8 +1175,8 @@ return {shownBefore,hiddenAfter:$('edit-output-import').hidden,selected:$('sourc
     ("draft", "本地草稿已就绪"),
     ("canceled", "已取消"),
     ("running", "执行中"),
-    ("submitted", "上游报告投稿完成"),
-    ("draft_saved", "上游报告草稿已保存"),
+    ("submitted", "上游工具报告投稿完成"),
+    ("draft_saved", "上游工具报告草稿已保存"),
 ])
 def test_retry_reports_returned_successor_state_and_focuses_it_without_confirming(successor_state, label):
     result = run_upload_ui(r"""
@@ -1258,7 +1258,7 @@ job.state='submitted';job.code='upstream_submitted';job.updated_at='2026-09-07T1
 return {sameCard:before===after,copy:after.textContent,detailsOpen:afterDetails.open,hasCancel:__test.all(after).some(item=>item.tagName==='button'&&item.textContent==='取消'),posts:__test.requests.filter(item=>item.method==='POST').length};
 """)
     assert result["sameCard"] is True
-    assert "上游报告投稿完成" in result["copy"]
+    assert "上游工具报告投稿完成" in result["copy"]
     assert result["detailsOpen"] is False
     assert result["hasCancel"] is False
     assert result["posts"] == 0
