@@ -84,7 +84,6 @@ pyproject.toml
 release-files.txt
 scripts/release.py
 scripts/verify_ci_contract.py
-scripts/verify_commit_scope.py
 scripts/verify_wheel_release.py
 scripts/verify_windows_release.py
 setup_open_flame.py

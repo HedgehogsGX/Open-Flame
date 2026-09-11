@@ -1,12 +1,7 @@
 #!/bin/sh
 set -eu
 
-if [ -x .venv/Scripts/python.exe ]; then
-  exec .venv/Scripts/python.exe scripts/verify_commit_scope.py --staged
-fi
-
-if command -v py >/dev/null 2>&1; then
-  exec py -3.12 scripts/verify_commit_scope.py --staged
-fi
-
-exec python scripts/verify_commit_scope.py --staged
+# Reject trailing whitespace and conflict markers in the staged diff. Tests are
+# maintained like ordinary source; see AGENTS.md for the evidence rule that
+# replaced the old commit-scope gate.
+exec git diff --cached --check

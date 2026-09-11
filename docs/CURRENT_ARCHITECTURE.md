@@ -298,7 +298,7 @@ stateDiagram-v2
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
 | Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 已拆分，仍有规则重复 |
-| 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；禁止新增/修改 tracked tests |
+| 提交前 whitespace 门禁 | [`.githooks/pre-commit`](../.githooks/pre-commit) | `git diff --cached --check`；旧的 `verify_commit_scope.py` 测试禁改门禁已移除 |
 
 ## 9. 当前缺陷、复杂度集中点与下一切片
 

@@ -4,7 +4,7 @@
 
 工作流权限只有 `contents: read`，checkout 不保留 Git 凭据，也不读取 GitHub secrets、平台 Cookie 或上传账号。依赖安装本身会访问受 GitHub Actions 和包索引控制的外部服务；测试阶段依赖现有 synthetic/fake backend 与本地 HTTP fixture，不授权真实下载、扫码、登录或上传。普通 hosted Linux job 也不具备 T15 所需的可信 effective-root、getfacl、Unix socket、network namespace、容器 daemon 与冻结 image identity 证据，因此相应 skip 仍是未验收。
 
-三个外部 action 与 uv 版本都固定在工作流中；`scripts/verify_ci_contract.py` 检查精确 action commit、矩阵、只读权限、无 credential trigger、locked install、完整测试和 whitespace gate，并把换行规范化后的完整 workflow 字节绑定到已审 SHA-256。完整字节绑定会拒绝 flow mapping、YAML 续行、anchor/alias 等未逐项建模的改写，避免文本规则与 YAML 解释结果分歧。工作流以 `fetch-depth: 0` 获取完整历史，并在安装依赖前运行 `scripts/verify_commit_scope.py --github-event`。提交范围检查从 push、pull request 或手动触发事件取得 base/head，在完整历史上求 merge-base；新分支 push 使用默认分支，单提交仓库回退到空树。它读取 NUL 分隔的 name-status，重命名同时检查旧、新路径，删除历史测试不被误拦截，新增或修改自动化测试则失败关闭。最后两步分别检查工作树 whitespace 和当前提交相对父提交的 whitespace。
+三个外部 action 与 uv 版本都固定在工作流中；`scripts/verify_ci_contract.py` 检查精确 action commit、矩阵、只读权限、无 credential trigger、locked install、完整测试和 whitespace gate，并把换行规范化后的完整 workflow 字节绑定到已审 SHA-256。完整字节绑定会拒绝 flow mapping、YAML 续行、anchor/alias 等未逐项建模的改写，避免文本规则与 YAML 解释结果分歧。工作流以 `fetch-depth: 0` 获取完整历史。曾经在安装依赖前运行的 `scripts/verify_commit_scope.py --github-event` 提交范围门禁已移除：它禁止一切 `tests/` 改动，使测试无法跟随产品，是 CI 长期变红的直接原因。测试现在按普通源码维护，约束改为「只能断言实际跑过的行为」，由评审把关，见 [AGENTS.md](../AGENTS.md)。最后两步分别检查工作树 whitespace 和当前提交相对父提交的 whitespace。
 
 `tests/` 中已有回归保留给本地与 CI 运行，但不进入发行包。后续功能提交不得新增或修改自动化测试文件；本地 hook 与 hosted commit-scope gate 都会拒绝这类变更，专门清理提交仍可删除历史测试。临时 smoke 与诊断脚本写入已忽略的 `validation/local/`。
 
@@ -22,7 +22,6 @@ required checks 与 branch protection 仍为 **NOT CONFIGURED**。在测试合�
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\verify_ci_contract.py
-.\.venv\Scripts\python.exe scripts\verify_commit_scope.py --staged
 .\.venv\Scripts\python.exe -m pytest -q tests\test_ci_contract.py
 ```
 

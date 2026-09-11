@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-WORKFLOW_SHA256 = "0b6338b43e2f3f707252fe2f3467a9c4d95003f11e6da25894d40dfe2e327f77"
+WORKFLOW_SHA256 = "f541baed7e53e21b5ba39929dfd07e234e3d7c4b950f9091d04b89367aa1b0de"
 MATRIX_ENVIRONMENT_CHECK = (
     "uv run python -c \"import os, pytest, sys; "
     "actual='.'.join(map(str, sys.version_info[:3])); "
@@ -39,7 +39,6 @@ REQUIRED_SNIPPETS = (
     "UV_PYTHON: ${{ matrix.python-version }}",
     'version: "0.11.25"',
     "enable-cache: false",
-    "python scripts/verify_commit_scope.py --github-event",
     "python scripts/verify_ci_contract.py",
     "node --version",
     "uv sync --extra dev --locked",
@@ -50,7 +49,6 @@ REQUIRED_SNIPPETS = (
 )
 REQUIRED_EXACT_RUNS = (
     "python scripts/verify_ci_contract.py",
-    "python scripts/verify_commit_scope.py --github-event",
     'uv sync --extra dev --locked --python "${{ matrix.python-version }}"',
     "uv pip check",
     MATRIX_ENVIRONMENT_CHECK,

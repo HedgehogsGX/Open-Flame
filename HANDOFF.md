@@ -198,9 +198,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 - 继续工作前阅读 [`AGENTS.md`](AGENTS.md)、
   [`docs/FOLLOW_UP_EXECUTION_PLAN.md`](docs/FOLLOW_UP_EXECUTION_PLAN.md) 和改动范围对应的
   最新 evidence。
-- 后续提交不得新增或修改自动化测试文件。现有 `tests/` 只用于本地/CI 回归；临时探针、
-  日志、截图和结果放在已忽略的 `validation/local/`。提交前运行
-  `scripts/verify_commit_scope.py --staged`；仓库 hook 与 hosted CI 共用该分类器。
+- `tests/` 按普通源码维护：改产品行为就同步改测试，过时的测试要修或删，`main` 必须保持
+  绿色。唯一硬约束是测试与 evidence 只能断言实际跑过的行为。临时探针、日志、截图和结果
+  放在已忽略的 `validation/local/`。仓库 hook 只做提交前 whitespace 复核。
 - 生产页面沿用编辑式玻璃 token、组件、焦点、减少动态、窄屏和文字缩放规则。轮询不得覆盖
   输入、账号选择、焦点、文本选区、二维码、详情展开或明确确认状态。
 - 该 Codex packaged 开发宿主存在 Windows filesystem virtualization。Setup 与 Start 必须使用

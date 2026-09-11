@@ -44,9 +44,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           check-latest: false
 
-      - name: Verify commit scope
-        run: python scripts/verify_commit_scope.py --github-event
-
       - name: Install pinned uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:

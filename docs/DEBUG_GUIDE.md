@@ -281,7 +281,7 @@ git status --short
 1. `git diff --name-status` 确认范围；不得加入 key、Cookie、media、runtime、logs、数据库、build/cache 或 `validation/local/`。
 2. 不新增或修改 `tests/`；临时 validator 放 ignored `validation/local/`。正式验收事实写入 `validation/*.md` 或外部测试交接。
 3. 更新 `HANDOFF.md`、执行计划、相关指南、验收记录和 `release-files.txt`。
-4. 运行 `.\.venv\Scripts\python.exe scripts/verify_commit_scope.py --staged` 与 `git diff --cached --check`。
+4. 运行 `git diff --cached --check`（仓库 hook 会自动执行同一检查）。
 5. 核对 author/committer 身份、远端 URL、完整提交 SHA 和推送分支。推送并不等于 release 或默认分支合并。
 
 ## 12. 最小 Debug 交付包

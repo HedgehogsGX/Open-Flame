@@ -115,7 +115,6 @@ git config --get core.hooksPath
 ```powershell
 git diff --check
 git add -- <本次明确文件>
-uv run --no-sync python scripts/verify_commit_scope.py --staged
 git diff --cached --check
 git diff --cached --name-status -- tests
 git diff --cached --stat

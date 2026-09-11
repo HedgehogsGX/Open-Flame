@@ -183,9 +183,8 @@ Copy-Item 'docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md' $reportPath
 $reportPath
 ```
 
-该文件既是验收报告，也是下一位开发者的入口，默认作为 Git 仓库中的交接记录。`testerLabel` 只用于区分测试轮次，不得使用 Windows/GitHub 用户名、姓名、手机号、账号 ID 或其他私有标识。报告必须列出未验证边界、按优先级排序的缺陷、首个可复现下一步、涉及文件/模块和禁止破坏的约束。新报告不会因位于 `validation/external/` 而自动进入 project-only release；只有维护者完成隐私与内容复核并把精确路径显式加入 `release-files.txt` 后，才可随该发行包交付。测试者若提交代码修复，应把测试报告和产品修改分成清晰提交，并不得加入凭据、账号私有数据、媒体、runtime、构建目录或新的/修改过的 `tests/` 文件。提交前须执行：
+该文件既是验收报告，也是下一位开发者的入口，默认作为 Git 仓库中的交接记录。`testerLabel` 只用于区分测试轮次，不得使用 Windows/GitHub 用户名、姓名、手机号、账号 ID 或其他私有标识。报告必须列出未验证边界、按优先级排序的缺陷、首个可复现下一步、涉及文件/模块和禁止破坏的约束。新报告不会因位于 `validation/external/` 而自动进入 project-only release；只有维护者完成隐私与内容复核并把精确路径显式加入 `release-files.txt` 后，才可随该发行包交付。测试者若提交代码修复，应把测试报告和产品修改分成清晰提交，并不得加入凭据、账号私有数据、媒体、runtime 或构建目录。测试改动是允许且受欢迎的，但只能断言实际跑过的行为。提交前须执行：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/verify_commit_scope.py --staged
 git diff --cached --check
 ```
