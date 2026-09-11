@@ -37,6 +37,7 @@ from video_download_control.uploads.contracts import UploadError
 from video_download_control.uploads.schema import (
     LEGACY_SCHEMA_DDL,
     SCHEMA_V2_DDL,
+    SCHEMA_VERSION,
     ensure_upload_schema,
     validate_upload_schema,
 )
@@ -597,7 +598,7 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
     backup = create_upload_backup(source_root=source, backup_target=backup_root)
 
     assert _tree_bytes(source) == source_before
-    assert backup.schema_version == 3
+    assert backup.schema_version == SCHEMA_VERSION
     assert UPLOAD_BACKUP_FORMAT_VERSION == 2
     payload_media = backup_root.joinpath(*UPLOAD_MEDIA_PAYLOAD_PREFIX.parts)
     assert {path.name for path in payload_media.iterdir()} == {f"{SOURCE_PRESENT}.mp4"}
@@ -738,7 +739,7 @@ def test_service_reachable_tencent_short_titles_can_be_backed_up(
         source_root=root,
         backup_target=tmp_path / "reachable-short-title-backup",
     )
-    assert result.schema_version == 3
+    assert result.schema_version == SCHEMA_VERSION
 
 
 @pytest.mark.parametrize(
@@ -827,7 +828,7 @@ def test_format1_schema2_restores_via_staged_migration_without_changing_backup(t
     result = restore_upload_backup(backup_root=backup_root, restore_root=restored)
 
     assert _tree_bytes(backup_root) == before
-    assert result.schema_version == 3
+    assert result.schema_version == SCHEMA_VERSION
     assert (restored / "assets").is_dir()
     assert list((restored / "assets").iterdir()) == []
     validate_upload_schema(restored / "uploads.sqlite3")
@@ -881,7 +882,7 @@ def test_format1_schema2_tencent_short_title_restores_and_rebacks_up(tmp_path):
         source_root=restored,
         backup_target=tmp_path / "legacy-tencent-format2",
     )
-    assert result.schema_version == 3
+    assert result.schema_version == SCHEMA_VERSION
 
 
 @pytest.mark.parametrize(

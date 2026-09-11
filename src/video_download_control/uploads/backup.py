@@ -66,6 +66,11 @@ UPLOAD_ASSET_PAYLOAD_PREFIX = PurePosixPath("payload/assets")
 UPLOAD_ASSETS_PAYLOAD_PREFIX = UPLOAD_ASSET_PAYLOAD_PREFIX
 UPLOAD_DATABASE_NAME = "uploads.sqlite3"
 UPLOAD_WORKER_LOCK_NAME = ".worker.lock"
+# _SchedulerLock writes one byte only on Windows, where msvcrt.locking needs a
+# byte to lock. flock does not, so on POSIX the lock file the running service
+# creates stays empty. Requiring exactly one byte therefore rejected every real
+# POSIX lock; accept both sizes and keep rejecting anything holding content.
+_MAX_WORKER_LOCK_SIZE = 1
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_METADATA_BYTES = 1024 * 1024
 MAX_BACKUP_ENTRIES = 1_000_000
@@ -609,7 +614,7 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
             or opened.st_nlink != 1
             or _common._is_link_or_reparse(path, current)
             or not _same_identity(opened, current)
-            or opened.st_size != 1
+            or opened.st_size > _MAX_WORKER_LOCK_SIZE
         ):
             raise UploadBackupError("upload worker lock is unsafe")
         handle.seek(0)
@@ -626,7 +631,9 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
             raise UploadBackupError("upload worker is active") from exc
         locked = True
         handle.seek(0)
-        if handle.read(1) != b"0":
+        # Empty is the POSIX lock the running service creates; b"0" is the byte
+        # Windows needs for msvcrt.locking. Anything else is not our lock.
+        if handle.read(1) not in (b"", b"0"):
             raise UploadBackupError("upload worker lock is invalid")
         yield
     finally:
