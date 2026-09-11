@@ -100,7 +100,8 @@ def test_ready_asset_lists_and_downloads_registered_auxiliary_artifacts(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={
@@ -178,7 +179,8 @@ def test_auxiliary_download_requires_canonical_registered_ready_sidecar(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-aux-authz"]},
@@ -243,7 +245,8 @@ def test_auxiliary_download_requires_one_matching_parent_original(
     integrity_break: str,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -304,7 +307,8 @@ def test_auxiliary_download_rejects_invalid_registered_file(
     corruption: str,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -365,7 +369,8 @@ def test_auxiliary_download_rejects_invalid_registered_file(
 
 def test_auxiliary_download_rejects_hard_linked_file(settings: Settings) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -396,7 +401,8 @@ def test_ready_batch_lists_original_metadata_and_downloads_registered_file(
 ) -> None:
     media = b"registered original bytes\n"
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={
@@ -463,7 +469,8 @@ def test_asset_download_rejects_unregistered_missing_and_outside_paths(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         missing_batch = client.get("/api/v1/batches/not-found/assets")
         missing_asset = client.get(
             "/api/v1/assets/00000000-0000-0000-0000-000000000000/download"
@@ -501,7 +508,8 @@ def test_asset_download_rejects_unregistered_missing_and_outside_paths(
 def test_asset_download_rejects_same_size_content_drift(settings: Settings) -> None:
     payload = b"registered immutable bytes\n"
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-same-size-drift"]},
@@ -530,7 +538,8 @@ def test_asset_download_closes_spool_when_temporary_storage_is_full(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-full-spool"]},
@@ -568,7 +577,8 @@ def test_asset_snapshot_stops_cooperatively_when_client_disconnects(
 ) -> None:
     payload = bytes(range(256)) * 4096
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-snapshot-cancel"]},
@@ -657,7 +667,7 @@ def test_asset_snapshot_stops_cooperatively_when_client_disconnects(
                     "raw_path": asset["download_url"].encode("ascii"),
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},
@@ -688,7 +698,8 @@ def test_asset_snapshot_stops_cooperatively_when_client_disconnects(
 def test_verified_asset_download_preserves_byte_ranges(settings: Settings) -> None:
     payload = b"0123456789-range-payload"
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-range"]},
@@ -732,7 +743,8 @@ def test_asset_download_serves_verified_snapshot_if_path_changes_after_hash(
     payload = b"registered snapshot bytes\n"
     replacement = b"x" * len(payload)
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-after-hash-swap"]},
@@ -781,7 +793,8 @@ def test_asset_download_rejects_content_changed_while_hashing(
 ) -> None:
     payload = b"a" * (192 * 1024)
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-during-hash-swap"]},
@@ -844,7 +857,8 @@ def test_asset_download_supports_independent_concurrent_readers(
 ) -> None:
     payload = bytes(range(256)) * 4096
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-concurrent-readers"]},
@@ -868,7 +882,8 @@ def test_asset_download_supports_independent_concurrent_readers(
 
 def test_asset_download_rejects_a_hard_linked_original(settings: Settings) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/asset-api-linked"]},
@@ -898,7 +913,8 @@ def test_asset_download_rejects_a_hard_linked_original(settings: Settings) -> No
 def test_frontend_fetches_ready_assets_and_builds_links_without_inner_html(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         page = client.get("/")
 
     assert page.status_code == 200

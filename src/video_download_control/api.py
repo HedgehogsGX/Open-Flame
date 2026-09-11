@@ -210,6 +210,10 @@ _AUXILIARY_SPOOL_MEMORY_BYTES = 1024 * 1024
 _ORIGINAL_SPOOL_MEMORY_BYTES = 1024 * 1024
 _CLIENT_CLOSED_REQUEST_STATUS = 499
 
+_CANCEL_REARM_SECONDS = 0.05
+"""Re-arm interval for a cancellation an already-ready await swallowed."""
+
+
 
 class _OriginalSnapshotCancelled(Exception):
     """Internal cooperative stop between bounded source/spool operations."""
@@ -431,8 +435,22 @@ async def _wait_for_http_disconnect(receive: Receive) -> None:
 
 
 async def _cancel_and_join(task: asyncio.Task) -> None:
-    if not task.done():
+    """Stop a helper task and wait for it, re-arming a swallowed cancellation.
+
+    ``Task.cancel`` is a request, not a guarantee. A task resuming from an await
+    that already had a result can run on and suspend again before the
+    cancellation is delivered, which consumes the request without stopping the
+    task. The disconnect waiter hits exactly that: ASGI servers queue the
+    request message ahead of the disconnect, so one ``cancel`` lands on the
+    already-ready ``receive()``, the waiter loops, and the second ``receive()``
+    parks until the client goes away -- which never happens while the handler is
+    still waiting to answer. Re-arm until the task really finishes so a rejected
+    snapshot can still send its error response.
+    """
+    while not task.done():
         task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait({task}, timeout=_CANCEL_REARM_SECONDS)
     with suppress(asyncio.CancelledError, Exception):
         await task
 
