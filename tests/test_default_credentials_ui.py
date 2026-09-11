@@ -144,6 +144,7 @@ const state = {
 };
 async function fetch(url, options = {}) {
   state.requests.push({url: String(url), options});
+  if (url === '/api/v1/session') return {ok: true, status: 200, json: async () => ({csrf_token: 'synthetic-download-nonce'})};
   if (url === '/api/v1/credential-defaults') {
     if (state.credentialReply.error) throw new Error(state.credentialReply.error);
     const reply = state.credentialReply;
@@ -164,7 +165,7 @@ async function fetch(url, options = {}) {
 }
 let timerId = 0;
 const context = vm.createContext({
-  document, fetch, URLSearchParams, console,
+  document, fetch, Headers, URLSearchParams, console,
   setTimeout: () => ++timerId,
   clearTimeout: () => {},
   __test: state
@@ -261,7 +262,7 @@ def test_complete_frontend_submits_explicit_cookie_mode_for_json_and_file_import
       const query = new URLSearchParams(request.url.split('?')[1] || '');
       return {
         url: request.url.split('?')[0], method: request.options.method,
-        contentType: request.options.headers['Content-Type'],
+        contentType: request.options.headers.get('Content-Type'),
         jsonBody: entrypoint === 'json' ? JSON.parse(request.options.body) : null,
         query: Object.fromEntries(query),
         passesOriginalFile: entrypoint !== 'json' && request.options.body === file,
@@ -310,7 +311,7 @@ def test_complete_frontend_retry_reads_explicit_cookie_mode_at_click_time(mode):
       await retry.dispatch('click');
       const request = __test.requests.find(item => item.url.endsWith('/retry'));
       return {label, url: request.url, method: request.options.method,
-              contentType: request.options.headers['Content-Type'],
+              contentType: request.options.headers.get('Content-Type'),
               body: JSON.parse(request.options.body)};
     """)
 

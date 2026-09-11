@@ -135,7 +135,10 @@ def handoff_app(settings):
     backend = _NoRemoteBackend()
     app.state.upload_service_factory = lambda root: UploadService(root, backend)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        # This handoff crosses three guarded surfaces, each with its own nonce.
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         client.headers["X-Upload-CSRF"] = client.get("/api/v1/uploads/session").json()["csrf_token"]
+        client.headers["X-Editing-CSRF"] = client.get("/api/v1/edits/session").json()["csrf_token"]
         yield client, app, backend
 
 

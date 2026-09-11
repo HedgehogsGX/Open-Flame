@@ -200,7 +200,9 @@ const state = {
   created: null,
   // Advance an actual event-loop turn, never a time-based sleep. Timers are
   // held at the boundary so production polling cannot race the assertions.
-  turn: () => new Promise(resolve => setImmediate(resolve)),
+  // The page bootstrap awaits /api/v1/session before its other loads, so a
+  // single tick no longer drains the chain. Settle the queue instead.
+  turn: async () => { for (let i = 0; i < 8; i += 1) await new Promise(resolve => setImmediate(resolve)); },
   pendingTimerDelays: () => [...timers.values()].map(timer => timer.delay),
   dispatchDocument(name, init = {}) {
     return dispatchEvent(documentListeners, document, name, init);
@@ -240,6 +242,7 @@ function response(payload, status = 200) {
 async function fetch(url, options = {}) {
   url = String(url);
   state.requests.push({url, options});
+  if (url === '/api/v1/session') return response({csrf_token: 'synthetic-download-nonce'});
   if (url === '/api/v1/operations/runtime') return response({mode: 'external_unknown', state: 'unknown'});
   if (url === '/api/v1/credential-defaults') return response({available: true, platforms: []});
   if (url === '/api/v1/operations/queue') return response({paused: false});
@@ -280,7 +283,7 @@ async function fetch(url, options = {}) {
   throw new Error('unexpected fetch: ' + url);
 }
 const context = vm.createContext({
-  document, fetch, URLSearchParams, console,
+  document, fetch, Headers, URLSearchParams, console,
   addEventListener: (name, callback) => addListener(windowListeners, name, callback),
   setTimeout: (callback, delay) => {
     const id = ++nextTimer;
