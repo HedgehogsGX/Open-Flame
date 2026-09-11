@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import asyncio
 import base64
 import hashlib
@@ -19,10 +21,26 @@ from video_download_control.api import create_app
 from video_download_control.uploads import service as upload_service_module
 from video_download_control.uploads.bridge import install_statement_policy
 from video_download_control.uploads.contracts import BackendResult, UploadError
+from video_download_control.uploads.contracts import UPLOAD_SUCCESS_EVIDENCE
 from video_download_control.uploads.service import (
     SCHEDULE_LEAD_SECONDS,
     UploadService,
 )
+
+
+def synthetic_upload_evidence(request, result):
+    """Return ``result`` carrying the evidence a real adapter would report.
+
+    A success status is only believed when the backend also names the fixed
+    acknowledgement boundary it observed, so a double that claims "submitted"
+    without evidence is correctly rejected as backend_result_invalid.
+    """
+    if result.evidence_kind is not None:
+        return result
+    expected = UPLOAD_SUCCESS_EVIDENCE.get(
+        (request.platform, request.mode, result.status)
+    )
+    return replace(result, evidence_kind=expected) if expected else result
 
 
 class RecordingBackend:
@@ -49,9 +67,12 @@ class RecordingBackend:
             if request.cover_portrait_path is not None else None,
         ))
         self.uploads.append(request)
-        return BackendResult(
-            "draft_saved" if request.mode == "draft" else "submitted",
-            "synthetic_result",
+        return synthetic_upload_evidence(
+            request,
+            BackendResult(
+                "draft_saved" if request.mode == "draft" else "submitted",
+                "synthetic_result",
+            ),
         )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections import Counter
 import ctypes
 from ctypes import wintypes
@@ -15,6 +17,7 @@ import pytest
 
 from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult
+from video_download_control.uploads.contracts import UPLOAD_SUCCESS_EVIDENCE
 from video_download_control.uploads.service import UploadService
 
 
@@ -22,6 +25,21 @@ POLL_ITERATIONS = 300
 POLL_TIMEOUT_SECONDS = 45
 MAX_RETAINED_POLL_BYTES = 4 * 1024**2
 MAX_TRANSIENT_POLL_BYTES = 16 * 1024**2
+
+
+def synthetic_upload_evidence(request, result):
+    """Return ``result`` carrying the evidence a real adapter would report.
+
+    A success status is only believed when the backend also names the fixed
+    acknowledgement boundary it observed, so a double that claims "submitted"
+    without evidence is correctly rejected as backend_result_invalid.
+    """
+    if result.evidence_kind is not None:
+        return result
+    expected = UPLOAD_SUCCESS_EVIDENCE.get(
+        (request.platform, request.mode, result.status)
+    )
+    return replace(result, evidence_kind=expected) if expected else result
 
 
 class SequencedBackend:
@@ -59,7 +77,9 @@ class SequencedBackend:
                 raise TimeoutError("synthetic upload gate timed out")
             if stop.is_set():
                 return BackendResult("unknown", "synthetic_stopped")
-            return BackendResult("submitted", "synthetic_submitted")
+            return synthetic_upload_evidence(
+                request, BackendResult("submitted", "synthetic_submitted")
+            )
         finally:
             with self._guard:
                 self.active -= 1

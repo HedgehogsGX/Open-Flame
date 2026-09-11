@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import hashlib
 import json
 import sqlite3
@@ -16,7 +18,23 @@ from video_download_control.api import create_app
 from video_download_control.uploads import api as upload_api
 from video_download_control.uploads import schema as upload_schema
 from video_download_control.uploads.contracts import BackendResult
+from video_download_control.uploads.contracts import UPLOAD_SUCCESS_EVIDENCE
 from video_download_control.uploads.service import UploadService, default_upload_root
+
+
+def synthetic_upload_evidence(request, result):
+    """Return ``result`` carrying the evidence a real adapter would report.
+
+    A success status is only believed when the backend also names the fixed
+    acknowledgement boundary it observed, so a double that claims "submitted"
+    without evidence is correctly rejected as backend_result_invalid.
+    """
+    if result.evidence_kind is not None:
+        return result
+    expected = UPLOAD_SUCCESS_EVIDENCE.get(
+        (request.platform, request.mode, result.status)
+    )
+    return replace(result, evidence_kind=expected) if expected else result
 
 
 class FakeBackend:
@@ -40,7 +58,7 @@ class FakeBackend:
     def upload(self, request, stop):
         self.calls.append(("upload", request))
         state = "draft_saved" if request.mode == "draft" else self.outcome
-        return BackendResult(state, "synthetic_result")
+        return synthetic_upload_evidence(request, BackendResult(state, "synthetic_result"))
 
 
 @pytest.fixture

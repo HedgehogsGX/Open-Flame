@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import hashlib
 import os
 import sqlite3
@@ -12,9 +14,25 @@ import pytest
 
 from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult, UploadError
+from video_download_control.uploads.contracts import UPLOAD_SUCCESS_EVIDENCE
 from video_download_control.uploads import service as upload_service_module
 from video_download_control.uploads.schema import SCHEMA_DDL, SCHEMA_VERSION
 from video_download_control.uploads.service import UploadService, default_upload_root
+
+
+def synthetic_upload_evidence(request, result):
+    """Return ``result`` carrying the evidence a real adapter would report.
+
+    A success status is only believed when the backend also names the fixed
+    acknowledgement boundary it observed, so a double that claims "submitted"
+    without evidence is correctly rejected as backend_result_invalid.
+    """
+    if result.evidence_kind is not None:
+        return result
+    expected = UPLOAD_SUCCESS_EVIDENCE.get(
+        (request.platform, request.mode, result.status)
+    )
+    return replace(result, evidence_kind=expected) if expected else result
 
 
 class FakeBackend:
@@ -44,7 +62,25 @@ class FakeBackend:
         while not self.release.wait(0.01):
             if stop.is_set():
                 return BackendResult("unknown", "upload_cancelled_unknown")
-        return self.result
+        return synthetic_upload_evidence(request, self.result)
+
+
+def acknowledge_not_accepted(service, job_id):
+    """Reconcile an unknown attempt as not accepted.
+
+    496fb63 replaced retry(acknowledge_unknown=True) with an explicit receipt
+    reconciliation: read this attempt's receipt, state a conclusion, and
+    acknowledge the platform-side check. `not_accepted` is the only conclusion
+    that lets a job back into the ordinary retry path.
+    """
+    receipt = service.attempt(job_id)
+    service.reconcile_unknown(
+        job_id,
+        attempt_id=receipt["id"],
+        expected_revision=receipt["revision"],
+        conclusion="not_accepted",
+        acknowledge_platform_check=True,
+    )
 
 
 def wait_for(predicate, timeout=5):
@@ -147,9 +183,10 @@ def test_cancel_queued_never_uploads_and_cancel_running_is_unknown(service, tmp_
     assert len(service.backend.uploads) == 1
     with pytest.raises(UploadError, match="verify_remote_result_first"):
         service.retry(first["id"])
-    retry = service.retry(first["id"], acknowledge_unknown=True)
+    acknowledge_not_accepted(service, first["id"])
+    retry = service.retry(first["id"])
     assert retry["state"] == "draft" and retry["id"] != first["id"]
-    assert service.retry(first["id"], acknowledge_unknown=True)["id"] == retry["id"]
+    assert service.retry(first["id"])["id"] == retry["id"]
 
 
 def test_mutated_source_fails_before_platform_is_called(service, tmp_path):
@@ -436,7 +473,8 @@ def test_malformed_backend_result_does_not_stop_the_queue(service, tmp_path):
     assert service.jobs()[0]["code"] == "backend_result_invalid"
     assert service.status()["worker_running"]
     service.backend.result = BackendResult("submitted", "upstream_submitted")
-    retry = service.retry(job["id"], acknowledge_unknown=True)
+    acknowledge_not_accepted(service, job["id"])
+    retry = service.retry(job["id"])
     service.confirm(retry["id"])
     wait_for(lambda: {row["id"]: row["state"] for row in service.jobs()}[retry["id"]] == "submitted")
 
@@ -719,6 +757,7 @@ def test_concurrent_new_database_initialization_publishes_only_complete_schema(t
         assert {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")} == {
             "metadata", "accounts", "sources", "upload_assets", "jobs", "operations",
             "requests",
+            "upload_attempts",
         }
     assert not any(".tmp" in item.name or item.name.endswith("-journal") for item in root.iterdir())
 

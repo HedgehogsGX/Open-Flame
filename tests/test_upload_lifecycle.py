@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import sqlite3
 import threading
 import time
@@ -10,8 +12,24 @@ import pytest
 
 from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult, UploadError
+from video_download_control.uploads.contracts import UPLOAD_SUCCESS_EVIDENCE
 from video_download_control.uploads import service as upload_service_module
 from video_download_control.uploads.service import UploadService
+
+
+def synthetic_upload_evidence(request, result):
+    """Return ``result`` carrying the evidence a real adapter would report.
+
+    A success status is only believed when the backend also names the fixed
+    acknowledgement boundary it observed, so a double that claims "submitted"
+    without evidence is correctly rejected as backend_result_invalid.
+    """
+    if result.evidence_kind is not None:
+        return result
+    expected = UPLOAD_SUCCESS_EVIDENCE.get(
+        (request.platform, request.mode, result.status)
+    )
+    return replace(result, evidence_kind=expected) if expected else result
 
 
 class LifecycleBackend:
@@ -46,7 +64,7 @@ class LifecycleBackend:
         return BackendResult("ready", "account_ready")
 
     def upload(self, request, stop):
-        return BackendResult("submitted", "upstream_submitted")
+        return synthetic_upload_evidence(request, BackendResult("submitted", "upstream_submitted"))
 
     def disconnect_local(self, platform, account_id):
         self.disconnects.append((platform, account_id))
