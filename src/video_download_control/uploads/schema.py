@@ -515,7 +515,40 @@ class _SnapshotChanged(Exception):
     pass
 
 
-def _try_lock_schema_file(handle) -> None:
+def _open_schema_lock(path: Path, handle):
+    """Return the descriptor that carries the cross-process schema lock.
+
+    Windows takes a mandatory byte-range lock on the database handle itself.
+    POSIX must not lock the database inode at all: on macOS ``flock`` and the
+    POSIX record locks SQLite uses share one lock space, so holding a lock on
+    the database file makes this process's own ``BEGIN IMMEDIATE`` wait out the
+    full busy timeout and fail. Locking the containing directory keeps the same
+    one-holder-per-upload-root guarantee -- exactly one schema-locked database
+    lives in each root -- while leaving the inode SQLite locks untouched. A
+    directory ``flock`` also belongs to the open file description, so SQLite
+    opening and closing the database cannot drop it the way a POSIX record lock
+    would.
+    """
+    if os.name == "nt":
+        return handle.fileno()
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise UploadSchemaError
+    except (OSError, UploadSchemaError):
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _close_schema_lock(descriptor: int | None) -> None:
+    """Release the POSIX directory descriptor; Windows borrows the file handle."""
+    if descriptor is None or os.name == "nt":
+        return
+    os.close(descriptor)
+
+
+def _try_lock_schema_file(handle, descriptor: int) -> None:
     if os.name == "nt":
         import msvcrt
 
@@ -526,10 +559,10 @@ def _try_lock_schema_file(handle) -> None:
     else:
         import fcntl
 
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _unlock_schema_file(handle) -> None:
+def _unlock_schema_file(handle, descriptor: int) -> None:
     if os.name == "nt":
         import msvcrt
 
@@ -538,13 +571,14 @@ def _unlock_schema_file(handle) -> None:
     else:
         import fcntl
 
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 @contextmanager
 def _exclusive_schema_access(path: Path):
     """Serialize validation plus migration without writing a sidecar lock file."""
     handle = None
+    descriptor = None
     acquired = False
     try:
         deadline = time.monotonic() + _PUBLISH_LINK_TIMEOUT_SECONDS
@@ -578,10 +612,11 @@ def _exclusive_schema_access(path: Path):
         opened = os.fstat(handle.fileno())
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise UploadSchemaError
+        descriptor = _open_schema_lock(path, handle)
         deadline = time.monotonic() + _SCHEMA_LOCK_TIMEOUT_SECONDS
         while True:
             try:
-                _try_lock_schema_file(handle)
+                _try_lock_schema_file(handle, descriptor)
                 acquired = True
                 break
             except OSError:
@@ -594,9 +629,10 @@ def _exclusive_schema_access(path: Path):
     except (OSError, UploadSchemaError):
         if acquired and handle is not None:
             try:
-                _unlock_schema_file(handle)
+                _unlock_schema_file(handle, descriptor)
             except OSError:
                 pass
+        _close_schema_lock(descriptor)
         if handle is not None:
             handle.close()
         raise UploadSchemaError from None
@@ -604,8 +640,9 @@ def _exclusive_schema_access(path: Path):
         yield
     finally:
         try:
-            _unlock_schema_file(handle)
+            _unlock_schema_file(handle, descriptor)
         finally:
+            _close_schema_lock(descriptor)
             handle.close()
 
 
