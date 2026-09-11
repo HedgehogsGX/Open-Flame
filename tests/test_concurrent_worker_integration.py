@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import json
 from collections import deque
 from collections.abc import Callable
@@ -20,6 +22,14 @@ from video_download_control.domain import Platform, SourceType
 from video_download_control.runtime_logging import read_recent_runtime_events
 from video_download_control.worker import WorkerClaim, WorkerRunResult
 from video_download_control.worker_repository import JobLease
+
+
+# Every test here drives the local real Worker, which local_worker_cli rejects
+# off Windows before any of this behaviour is reachable.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="local real Worker requires the verified Windows toolchain",
+)
 
 
 class _BlockingTwoPlatformWorker:

@@ -13,6 +13,7 @@ from video_download_control.api import create_app
 from video_download_control.editing.web import EDITING_HTML
 from video_download_control.ui_assets import page_content_security_policy, ui_asset
 from video_download_control.uploads.web import UPLOAD_HTML
+from video_download_control.workflows.web import WORKFLOW_HTML
 from video_download_control.web import INDEX_HTML
 
 
@@ -77,8 +78,9 @@ def test_ui_asset_rejects_names_outside_the_fixed_allowlist(name: str) -> None:
         (INDEX_HTML, "/", "download-page"),
         (EDITING_HTML, "/edits", "editing-page"),
         (UPLOAD_HTML, "/uploads", "upload-page"),
+        (WORKFLOW_HTML, "/workflows", "workflow-page"),
     ],
-    ids=("download", "editing", "upload"),
+    ids=("download", "editing", "upload", "workflow"),
 )
 def test_pages_share_local_shell_navigation_and_theme_controls(
     page: str, active_path: str, body_class: str
@@ -126,7 +128,7 @@ def test_pages_share_local_shell_navigation_and_theme_controls(
         for attrs in parser.matching("a")
         if "nav-link" in _classes(attrs)
     ]
-    assert {attrs.get("href") for attrs in nav_links} == {"/", "/edits", "/uploads"}
+    assert {attrs.get("href") for attrs in nav_links} == {"/", "/edits", "/uploads", "/workflows"}
     current = [attrs for attrs in nav_links if attrs.get("aria-current") == "page"]
     assert len(current) == 1
     assert current[0].get("href") == active_path
@@ -189,8 +191,9 @@ def test_http_assets_preserve_content_headers_and_upload_laziness(settings) -> N
 
 @pytest.mark.parametrize(
     ("path", "page"),
-    [("/", INDEX_HTML), ("/edits", EDITING_HTML), ("/uploads", UPLOAD_HTML)],
-    ids=("download", "editing", "upload"),
+    [("/", INDEX_HTML), ("/edits", EDITING_HTML), ("/uploads", UPLOAD_HTML),
+     ("/workflows", WORKFLOW_HTML)],
+    ids=("download", "editing", "upload", "workflow"),
 )
 def test_html_pages_bind_inline_business_script_with_self_only_csp(
     settings, path: str, page: str
