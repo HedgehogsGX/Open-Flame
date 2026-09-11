@@ -163,3 +163,70 @@ cover can be compared with the visible platform cover and then imported without
 creating an upload. Bilibili and Douyin require separate observations. WeChat
 Channels remains a separate adapter decision rather than a fallback inside the
 yt-dlp path.
+
+## 2026-09-11 selected-thumbnail identity increment
+
+Status: current uncommitted working tree; no release receipt. The 2026-09-10
+validation table above remains the frozen result of its earlier implementation
+slice and is not presented as a rerun for this increment.
+
+The pinned yt-dlp source archive was rechecked against the current Windows x64
+lock: its size is `6020567` bytes and its SHA-256 is
+`072aad4f2a7604e92155f61a275a4752dc64046c8f6d90df3710525d94cd37c1`.
+Source inspection confirmed that yt-dlp sorts thumbnails by `preference`,
+width, height, identifier and URL, then the single-thumbnail path walks that
+order backwards until one download succeeds. The pinned Douyin extractor gives
+`cover` and `origin_cover` equal static preference and gives its dynamic cover
+families lower preference, but does not provide dimensions for those entries.
+Consequently the private control record can report that yt-dlp selected an
+extractor `origin_cover` variant when that exact identifier succeeds; neither
+the identifier nor yt-dlp's URL tie-break proves that the bytes are the
+publisher's original master or the highest-resolution image.
+
+The Download command still uses exactly one `--write-thumbnail` and does not
+enable `--write-all-thumbnails`. The existing two-field original mapping stays
+first and unchanged for compatibility. A second attempt-private `after_move`
+JSONL record has the exact keys `id`, `filepath`, `thumbnail_id` and
+`thumbnail_filepath`. When no thumbnail was written, both thumbnail fields are
+JSON `null`. The second template does not explicitly serialize separate
+thumbnail URL, query, request-header fields or the complete thumbnail
+collection. It does serialize the upstream `thumbnail_id`; that identifier's
+content receives only bounded non-empty validation before it is discarded, so
+this evidence does not claim that the private identifier value itself can never
+be URL-shaped. Both control files are pre-created privately and receive the
+same byte, line, identity and cleanup checks. The command has one final
+`--paths` destination and no separate `temp:` path because the pinned MoveFiles
+postprocessor does not rewrite nested thumbnail paths.
+
+The adapter validates the two thumbnail fields as an all-or-none pair, bounds
+both strings, resolves the final path beneath the controlled output directory,
+requires a regular single-link image, and then requires that path to equal the
+sole thumbnail classified for the same original media key. A missing mapping
+with a produced image, a mapped image with no output, a second thumbnail, a
+different owner or a reused path fails closed. The raw identifier is validated
+as a bounded non-empty control value and then discarded; it is never copied to
+the public DTO, artifact schema, database, manifest or logs, and no enum is kept
+only for future use. The published artifact remains the same single generic
+`thumbnail`, so existing Workflow 0/1/many resolution and user-facing
+“来源封面（平台返回）” semantics do not change. The Candidate and Local Worker
+CLIs explicitly require a non-empty second file when they create their default
+`SecureSubprocessRunner`. An injected legacy runner may accept that empty file
+only as an unproven compatibility result; it cannot create an identity claim.
+The pinned command writes one second-file record per media item, including
+`null`/`null` for no thumbnail, as exercised by the offline bundle fixture.
+
+Validation executed for this increment:
+
+| Check | Current result | Evidence boundary |
+| --- | --- | --- |
+| `validation/local/validate_thumbnail_identity_mapping_20260911.py` | **16/16 PASS** | Ignored, offline fixture using the hash-pinned yt-dlp bundle. Covers Bilibili, Douyin `origin_cover`/`cover`, a generic unknown ID, no-thumbnail JSON nulls, converter-final `.png` path, fixed shape, scalar/path failures, exact one-thumbnail classification, both control files' adapter-finally cleanup, explicit production-mode empty rejection with a real `SecureSubprocessRunner`, and injected-runner legacy compatibility |
+| `tests/test_yt_dlp_bundle_thumbnail_contract.py` | **4 passed** | Existing pinned parser/converter/after-move integration; no tracked test changed |
+| All existing yt-dlp tests | **103 passed** | Contract, adapter, pinned thumbnail and pinned progress files; existing two-field compatibility plus strict second-file proof path, with no tracked test changed |
+| Candidate/Local Worker CLI regression | **49 passed** | Existing assembly and startup checks after wiring strict mode only for Worker-owned default runners; no tracked test changed |
+| `python -m compileall -q src` and `git diff --check` | **PASS** | Syntax/bytecode and whitespace only; no real extractor or platform behavior |
+
+No real Bilibili or Douyin URL, Cookie, thumbnail response, visible platform
+cover, Workflow import, upload cover adoption or publication was exercised.
+The next external evidence remains one authorized sample per platform, tied to
+the exact commit and pinned downloader. WeChat Channels still has no dedicated
+extractor in this toolchain.

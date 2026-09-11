@@ -645,9 +645,13 @@ def build_local_worker(
     ffmpeg_directory = config.tool_root / "ffmpeg" / "bin"
     ffmpeg_executable = ffmpeg_directory / "ffmpeg.exe"
     ffprobe_executable = ffmpeg_directory / "ffprobe.exe"
-    command_runner = runner or SecureSubprocessRunner(
-        allowed_executable_roots=(python_executable.parent, ffmpeg_directory),
-        runtime_logger=runtime_logger,
+    command_runner = (
+        runner
+        if runner is not None
+        else SecureSubprocessRunner(
+            allowed_executable_roots=(python_executable.parent, ffmpeg_directory),
+            runtime_logger=runtime_logger,
+        )
     )
     factory = YtDlpCommandFactory(
         executable=python_executable,
@@ -673,6 +677,7 @@ def build_local_worker(
     adapter = YtDlpAdapter(
         factory=factory,
         runner=command_runner,
+        require_thumbnail_mapping_payload=runner is None,
         cookie_resolver=cookie_resolver,
         probe_timeout_seconds=config.probe_timeout_seconds,
         download_timeout_seconds=config.download_timeout_seconds,

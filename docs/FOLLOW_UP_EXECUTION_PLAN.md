@@ -22,6 +22,15 @@ Workflow 先纯读取选定确定性受管 ID 并 CAS 写入 `upload_cover_id`�
 该切片未增加服务、数据库、Schema、runtime、依赖或 tracked tests，见
 [Workflow 来源封面偏好证据](../validation/iteration-0.28.0-workflow-source-cover-preference.md)。
 
+后续的单图身份增量保留原两字段下载 mapping，并新增第二个 attempt-private 四字段
+`after_move` 控制记录。它只把 yt-dlp 选中 thumbnail 的最终路径绑定到 original，再与目录中
+唯一 classified thumbnail 核对；模板未显式序列化 thumbnail URL、headers、query 字段或完整
+候选列表，原始 identifier 内容仅做有界校验后丢弃，也不扩展公共 DTO、Schema、服务或依赖。
+Candidate/Local Worker CLI 自行创建的默认 `SecureSubprocessRunner` 要求第二记录非空，注入式
+旧 runner 的空文件只能保持无证明兼容。命令继续只有一个 `--write-thumbnail` 和一个最终
+`--paths` 目录；没有真实 Bilibili/Douyin 样本前，不能把该离线证明解释为平台封面可用、
+最高质量、`origin_cover` 或 Workflow/上传后台已采用。
+
 ## 1. 目标、边界与完成定义
 
 当前阶段目标是在不改变首批 **Bilibili、抖音、视频号** 上传边界的前提下，冻结并验收已接线的中间编辑、隔离 AI 听写/翻译/标准音色配音和 URL 自动流程。小红书等其他上传平台、多 P/合集、声音克隆及本地 AI provider 后续维护。

@@ -35,6 +35,11 @@ _DOWNLOAD_PROGRESS_TEMPLATE = (
     "%(progress.max_progress)j"
 )
 _POSTPROCESS_PROGRESS_TEMPLATE = "postprocess:VDC_PHASE|postprocessing"
+_DOWNLOAD_THUMBNAIL_MAPPING_TEMPLATE = (
+    'after_move:{"id":%(id)j,"filepath":%(filepath)j,'
+    '"thumbnail_id":%(thumbnails.-1.id|null)j,'
+    '"thumbnail_filepath":%(thumbnails.-1.filepath|null)j}'
+)
 
 
 class YtDlpContractError(ValueError):
@@ -158,6 +163,7 @@ class YtDlpCommand:
     arguments: tuple[str, ...] = field(repr=False)
     expected_version: str
     mapping_path: Path | None = field(default=None, repr=False)
+    thumbnail_mapping_path: Path | None = field(default=None, repr=False)
 
 
 class YtDlpCommandFactory:
@@ -264,6 +270,7 @@ class YtDlpCommandFactory:
                 "download output must stay inside the attempt root"
             )
         mapping_path = root / "yt-dlp-after-move.jsonl"
+        thumbnail_mapping_path = root / "yt-dlp-thumbnail-after-move.jsonl"
         # Prefer direct media URLs over HLS when both are available.  The
         # pinned YouTube extractor otherwise ranks an HLS variant first for
         # some videos; its merged timestamps can decode with duplicate-DTS
@@ -283,6 +290,9 @@ class YtDlpCommandFactory:
             *self._base_arguments(root, request.platform, cookie),
             "--format",
             format_selector,
+            # The after_move thumbnail record below depends on yt-dlp using
+            # this final directory directly.  A separate ``temp:`` path would
+            # leave the nested thumbnail filepath stale after MoveFiles.
             "--paths",
             str(output),
             "--output",
@@ -309,6 +319,9 @@ class YtDlpCommandFactory:
             "--print-to-file",
             "after_move:%(.{id,filepath})j",
             self._output_template_literal(mapping_path),
+            "--print-to-file",
+            _DOWNLOAD_THUMBNAIL_MAPPING_TEMPLATE,
+            self._output_template_literal(thumbnail_mapping_path),
             "--progress",
             "--newline",
             "--progress-delta",
@@ -320,7 +333,11 @@ class YtDlpCommandFactory:
             "--",
             request.canonical_url,
         ]
-        return self._command(tuple(arguments), mapping_path=mapping_path)
+        return self._command(
+            tuple(arguments),
+            mapping_path=mapping_path,
+            thumbnail_mapping_path=thumbnail_mapping_path,
+        )
 
     def _base_arguments(
         self,
@@ -388,6 +405,7 @@ class YtDlpCommandFactory:
         arguments: tuple[str, ...],
         *,
         mapping_path: Path | None = None,
+        thumbnail_mapping_path: Path | None = None,
     ) -> YtDlpCommand:
         command_arguments = (
             (str(self.zipimport_entrypoint), *arguments)
@@ -403,6 +421,7 @@ class YtDlpCommandFactory:
             arguments=command_arguments,
             expected_version=self.expected_version,
             mapping_path=mapping_path,
+            thumbnail_mapping_path=thumbnail_mapping_path,
         )
 
     @staticmethod

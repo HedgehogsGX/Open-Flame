@@ -29,6 +29,12 @@
 - 下载域原有 yt-dlp 路径会把选中的平台 thumbnail 保存为 ready 资产的登记辅助文件；下载页
   以“来源封面（平台返回）”预览/下载，JPEG、PNG、WebP 可通过深链进入上传页。上传页只有在
   用户点击后才复核并复制到独立受管封面库，且不会自动选择封面、建立草稿或触发上传。
+  当前命令仍只写一张 thumbnail；第二个 attempt-private `after_move` 控制记录会把所选图片的
+  最终路径绑定到同一 original，并要求它等于目录中唯一归属该 original 的 thumbnail。固定四字段
+  模板未显式序列化 thumbnail URL、headers、query 字段或完整候选列表；上游原始 identifier 的
+  内容仅做有界校验后即丢弃，不进入 DTO、manifest、数据库或日志，也不形成 `origin_cover` 的
+  持久证据。Candidate/Local Worker CLI 自行创建的默认 `SecureSubprocessRunner` 若未得到第二
+  记录会失败关闭；注入式旧 runner 的空文件只能进入不带证明的兼容路径。
 - Workflow 可显式启用 `upload.prefer_download_cover`，但仍必须保留一份生成封面作为 fallback。
   它只按 workflow 已冻结的 `download_asset_id` 查询同一 ready original 所属、登记关系完整且唯一的
   ready thumbnail；没有候选时使用生成封面，多候选或登记/路径身份异常时失败关闭。安全 resolver
@@ -115,8 +121,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
    Douyin `authentication_required` 和未执行平台都不是平台级支持或否定结论。固定 yt-dlp
    的 Bilibili 提取器可读取 `videoData.pic`，Douyin 提取器可列出 `cover`、`origin_cover`
-   等变体，但当前单 thumbnail 流程不保证得到 `origin_cover`，且两平台真实封面提取及 Workflow
-   自动采用均未验收。视频号没有专用 yt-dlp extractor，本轮没有增加视频号网址封面能力。
+   等变体；当前私有控制记录可核对 yt-dlp 实际选中的单图路径，但不保证得到 `origin_cover`，
+   不保留变体身份证明，且两平台真实封面提取及 Workflow 自动采用均未验收。视频号没有专用
+   yt-dlp extractor，本轮没有增加视频号网址封面能力。
    “来源封面（平台返回）”也不代表发布者原始母版、最高分辨率或无损文件。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT

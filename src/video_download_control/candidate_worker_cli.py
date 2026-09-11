@@ -388,12 +388,16 @@ def build_candidate_worker(
     except OSError as exc:
         raise CandidateStartupError("network isolation preflight failed") from exc
 
-    command_runner = runner or SecureSubprocessRunner(
-        allowed_executable_roots=(
-            config.yt_dlp_executable.parent,
-            config.ffmpeg_directory,
-        ),
-        runtime_logger=runtime_logger,
+    command_runner = (
+        runner
+        if runner is not None
+        else SecureSubprocessRunner(
+            allowed_executable_roots=(
+                config.yt_dlp_executable.parent,
+                config.ffmpeg_directory,
+            ),
+            runtime_logger=runtime_logger,
+        )
     )
     endpoint = ControlledEgressEndpoint(
         f"http://127.0.0.1:{config.relay_port}",
@@ -431,6 +435,7 @@ def build_candidate_worker(
     adapter = YtDlpAdapter(
         factory=factory,
         runner=command_runner,  # type: ignore[arg-type]
+        require_thumbnail_mapping_payload=runner is None,
         cookie_resolver=cookie_resolver,
         probe_timeout_seconds=config.probe_timeout_seconds,
         download_timeout_seconds=config.download_timeout_seconds,

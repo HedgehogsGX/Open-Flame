@@ -166,6 +166,12 @@ _NETWORK_MARKERS = (
 
 
 @dataclass(frozen=True, slots=True)
+class _ThumbnailProof:
+    media_key: str
+    thumbnail_path: Path | None
+
+
+@dataclass(frozen=True, slots=True)
 class _MappedOriginal:
     media_key: str
     path: Path
@@ -381,6 +387,7 @@ class YtDlpAdapter:
         probe_stdout_limit_bytes: int = 2 * 1024 * 1024,
         tool_output_limit_bytes: int = 1024 * 1024,
         mapping_limit_bytes: int = _DEFAULT_MAPPING_LIMIT_BYTES,
+        require_thumbnail_mapping_payload: bool = False,
     ) -> None:
         self._factory = factory
         self.network_mode = (
@@ -389,6 +396,9 @@ class YtDlpAdapter:
             else AdapterNetworkMode.CONTROLLED_EGRESS
         )
         self._runner = runner
+        if not isinstance(require_thumbnail_mapping_payload, bool):
+            raise ValueError("thumbnail mapping payload policy must be boolean")
+        self._require_thumbnail_mapping_payload = require_thumbnail_mapping_payload
         self._cookie_resolver = cookie_resolver
         self._version_timeout_seconds = _positive_finite(
             version_timeout_seconds, "version timeout"
@@ -472,6 +482,15 @@ class YtDlpAdapter:
             context=context,
             output_dir=request.output_dir,
         )
+        try:
+            thumbnail_mapping_file = _prepare_thumbnail_mapping_file(
+                command,
+                context=context,
+                output_dir=request.output_dir,
+            )
+        except BaseException:
+            _remove_mapping_file(mapping_file)
+            raise
         progress_tracker = _YtDlpProgressTracker(progress)
         try:
             progress(ProgressUpdate(phase="downloading", fraction=0.0))
@@ -491,9 +510,19 @@ class YtDlpAdapter:
                 output_dir=request.output_dir,
                 max_bytes=self._mapping_limit_bytes,
             )
+            thumbnail_proofs = _read_thumbnail_mapping(
+                thumbnail_mapping_file,
+                mappings=mappings,
+                output_dir=request.output_dir,
+                max_bytes=self._mapping_limit_bytes,
+                require_payload=self._require_thumbnail_mapping_payload,
+            )
         finally:
-            _remove_mapping_file(mapping_file)
-        classified = _classify_output(request, mappings)
+            try:
+                _remove_mapping_file(thumbnail_mapping_file)
+            finally:
+                _remove_mapping_file(mapping_file)
+        classified = _classify_output(request, mappings, thumbnail_proofs)
         try:
             total_bytes = sum(
                 item.path.stat().st_size
@@ -1065,7 +1094,32 @@ def _prepare_mapping_file(
     context: AdapterContext,
     output_dir: Path,
 ) -> _ControlFile:
-    mapping_path = command.mapping_path
+    return _prepare_control_file(
+        command.mapping_path,
+        context=context,
+        output_dir=output_dir,
+    )
+
+
+def _prepare_thumbnail_mapping_file(
+    command: YtDlpCommand,
+    *,
+    context: AdapterContext,
+    output_dir: Path,
+) -> _ControlFile:
+    return _prepare_control_file(
+        command.thumbnail_mapping_path,
+        context=context,
+        output_dir=output_dir,
+    )
+
+
+def _prepare_control_file(
+    mapping_path: Path | None,
+    *,
+    context: AdapterContext,
+    output_dir: Path,
+) -> _ControlFile:
     if mapping_path is None or not mapping_path.is_absolute():
         raise AdapterFailure(
             ErrorCode.EXTRACTOR_BROKEN,
@@ -1171,13 +1225,11 @@ def _remove_mapping_file(control_file: _ControlFile) -> None:
         ) from exc
 
 
-def _read_download_mapping(
+def _read_mapping_payload(
     control_file: _ControlFile,
     *,
-    expected_media_keys: tuple[str, ...],
-    output_dir: Path,
     max_bytes: int,
-) -> tuple[_MappedOriginal, ...]:
+) -> bytes:
     mapping_path = control_file.path
     descriptor: int | None = None
     try:
@@ -1268,6 +1320,17 @@ def _read_download_mapping(
             ErrorCode.EXTRACTOR_BROKEN,
             "yt-dlp output mapping exceeded its byte limit",
         )
+    return payload
+
+
+def _read_download_mapping(
+    control_file: _ControlFile,
+    *,
+    expected_media_keys: tuple[str, ...],
+    output_dir: Path,
+    max_bytes: int,
+) -> tuple[_MappedOriginal, ...]:
+    payload = _read_mapping_payload(control_file, max_bytes=max_bytes)
     lines = payload.splitlines()
     if not lines or len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
         raise AdapterFailure(
@@ -1351,6 +1414,168 @@ def _read_download_mapping(
     return tuple(by_media_key[media_key] for media_key in expected_media_keys)
 
 
+def _read_thumbnail_mapping(
+    control_file: _ControlFile,
+    *,
+    mappings: tuple[_MappedOriginal, ...],
+    output_dir: Path,
+    max_bytes: int,
+    require_payload: bool = False,
+) -> tuple[_ThumbnailProof, ...] | None:
+    payload = _read_mapping_payload(control_file, max_bytes=max_bytes)
+    if not payload:
+        if require_payload:
+            raise AdapterFailure(
+                ErrorCode.EXTRACTOR_BROKEN,
+                "yt-dlp completed without its required thumbnail mapping",
+            )
+        # Compatibility for injected legacy runners that implement only the
+        # original two-field control record.  This path carries no thumbnail
+        # identity proof; the production command writes one record per item.
+        return None
+    lines = payload.splitlines()
+    if len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            "yt-dlp thumbnail mapping has an invalid record count",
+        )
+
+    try:
+        resolved_output = output_dir.resolve(strict=True)
+    except OSError as exc:
+        raise AdapterFailure(
+            ErrorCode.STORAGE_ERROR,
+            "yt-dlp output directory could not be inspected",
+        ) from exc
+    expected = {mapping.media_key: mapping for mapping in mappings}
+    proofs: dict[str, _ThumbnailProof] = {}
+    thumbnail_paths: set[Path] = set()
+    original_paths = {mapping.path for mapping in mappings}
+    for line in lines:
+        try:
+            record = json.loads(line.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise AdapterFailure(
+                ErrorCode.EXTRACTOR_BROKEN,
+                "yt-dlp thumbnail mapping contains invalid JSONL",
+            ) from exc
+        if not isinstance(record, dict) or set(record) != {
+            "id",
+            "filepath",
+            "thumbnail_id",
+            "thumbnail_filepath",
+        }:
+            raise AdapterFailure(
+                ErrorCode.EXTRACTOR_BROKEN,
+                "yt-dlp thumbnail mapping contains an invalid record shape",
+            )
+        media_key = record["id"]
+        filepath = record["filepath"]
+        thumbnail_id = record["thumbnail_id"]
+        thumbnail_filepath = record["thumbnail_filepath"]
+        if (
+            _safe_text(media_key, max_chars=256) != media_key
+            or _safe_text(filepath, max_chars=4096) != filepath
+        ):
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail mapping contains invalid scalar values",
+            )
+        if (thumbnail_id is None) != (thumbnail_filepath is None):
+            raise AdapterFailure(
+                ErrorCode.EXTRACTOR_BROKEN,
+                "yt-dlp thumbnail mapping contains an incomplete identity",
+            )
+        original_path = Path(filepath)
+        if not original_path.is_absolute():
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail mapping contains a non-absolute original path",
+            )
+        try:
+            resolved_original_path = original_path.resolve(strict=True)
+        except OSError as exc:
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail mapping references a missing original",
+            ) from exc
+        expected_original = expected.get(media_key)
+        if (
+            expected_original is None
+            or resolved_original_path != expected_original.path
+            or resolved_original_path.parent != resolved_output
+        ):
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail mapping does not match the original mapping",
+            )
+
+        verified_thumbnail_path: Path | None = None
+        if thumbnail_id is not None:
+            if (
+                not isinstance(thumbnail_id, str)
+                or not isinstance(thumbnail_filepath, str)
+                or _safe_text(thumbnail_id, max_chars=128) != thumbnail_id
+                or _safe_text(thumbnail_filepath, max_chars=4096)
+                != thumbnail_filepath
+            ):
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping contains invalid identity values",
+                )
+            mapped_thumbnail_path = Path(thumbnail_filepath)
+            if not mapped_thumbnail_path.is_absolute():
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping contains a non-absolute path",
+                )
+            try:
+                resolved_thumbnail_path = mapped_thumbnail_path.resolve(strict=True)
+            except OSError as exc:
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping references a missing thumbnail",
+                ) from exc
+            if (
+                resolved_thumbnail_path.parent != resolved_output
+                or resolved_thumbnail_path.suffix.lower() not in _IMAGE_EXTENSIONS
+            ):
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping references an invalid thumbnail",
+                )
+            _validate_regular_output_entry(resolved_thumbnail_path)
+            verified_thumbnail_path = resolved_thumbnail_path
+        if media_key in proofs:
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail mapping contains a duplicate identifier",
+            )
+        if verified_thumbnail_path is not None:
+            if verified_thumbnail_path in thumbnail_paths:
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping contains a duplicate thumbnail path",
+                )
+            if verified_thumbnail_path in original_paths:
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail mapping reuses an original as a thumbnail",
+                )
+            thumbnail_paths.add(verified_thumbnail_path)
+        proofs[media_key] = _ThumbnailProof(
+            media_key=media_key,
+            thumbnail_path=verified_thumbnail_path,
+        )
+
+    if set(proofs) != set(expected):
+        raise AdapterFailure(
+            ErrorCode.VALIDATION_FAILED,
+            "yt-dlp thumbnail mapping does not match the probed media set",
+        )
+    return tuple(proofs[mapping.media_key] for mapping in mappings)
+
+
 def _validate_regular_output_entry(path: Path) -> None:
     try:
         info = path.lstat()
@@ -1378,6 +1603,7 @@ def _validate_regular_output_entry(path: Path) -> None:
 def _classify_output(
     request: DownloadRequest,
     mappings: tuple[_MappedOriginal, ...],
+    thumbnail_proofs: tuple[_ThumbnailProof, ...] | None = None,
 ) -> DownloadResult:
     output = request.output_dir
     if not output.is_absolute() or output.is_symlink():
@@ -1483,6 +1709,35 @@ def _classify_output(
                 ordinal=len(target),
             )
         )
+    if thumbnail_proofs is not None:
+        proofs = {proof.media_key: proof for proof in thumbnail_proofs}
+        if (
+            len(proofs) != len(thumbnail_proofs)
+            or set(proofs) != {mapping.media_key for mapping in mappings}
+        ):
+            raise AdapterFailure(
+                ErrorCode.VALIDATION_FAILED,
+                "yt-dlp thumbnail proof does not match the original mapping",
+            )
+        for mapping in mappings:
+            proof = proofs[mapping.media_key]
+            owned_thumbnails = tuple(
+                item for item in thumbnails if item.media_key == mapping.media_key
+            )
+            if proof.thumbnail_path is None:
+                if owned_thumbnails:
+                    raise AdapterFailure(
+                        ErrorCode.VALIDATION_FAILED,
+                        "yt-dlp thumbnail output does not match its proof",
+                    )
+            elif (
+                len(owned_thumbnails) != 1
+                or owned_thumbnails[0].path != proof.thumbnail_path
+            ):
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp thumbnail output does not match its proof",
+                )
     return DownloadResult(
         files=produced_originals,
         thumbnails=tuple(thumbnails),
