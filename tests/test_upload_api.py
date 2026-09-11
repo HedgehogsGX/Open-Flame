@@ -241,7 +241,20 @@ def test_unknown_requires_acknowledgement_and_creates_new_unconfirmed_draft(uplo
     client.post(f"/api/v1/uploads/jobs/{job['id']}/confirm")
     _wait(client, "/api/v1/uploads/jobs", lambda rows: rows[0]["state"] == "unknown")
     assert client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={}).status_code == 409
-    retry = client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={"acknowledge_unknown": True})
+    # Acknowledging an unknown result is its own step now: read the attempt
+    # receipt, state a conclusion, and confirm the platform-side check.
+    receipt = client.get(f"/api/v1/uploads/jobs/{job['id']}/attempt").json()
+    reconciled = client.post(
+        f"/api/v1/uploads/jobs/{job['id']}/reconcile",
+        json={
+            "attempt_id": receipt["id"],
+            "expected_revision": receipt["revision"],
+            "conclusion": "not_accepted",
+            "acknowledge_platform_check": True,
+        },
+    )
+    assert reconciled.status_code == 200, reconciled.text
+    retry = client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={})
     assert retry.status_code == 201
     assert retry.json()["state"] == "draft" and retry.json()["id"] != job["id"]
     assert len([call for call in backend.calls if call[0] == "upload"]) == 1
