@@ -8,12 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult, UploadError
 from video_download_control.uploads import service as upload_service_module
 from video_download_control.uploads.service import UploadService
 
 
 class LifecycleBackend:
+    # The service pins the adapter identity into every attempt receipt and
+    # rejects anything outside the owned allowlist, so borrow the real one.
+    receipt_identity = staticmethod(SauBackend.receipt_identity)
     def __init__(self) -> None:
         self.login_entered = threading.Event()
         self.login_release = threading.Event()

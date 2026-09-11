@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from video_download_control.uploads.backend import SauBackend
 from video_download_control.api import create_app
 from video_download_control.uploads import api as upload_api
 from video_download_control.uploads import schema as upload_schema
@@ -19,6 +20,9 @@ from video_download_control.uploads.service import UploadService, default_upload
 
 
 class FakeBackend:
+    # The service pins the adapter identity into every attempt receipt and
+    # rejects anything outside the owned allowlist, so borrow the real one.
+    receipt_identity = staticmethod(SauBackend.receipt_identity)
     def __init__(self):
         self.calls = []
         self.outcome = "submitted"

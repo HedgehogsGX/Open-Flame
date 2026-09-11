@@ -13,6 +13,7 @@ import tracemalloc
 
 import pytest
 
+from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult
 from video_download_control.uploads.service import UploadService
 
@@ -24,6 +25,9 @@ MAX_TRANSIENT_POLL_BYTES = 16 * 1024**2
 
 
 class SequencedBackend:
+    # The service pins the adapter identity into every attempt receipt and
+    # rejects anything outside the owned allowlist, so borrow the real one.
+    receipt_identity = staticmethod(SauBackend.receipt_identity)
     """A local backend whose upload calls advance only when the test permits."""
 
     def __init__(self) -> None:
@@ -75,6 +79,9 @@ class SequencedBackend:
 
 
 class PollingBackend:
+    # The service pins the adapter identity into every attempt receipt and
+    # rejects anything outside the owned allowlist, so borrow the real one.
+    receipt_identity = staticmethod(SauBackend.receipt_identity)
     def inspect(self) -> dict:
         return {"ready": True, "code": "synthetic_ready"}
 

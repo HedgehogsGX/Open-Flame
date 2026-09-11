@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from video_download_control.uploads.backend import SauBackend
 from video_download_control.uploads.contracts import BackendResult, UploadError
 from video_download_control.uploads import service as upload_service_module
 from video_download_control.uploads.schema import SCHEMA_DDL, SCHEMA_VERSION
@@ -17,6 +18,9 @@ from video_download_control.uploads.service import UploadService, default_upload
 
 
 class FakeBackend:
+    # The service pins the adapter identity into every attempt receipt and
+    # rejects anything outside the owned allowlist, so borrow the real one.
+    receipt_identity = staticmethod(SauBackend.receipt_identity)
     def __init__(self):
         self.uploads = []
         self.accounts = []
