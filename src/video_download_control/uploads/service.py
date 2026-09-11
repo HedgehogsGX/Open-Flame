@@ -26,6 +26,10 @@ from uuid import uuid4
 
 from PIL import Image, UnidentifiedImageError
 
+from ..build_identity import (
+    ProductBuildIdentityError,
+    current_product_identity,
+)
 from ..managed_files import (
     ManagedFileChanged,
     ManagedFileSizeExceeded,
@@ -45,19 +49,27 @@ from .activity_lock import (
     upload_activity_lock,
 )
 from .contracts import (
+    UPLOAD_ATTEMPT_STATES,
+    UPLOAD_EVIDENCE_KINDS,
+    UPLOAD_RECONCILIATIONS,
+    UPLOAD_RESULT_STATUSES,
     BackendResult,
     PLATFORMS,
     UploadBackend,
     UploadError,
     UploadRequest,
     is_tencent_short_title_output,
+    legacy_migrated_platform_options,
     normalize_tencent_short_title,
+    upload_adapter_identity_matches,
+    upload_evidence_is_valid,
 )
 from .identity import (
     UPLOAD_RETRY_PAYLOAD_KEYS,
     bind_current_upload_target,
     normalize_account_bindings,
     normalize_upload_job_batch,
+    upload_job_definition_digest,
     upload_retry_payload_matches,
 )
 from .login_progress import validate_update
@@ -82,7 +94,12 @@ MAX_COVER_PIXELS = 40_000_000
 UPLOAD_RESERVE_BYTES = 64 * 1024**2
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _SAFE_CODE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_PRODUCT_IDENTITY = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,95}\+build\.sha256\.[0-9a-f]{64}$"
+)
+_SAFE_RECEIPT_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _UPLOAD_AUTH_INVALID_CODES = frozenset({"account_invalid", "account_missing"})
 _PAGE_CURSOR = re.compile(r"^([0-3]):([1-9][0-9]*)$")
 _JOB_PRIORITY = "CASE WHEN j.state='running' THEN 0 WHEN j.state='queued' THEN 1 WHEN j.state IN ('draft','unknown','failed','canceled') THEN 2 ELSE 3 END"
@@ -122,6 +139,15 @@ def default_upload_root(data_root: Path) -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _is_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
 
 
 def _plain(path: Path, *, directory: bool = False) -> os.stat_result:
@@ -1981,6 +2007,612 @@ class UploadService:
                 "s.media_state AS source_media_record_state FROM jobs j "
                 "JOIN accounts a ON a.id=j.account_id JOIN sources s ON s.id=j.source_id")
 
+    @staticmethod
+    def _attempt_public(row: sqlite3.Row | Mapping[str, object]) -> dict:
+        return dict(row)
+
+    @staticmethod
+    def _validate_attempt_state(
+        job: Mapping[str, object], attempt: Mapping[str, object]
+    ) -> None:
+        """Reject a receipt whose state cannot have been produced for its job."""
+
+        state = attempt.get("state")
+        status = attempt.get("result_status")
+        code = attempt.get("result_code")
+        evidence_kind = attempt.get("evidence_kind")
+        conclusion = attempt.get("reconciliation")
+        reconciliation_evidence = attempt.get("reconciliation_evidence_kind")
+        revision = attempt.get("revision")
+        dispatch_at = attempt.get("dispatch_started_at")
+        responded_at = attempt.get("responded_at")
+        reconciled_at = attempt.get("reconciled_at")
+        optional_timestamps = (dispatch_at, responded_at, reconciled_at)
+        if (
+            state not in UPLOAD_ATTEMPT_STATES
+            or status is not None and status not in UPLOAD_RESULT_STATUSES
+            or code is not None
+            and (not isinstance(code, str) or _SAFE_CODE.fullmatch(code) is None)
+            or evidence_kind is not None and evidence_kind not in UPLOAD_EVIDENCE_KINDS
+            or conclusion is not None and conclusion not in UPLOAD_RECONCILIATIONS
+            or reconciliation_evidence not in {None, "operator_platform_check"}
+            or not _is_timestamp(attempt.get("created_at"))
+            or any(value is not None and not _is_timestamp(value) for value in optional_timestamps)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or not 0 <= revision <= 2_147_483_647
+            or not upload_evidence_is_valid(
+                job.get("platform"),
+                job.get("mode"),
+                status,
+                evidence_kind,
+            )
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+
+        terminal_code = isinstance(code, str) and bool(code)
+        raw_unknown_result = (
+            status in {"unknown", "canceled"}
+            or status == "submitted" and job.get("mode") != "publish"
+            or status == "draft_saved" and job.get("mode") != "draft"
+        )
+        no_reconciliation = all(
+            value is None
+            for value in (conclusion, reconciliation_evidence, reconciled_at)
+        )
+        if state == "reserved":
+            valid = (
+                status is None
+                and code is None
+                and evidence_kind is None
+                and dispatch_at is None
+                and responded_at is None
+                and revision == 0
+                and job.get("state") == "running"
+                and no_reconciliation
+            )
+        elif state == "dispatch_may_have_started":
+            valid = (
+                status is None
+                and code is None
+                and evidence_kind is None
+                and dispatch_at is not None
+                and responded_at is None
+                and revision == 1
+                and job.get("state") == "running"
+                and no_reconciliation
+            )
+        elif state == "responded":
+            valid = (
+                terminal_code
+                and responded_at is not None
+                and no_reconciliation
+                and job.get("state") == status
+                and job.get("code") == code
+                and (
+                    dispatch_at is None
+                    and revision == 1
+                    and status in {"failed", "canceled"}
+                    and evidence_kind is None
+                    or dispatch_at is not None
+                    and revision == 2
+                    and (
+                        status == "failed"
+                        or status == "submitted" and job.get("mode") == "publish"
+                        or status == "draft_saved" and job.get("mode") == "draft"
+                    )
+                )
+            )
+        elif state == "unknown":
+            valid = (
+                terminal_code
+                and raw_unknown_result
+                and dispatch_at is not None
+                and revision == 2
+                and no_reconciliation
+                and job.get("state") == "unknown"
+                and job.get("code") == code
+                and (
+                    responded_at is not None
+                    or status == "unknown"
+                    and code == "interrupted_result_unknown"
+                    and evidence_kind is None
+                )
+            )
+        else:
+            expected_job_result = {
+                "not_accepted": ("failed", "manual_remote_not_accepted"),
+                "submission_acknowledged": (
+                    "submitted",
+                    "manual_submission_acknowledged",
+                ),
+                "draft_saved": ("draft_saved", "manual_platform_draft_saved"),
+            }.get(conclusion)
+            conclusion_valid = (
+                conclusion == "not_accepted"
+                or conclusion == "submission_acknowledged"
+                and job.get("mode") == "publish"
+                or conclusion == "draft_saved"
+                and job.get("platform") == "tencent"
+                and job.get("mode") == "draft"
+            )
+            valid = (
+                terminal_code
+                and raw_unknown_result
+                and dispatch_at is not None
+                and revision == 3
+                and conclusion_valid
+                and reconciliation_evidence == "operator_platform_check"
+                and reconciled_at is not None
+                and expected_job_result is not None
+                and (job.get("state"), job.get("code")) == expected_job_result
+                and (
+                    responded_at is not None
+                    or status == "unknown"
+                    and code == "interrupted_result_unknown"
+                    and evidence_kind is None
+                )
+            )
+        if not valid:
+            raise UploadError("upload_attempt_identity_changed")
+
+    def attempt(self, job_id: str) -> dict:
+        normalized_id = _identifier(job_id)
+        with self._db() as db:
+            # The job, receipt, request, lineage and referenced identities must
+            # come from one WAL snapshot while a worker may finalize in
+            # another connection.
+            db.execute("BEGIN")
+            # Keep a missing job distinct from a valid pre-dispatch draft, for
+            # which an attempt receipt deliberately does not exist yet.
+            job = self._get_job(db, normalized_id)
+            row = db.execute(
+                "SELECT * FROM upload_attempts WHERE job_id=?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                raise UploadError("upload_attempt_not_found")
+            attempt = self._attempt_public(row)
+            self._validate_attempt_identity_in(
+                db,
+                job,
+                attempt,
+                require_current_leaf=False,
+            )
+            self._validate_attempt_state(job, attempt)
+            return attempt
+
+    def _attempt_lineage_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+    ) -> tuple[dict, list[dict]]:
+        """Return the immutable root and complete lineage containing ``job``."""
+
+        current = dict(job)
+        current_id = _identifier(current.get("id"))
+        seen = {current_id}
+        while current.get("retry_of") is not None:
+            parent_id = _identifier(current.get("retry_of"))
+            if parent_id in seen:
+                raise UploadError("upload_attempt_identity_changed")
+            seen.add(parent_id)
+            try:
+                parent = self._get_job(db, parent_id)
+            except UploadError:
+                raise UploadError("upload_attempt_identity_changed") from None
+            if not upload_retry_payload_matches(parent, current):
+                raise UploadError("upload_attempt_identity_changed")
+            current = parent
+        root = current
+        try:
+            lineage = self._retry_lineage_in(db, root)
+        except UploadError:
+            raise UploadError("upload_attempt_identity_changed") from None
+        if current_id not in {item["id"] for item in lineage}:
+            raise UploadError("upload_attempt_identity_changed")
+        return root, lineage
+
+    def _attempt_request_owner_in(
+        self,
+        db: sqlite3.Connection,
+        root: Mapping[str, object],
+    ) -> sqlite3.Row:
+        """Resolve the one request ledger that owns an immutable retry root."""
+
+        root_id = _identifier(root.get("id"))
+        rows = list(
+            db.execute(
+                "SELECT id,digest,job_ids,digest_version FROM requests "
+                "WHERE instr(job_ids,?)>0 ORDER BY rowid",
+                (json.dumps(root_id),),
+            )
+        )
+        owners: list[sqlite3.Row] = []
+        for row in rows:
+            try:
+                roots = self._request_jobs_from_row_in(db, row)
+            except UploadError:
+                raise UploadError("upload_attempt_identity_changed") from None
+            if root_id in {item["id"] for item in roots}:
+                owners.append(row)
+        if len(owners) != 1:
+            raise UploadError("upload_attempt_identity_changed")
+        return owners[0]
+
+    @staticmethod
+    def _attempt_cover_identity_in(
+        db: sqlite3.Connection,
+        asset_id: object,
+    ) -> tuple[str | None, str | None]:
+        if asset_id is None:
+            return None, None
+        try:
+            normalized_id = _identifier(asset_id)
+        except UploadError:
+            raise UploadError("upload_attempt_identity_changed") from None
+        row = db.execute(
+            "SELECT id,sha256 FROM upload_assets WHERE id=?",
+            (normalized_id,),
+        ).fetchone()
+        if (
+            row is None
+            or not isinstance(row["sha256"], str)
+            or _SHA256.fullmatch(row["sha256"]) is None
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+        return row["id"], row["sha256"]
+
+    def _attempt_definition_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+        *,
+        require_current_leaf: bool = True,
+    ) -> tuple[dict[str, object], sqlite3.Row]:
+        """Rebuild all database-owned identity recorded by one attempt."""
+
+        root, lineage = self._attempt_lineage_in(db, job)
+        if require_current_leaf and lineage[-1]["id"] != job["id"]:
+            raise UploadError("upload_attempt_identity_changed")
+        request = self._attempt_request_owner_in(db, root)
+        account = db.execute(
+            "SELECT * FROM accounts WHERE id=?", (job["account_id"],)
+        ).fetchone()
+        source = db.execute(
+            "SELECT id,sha256 FROM sources WHERE id=?", (job["source_id"],)
+        ).fetchone()
+        if (
+            account is None
+            or account["platform"] != job["platform"]
+            or source is None
+            or not isinstance(source["sha256"], str)
+            or _SHA256.fullmatch(source["sha256"]) is None
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+        landscape_id, landscape_sha256 = self._attempt_cover_identity_in(
+            db, job.get("cover_landscape_asset_id")
+        )
+        portrait_id, portrait_sha256 = self._attempt_cover_identity_in(
+            db, job.get("cover_portrait_asset_id")
+        )
+        try:
+            job_digest = upload_job_definition_digest(job)
+        except (KeyError, TypeError, UploadError, ValueError):
+            raise UploadError("upload_attempt_identity_changed") from None
+        if not isinstance(job_digest, str) or _SHA256.fullmatch(job_digest) is None:
+            raise UploadError("upload_attempt_identity_changed")
+        return (
+            {
+                "job_id": job["id"],
+                "root_job_id": root["id"],
+                "request_id": request["id"],
+                "request_digest": request["digest"],
+                "request_digest_version": request["digest_version"],
+                "job_digest": job_digest,
+                "job_digest_version": 1,
+                "account_id": account["id"],
+                "platform": account["platform"],
+                "source_id": source["id"],
+                "source_sha256": source["sha256"],
+                "cover_landscape_asset_id": landscape_id,
+                "cover_landscape_sha256": landscape_sha256,
+                "cover_portrait_asset_id": portrait_id,
+                "cover_portrait_sha256": portrait_sha256,
+            },
+            account,
+        )
+
+    def _attempt_runtime_identity(self, platform: str) -> tuple[str, str, str]:
+        try:
+            product_identity = current_product_identity()
+            identity_reader = getattr(self.backend, "receipt_identity", None)
+            if not callable(identity_reader):
+                raise UploadError("upload_attempt_identity_changed")
+            receipt_identity = identity_reader(platform)
+        except (ProductBuildIdentityError, UploadError):
+            raise UploadError("upload_attempt_identity_changed") from None
+        except Exception:
+            raise UploadError("upload_attempt_identity_changed") from None
+        if (
+            not isinstance(product_identity, str)
+            or _PRODUCT_IDENTITY.fullmatch(product_identity) is None
+            or not isinstance(receipt_identity, Mapping)
+            or set(receipt_identity) != {"adapter_name", "adapter_revision"}
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+        adapter_name = receipt_identity.get("adapter_name")
+        adapter_revision = receipt_identity.get("adapter_revision")
+        if (
+            not isinstance(adapter_name, str)
+            or _SAFE_RECEIPT_IDENTITY.fullmatch(adapter_name) is None
+            or not isinstance(adapter_revision, str)
+            or _SAFE_RECEIPT_IDENTITY.fullmatch(adapter_revision) is None
+            or not upload_adapter_identity_matches(
+                platform, adapter_name, adapter_revision
+            )
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+        return product_identity, adapter_name, adapter_revision
+
+    def _reserve_upload_attempt_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+        *,
+        now: str,
+    ) -> dict:
+        definition, account = self._attempt_definition_in(db, job)
+        if db.execute(
+            "SELECT 1 FROM upload_attempts WHERE job_id=?", (job["id"],)
+        ).fetchone() is not None:
+            raise UploadError("upload_attempt_conflict")
+        binding = self._workflow_account_binding(db, account)
+        product_identity, adapter_name, adapter_revision = (
+            self._attempt_runtime_identity(job["platform"])
+        )
+        attempt_id = uuid4().hex
+        db.execute(
+            "INSERT INTO upload_attempts("
+            "id,job_id,root_job_id,request_id,request_digest,request_digest_version,"
+            "job_digest,job_digest_version,account_id,platform,session_revision,"
+            "source_id,source_sha256,cover_landscape_asset_id,"
+            "cover_landscape_sha256,cover_portrait_asset_id,cover_portrait_sha256,"
+            "product_identity,adapter_name,adapter_revision,state,result_status,"
+            "result_code,evidence_kind,reconciliation,reconciliation_evidence_kind,"
+            "created_at,dispatch_started_at,responded_at,reconciled_at,revision) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'reserved',NULL,NULL,NULL,"
+            "NULL,NULL,?,NULL,NULL,NULL,0)",
+            (
+                attempt_id,
+                definition["job_id"],
+                definition["root_job_id"],
+                definition["request_id"],
+                definition["request_digest"],
+                definition["request_digest_version"],
+                definition["job_digest"],
+                definition["job_digest_version"],
+                definition["account_id"],
+                definition["platform"],
+                binding["session_revision"],
+                definition["source_id"],
+                definition["source_sha256"],
+                definition["cover_landscape_asset_id"],
+                definition["cover_landscape_sha256"],
+                definition["cover_portrait_asset_id"],
+                definition["cover_portrait_sha256"],
+                product_identity,
+                adapter_name,
+                adapter_revision,
+                now,
+            ),
+        )
+        return self._attempt_public(
+            db.execute(
+                "SELECT * FROM upload_attempts WHERE id=?", (attempt_id,)
+            ).fetchone()
+        )
+
+    def _validate_attempt_identity_in(
+        self,
+        db: sqlite3.Connection,
+        job: Mapping[str, object],
+        attempt: Mapping[str, object],
+        *,
+        require_current_leaf: bool = True,
+    ) -> None:
+        try:
+            _identifier(attempt.get("id"))
+        except UploadError:
+            raise UploadError("upload_attempt_identity_changed") from None
+        definition, account = self._attempt_definition_in(
+            db, job, require_current_leaf=require_current_leaf
+        )
+        identity_fields = (
+            "job_id",
+            "root_job_id",
+            "request_id",
+            "request_digest_version",
+            "job_digest_version",
+            "account_id",
+            "platform",
+            "source_id",
+            "cover_landscape_asset_id",
+            "cover_portrait_asset_id",
+        )
+        if any(attempt.get(field) != definition[field] for field in identity_fields):
+            raise UploadError("upload_attempt_identity_changed")
+        digest_fields = (
+            "request_digest",
+            "job_digest",
+            "source_sha256",
+            "cover_landscape_sha256",
+            "cover_portrait_sha256",
+        )
+        for field in digest_fields:
+            expected = definition[field]
+            observed = attempt.get(field)
+            if expected is None or observed is None:
+                if expected is not observed:
+                    raise UploadError("upload_attempt_identity_changed")
+            elif (
+                not isinstance(expected, str)
+                or not isinstance(observed, str)
+                or not hmac.compare_digest(expected, observed)
+            ):
+                raise UploadError("upload_attempt_identity_changed")
+
+        try:
+            session_revision = _identifier(attempt.get("session_revision"))
+        except UploadError:
+            raise UploadError("upload_attempt_identity_changed") from None
+        if session_revision != account["id"]:
+            login = db.execute(
+                "SELECT account_id,action FROM operations WHERE id=?",
+                (session_revision,),
+            ).fetchone()
+            if (
+                login is None
+                or login["account_id"] != account["id"]
+                or login["action"] != "login"
+            ):
+                raise UploadError("upload_attempt_identity_changed")
+
+        product_identity = attempt.get("product_identity")
+        adapter_name = attempt.get("adapter_name")
+        adapter_revision = attempt.get("adapter_revision")
+        if (
+            not isinstance(product_identity, str)
+            or _PRODUCT_IDENTITY.fullmatch(product_identity) is None
+            or not isinstance(adapter_name, str)
+            or _SAFE_RECEIPT_IDENTITY.fullmatch(adapter_name) is None
+            or not isinstance(adapter_revision, str)
+            or _SAFE_RECEIPT_IDENTITY.fullmatch(adapter_revision) is None
+            or not upload_adapter_identity_matches(
+                attempt.get("platform"), adapter_name, adapter_revision
+            )
+        ):
+            raise UploadError("upload_attempt_identity_changed")
+
+    @_requires_activity
+    def reconcile_unknown(
+        self,
+        job_id: str,
+        *,
+        attempt_id: str,
+        expected_revision: int,
+        conclusion: str,
+        acknowledge_platform_check: bool,
+    ) -> dict[str, dict]:
+        normalized_job_id = _identifier(job_id)
+        normalized_attempt_id = _identifier(attempt_id)
+        if acknowledge_platform_check is not True:
+            raise UploadError("reconciliation_acknowledgement_required")
+        if (
+            type(expected_revision) is not int
+            or not 0 <= expected_revision <= 2_147_483_647
+        ):
+            raise UploadError("upload_attempt_conflict")
+        if conclusion not in UPLOAD_RECONCILIATIONS:
+            raise UploadError("reconciliation_conclusion_invalid")
+
+        now = _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = self._get_job(db, normalized_job_id)
+            attempt_row = db.execute(
+                "SELECT * FROM upload_attempts WHERE id=?",
+                (normalized_attempt_id,),
+            ).fetchone()
+            if attempt_row is None:
+                if db.execute(
+                    "SELECT 1 FROM upload_attempts WHERE job_id=?",
+                    (normalized_job_id,),
+                ).fetchone() is None:
+                    raise UploadError("attempt_receipt_missing")
+                raise UploadError("upload_attempt_not_found")
+            attempt = self._attempt_public(attempt_row)
+            if attempt["job_id"] != normalized_job_id:
+                raise UploadError("upload_attempt_identity_changed")
+            self._validate_attempt_state(job, attempt)
+
+            if conclusion == "not_accepted":
+                target_state, target_code = (
+                    "failed",
+                    "manual_remote_not_accepted",
+                )
+            elif conclusion == "submission_acknowledged":
+                if job["mode"] != "publish":
+                    raise UploadError("reconciliation_conclusion_invalid")
+                target_state, target_code = (
+                    "submitted",
+                    "manual_submission_acknowledged",
+                )
+            else:
+                if job["platform"] != "tencent" or job["mode"] != "draft":
+                    raise UploadError("reconciliation_conclusion_invalid")
+                target_state, target_code = (
+                    "draft_saved",
+                    "manual_platform_draft_saved",
+                )
+
+            if attempt["state"] == "reconciled":
+                # A lost HTTP response may be replayed after the operator has
+                # already created a retry child. The receipt still belongs to
+                # this immutable job even though that job is no longer the
+                # current lineage leaf.
+                self._validate_attempt_identity_in(
+                    db, job, attempt, require_current_leaf=False
+                )
+                if (
+                    attempt["reconciliation"] == conclusion
+                    and attempt["reconciliation_evidence_kind"]
+                    == "operator_platform_check"
+                    and attempt["revision"]
+                    in {expected_revision, expected_revision + 1}
+                    and job["state"] == target_state
+                    and job["code"] == target_code
+                ):
+                    return {"job": job, "attempt": attempt}
+                raise UploadError("upload_attempt_conflict")
+            self._validate_attempt_identity_in(db, job, attempt)
+            if attempt["state"] != "unknown" or job["state"] != "unknown":
+                raise UploadError("upload_attempt_not_reconcilable")
+            if attempt["revision"] != expected_revision:
+                raise UploadError("upload_attempt_conflict")
+
+            changed_attempt = db.execute(
+                "UPDATE upload_attempts SET state='reconciled',reconciliation=?,"
+                "reconciliation_evidence_kind='operator_platform_check',"
+                "reconciled_at=?,revision=revision+1 "
+                "WHERE id=? AND job_id=? AND state='unknown' AND revision=?",
+                (
+                    conclusion,
+                    now,
+                    normalized_attempt_id,
+                    normalized_job_id,
+                    expected_revision,
+                ),
+            ).rowcount
+            if changed_attempt != 1:
+                raise UploadError("upload_attempt_conflict")
+            changed_job = db.execute(
+                "UPDATE jobs SET state=?,code=?,updated_at=? "
+                "WHERE id=? AND state='unknown'",
+                (target_state, target_code, now, normalized_job_id),
+            ).rowcount
+            if changed_job != 1:
+                raise UploadError("upload_attempt_conflict")
+            return {
+                "job": self._get_job(db, normalized_job_id),
+                "attempt": self._attempt_public(
+                    db.execute(
+                        "SELECT * FROM upload_attempts WHERE id=?",
+                        (normalized_attempt_id,),
+                    ).fetchone()
+                ),
+            }
+
     def job_page(self, *, cursor: str | None = None, limit: int = 50) -> dict:
         key = self._page_key(cursor, limit)
         query = ("SELECT * FROM (SELECT j.*,a.platform,a.name AS account_name,"
@@ -2092,13 +2724,13 @@ class UploadService:
 
         if (
             not isinstance(idempotency_key, str)
-            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+            or _REQUEST_ID.fullmatch(idempotency_key) is None
         ):
             raise UploadError("invalid_idempotency_key")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                "SELECT id,digest,job_ids,digest_version FROM requests WHERE id=?",
                 (idempotency_key,),
             ).fetchone()
             if row is None:
@@ -2151,7 +2783,7 @@ class UploadService:
 
         if (
             not isinstance(idempotency_key, str)
-            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+            or _REQUEST_ID.fullmatch(idempotency_key) is None
         ):
             raise UploadError("invalid_idempotency_key")
         tombstone_digest = hashlib.sha256(
@@ -2160,7 +2792,7 @@ class UploadService:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                "SELECT id,digest,job_ids,digest_version FROM requests WHERE id=?",
                 (idempotency_key,),
             ).fetchone()
             if row is None:
@@ -2200,7 +2832,7 @@ class UploadService:
 
         if (
             not isinstance(idempotency_key, str)
-            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key) is None
+            or _REQUEST_ID.fullmatch(idempotency_key) is None
         ):
             raise UploadError("invalid_idempotency_key")
         with self._db() as db:
@@ -2212,7 +2844,7 @@ class UploadService:
             except (KeyError, TypeError, UploadError, ValueError):
                 raise UploadError("upload_request_invalid") from None
             row = db.execute(
-                "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                "SELECT id,digest,job_ids,digest_version FROM requests WHERE id=?",
                 (idempotency_key,),
             ).fetchone()
             if row is None:
@@ -2241,6 +2873,83 @@ class UploadService:
                 expected_source_id=source_id,
                 expected_targets=targets,
             )
+
+    @staticmethod
+    def _legacy_request_digests_from_jobs(
+        jobs: Sequence[Mapping[str, object]],
+    ) -> frozenset[str]:
+        """Rebuild every v1 digest permitted by the legacy default rules."""
+
+        if not jobs:
+            raise UploadError("upload_request_invalid")
+        first = jobs[0]
+        shared_fields = (
+            "source_id",
+            "title",
+            "description",
+            "tags",
+            "category_id",
+            "mode",
+            "copyright",
+            "source_credit",
+        )
+        if any(
+            job.get(field) != first.get(field)
+            for job in jobs[1:]
+            for field in shared_fields
+        ):
+            raise UploadError("upload_request_invalid")
+        try:
+            has_nonlegacy_fields = any(
+                job.get("cover_landscape_asset_id") is not None
+                or job.get("cover_portrait_asset_id") is not None
+                or job.get("publish_at_unix") is not None
+                or job.get("publish_timezone_offset_minutes") is not None
+                or job.get("platform_options")
+                != legacy_migrated_platform_options(
+                    job["platform"], job["title"]
+                )
+                for job in jobs
+            )
+        except (KeyError, TypeError, ValueError):
+            raise UploadError("upload_request_invalid") from None
+        if has_nonlegacy_fields:
+            raise UploadError("upload_request_invalid")
+        try:
+            account_ids = sorted(_identifier(job["account_id"]) for job in jobs)
+            if len(account_ids) != len(set(account_ids)):
+                raise UploadError("upload_request_invalid")
+            payload = [
+                _identifier(first["source_id"]),
+                account_ids,
+                first["title"],
+                first["description"],
+                first["tags"],
+                first["category_id"],
+                first["mode"],
+                first["copyright"],
+                first["source_credit"],
+            ]
+            encoded = json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        except (KeyError, TypeError, ValueError, UploadError):
+            raise UploadError("upload_request_invalid") from None
+        digests = {hashlib.sha256(encoded).hexdigest()}
+        if (
+            all(job.get("platform") != "bilibili" for job in jobs)
+            and first.get("copyright") == 1
+        ):
+            defaulted = [*payload]
+            defaulted[7] = None
+            digests.add(
+                hashlib.sha256(
+                    json.dumps(
+                        defaulted, ensure_ascii=False, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+            )
+        return frozenset(digests)
 
     @staticmethod
     def _workflow_request_digest_from_jobs(
@@ -2299,7 +3008,9 @@ class UploadService:
         except (TypeError, ValueError):
             raise UploadError("upload_request_invalid") from None
         if (
-            row["digest_version"] not in {1, 2}
+            not isinstance(row["id"], str)
+            or _REQUEST_ID.fullmatch(row["id"]) is None
+            or row["digest_version"] not in {1, 2}
             or not isinstance(row["digest"], str)
             or _SHA256.fullmatch(row["digest"]) is None
             or not isinstance(job_ids, list)
@@ -2324,7 +3035,10 @@ class UploadService:
             # A retry descendant deliberately has the same payload, so the
             # digest alone cannot detect a tampered job_ids relation.
             raise UploadError("upload_request_invalid")
-        if row["digest_version"] == 2:
+        if row["digest_version"] == 1:
+            if row["digest"] not in self._legacy_request_digests_from_jobs(jobs):
+                raise UploadError("upload_request_mismatch")
+        else:
             observed_digest = self._workflow_request_digest_from_jobs(jobs)
             if not hmac.compare_digest(row["digest"], observed_digest):
                 raise UploadError("upload_request_mismatch")
@@ -2817,7 +3531,7 @@ class UploadService:
             )
         ):
             raise UploadError("invalid_metadata")
-        if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", idempotency_key):
+        if not isinstance(idempotency_key, str) or not _REQUEST_ID.fullmatch(idempotency_key):
             raise UploadError("invalid_idempotency_key")
         if target_overrides is None:
             target_overrides = []
@@ -3239,6 +3953,31 @@ class UploadService:
         self, db: sqlite3.Connection, job: Mapping[str, object]
     ) -> None:
         self._validate_job_definition_in(db, job, require_ready_account=False)
+        attempt_row = db.execute(
+            "SELECT * FROM upload_attempts WHERE job_id=?",
+            (job["id"],),
+        ).fetchone()
+        # Schema 1-3 jobs have no attempt receipt, so their mutable job state
+        # cannot prove whether dispatch happened. Even canceled/canceled can be
+        # forged after an interrupted claim; every no-receipt terminal job must
+        # be recreated manually from its retained source.
+        if attempt_row is None:
+            raise UploadError("attempt_receipt_missing")
+        attempt = self._attempt_public(attempt_row)
+        self._validate_attempt_identity_in(db, job, attempt)
+        self._validate_attempt_state(job, attempt)
+        retryable_response = (
+            attempt["state"] == "responded"
+            and attempt["result_status"] in {"failed", "canceled"}
+        )
+        retryable_reconciliation = (
+            attempt["state"] == "reconciled"
+            and attempt["reconciliation"] == "not_accepted"
+            and attempt["reconciliation_evidence_kind"]
+            == "operator_platform_check"
+        )
+        if not (retryable_response or retryable_reconciliation):
+            raise UploadError("verify_remote_result_first")
 
     def _insert_retry_job_in(
         self,
@@ -3307,7 +4046,7 @@ class UploadService:
             or len(expected_request_keys) != len(normalized_ids)
             or any(
                 not isinstance(key, str)
-                or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", key) is None
+                or _REQUEST_ID.fullmatch(key) is None
                 for key in expected_request_keys
             )
         ):
@@ -3339,7 +4078,7 @@ class UploadService:
             request_roots: dict[str, list[dict]] = {}
             for request_key in unique_request_keys:
                 request = db.execute(
-                    "SELECT digest,job_ids,digest_version FROM requests WHERE id=?",
+                    "SELECT id,digest,job_ids,digest_version FROM requests WHERE id=?",
                     (request_key,),
                 ).fetchone()
                 if request is None:
@@ -3470,14 +4209,14 @@ class UploadService:
             return [replacements[job["id"]] for job in leaves]
 
     @_requires_activity
-    def retry(self, job_id: str, acknowledge_unknown: bool = False) -> dict:
+    def retry(self, job_id: str) -> dict:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             job = self._get_job(db, job_id)
-            if job["state"] not in ("failed", "canceled", "unknown"):
-                raise UploadError("retry_not_allowed")
-            if job["state"] == "unknown" and acknowledge_unknown is not True:
+            if job["state"] == "unknown":
                 raise UploadError("verify_remote_result_first")
+            if job["state"] not in ("failed", "canceled"):
+                raise UploadError("retry_not_allowed")
             # Repeated requests for the same retry return the existing unique
             # leaf, including a response-loss replay after later retries.
             leaf = self._latest_retry_job_in(db, job)
@@ -3491,12 +4230,18 @@ class UploadService:
             if self._shutdown.is_set():
                 return None
             db.execute("BEGIN IMMEDIATE")
+            now = _now()
             operation = db.execute(
                 "SELECT o.*,a.platform FROM operations o JOIN accounts a ON a.id=o.account_id "
                 "WHERE o.state='queued' AND a.lifecycle_state='active' ORDER BY o.rowid LIMIT 1"
             ).fetchone()
             if operation:
-                table, kind, row = "operations", "account", dict(operation)
+                kind, row = "account", dict(operation)
+                changed = db.execute(
+                    "UPDATE operations SET state='running',code='',updated_at=? "
+                    "WHERE id=? AND state='queued'",
+                    (now, row["id"]),
+                ).rowcount
             else:
                 job = db.execute(
                     self._job_query()
@@ -3504,8 +4249,19 @@ class UploadService:
                 ).fetchone()
                 if job is None:
                     return None
-                table, kind, row = "jobs", "upload", self._job_public(job)
-            db.execute(f"UPDATE {table} SET state='running',code='',updated_at=? WHERE id=?", (_now(), row["id"]))
+                kind, row = "upload", self._job_public(job)
+                # The reservation and queued -> running claim are one
+                # transaction. A crash can therefore only expose either no
+                # dispatchable claim or a running job with a durable receipt.
+                attempt = self._reserve_upload_attempt_in(db, row, now=now)
+                row["_attempt_adapter_name"] = attempt["adapter_name"]
+                changed = db.execute(
+                    "UPDATE jobs SET state='running',code='',updated_at=? "
+                    "WHERE id=? AND state='queued'",
+                    (now, row["id"]),
+                ).rowcount
+            if changed != 1:
+                raise UploadError("upload_attempt_conflict")
             self._active_id = row["id"]
             self._operation_stop = threading.Event()
             return kind, row
@@ -3533,12 +4289,222 @@ class UploadService:
             self._lock.release()
             self._release_lifetime_activity()
 
+    def _mark_upload_dispatch_may_have_started(self, job_id: str) -> bool:
+        """Commit the last durable boundary immediately before backend upload."""
+
+        normalized_id = _identifier(job_id)
+        now = _now()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = self._get_job(db, normalized_id)
+            attempt_row = db.execute(
+                "SELECT * FROM upload_attempts WHERE job_id=?",
+                (normalized_id,),
+            ).fetchone()
+            if attempt_row is None:
+                raise UploadError("attempt_receipt_missing")
+            attempt = self._attempt_public(attempt_row)
+            if job["state"] != "running":
+                raise UploadError("upload_attempt_conflict")
+            if job["code"] == "cancellation_requested":
+                return False
+            self._validate_attempt_identity_in(db, job, attempt)
+            account = db.execute(
+                "SELECT * FROM accounts WHERE id=?", (job["account_id"],)
+            ).fetchone()
+            if (
+                account is None
+                or account["lifecycle_state"] != "active"
+                or account["auth_state"] != "ready"
+                or self._workflow_account_binding(db, account)["session_revision"]
+                != attempt["session_revision"]
+            ):
+                raise UploadError("account_session_changed")
+            product_identity, adapter_name, adapter_revision = (
+                self._attempt_runtime_identity(job["platform"])
+            )
+            if (
+                product_identity != attempt["product_identity"]
+                or adapter_name != attempt["adapter_name"]
+                or adapter_revision != attempt["adapter_revision"]
+            ):
+                raise UploadError("upload_attempt_identity_changed")
+            changed = db.execute(
+                "UPDATE upload_attempts SET state='dispatch_may_have_started',"
+                "dispatch_started_at=?,revision=revision+1 "
+                "WHERE job_id=? AND state='reserved' AND revision=0",
+                (now, normalized_id),
+            ).rowcount
+            if changed != 1:
+                raise UploadError("upload_attempt_conflict")
+        return True
+
+    @staticmethod
+    def _upload_result_state(
+        result: BackendResult,
+        *,
+        invoked: bool,
+        mode: str,
+    ) -> str:
+        state = result.status
+        if state not in ("submitted", "draft_saved", "failed", "unknown", "canceled"):
+            state = "unknown" if invoked else "failed"
+        if invoked and state == "canceled":
+            state = "unknown"
+        if state == "draft_saved" and mode != "draft":
+            state = "unknown"
+        if state == "submitted" and mode != "publish":
+            state = "unknown"
+        return state
+
+    def _finalize_upload_attempt_in(
+        self,
+        db: sqlite3.Connection,
+        row: Mapping[str, object],
+        result: BackendResult,
+        *,
+        invoked: bool,
+        state: str,
+        now: str,
+    ) -> None:
+        attempt_state = "unknown" if state == "unknown" else "responded"
+        expected_state = "dispatch_may_have_started" if invoked else "reserved"
+        expected_revision = 1 if invoked else 0
+        attempt = db.execute(
+            "SELECT id,state,revision FROM upload_attempts WHERE job_id=?",
+            (row["id"],),
+        ).fetchone()
+        if attempt is None:
+            raise UploadError("attempt_receipt_missing")
+        if (
+            attempt["state"] != expected_state
+            or attempt["revision"] != expected_revision
+        ):
+            raise UploadError("upload_attempt_conflict")
+        changed_attempt = db.execute(
+            "UPDATE upload_attempts SET state=?,result_status=?,result_code=?,"
+            "evidence_kind=?,responded_at=?,revision=revision+1 "
+            "WHERE id=? AND job_id=? AND state=? AND revision=?",
+            (
+                attempt_state,
+                result.status,
+                result.code,
+                result.evidence_kind,
+                now,
+                attempt["id"],
+                row["id"],
+                expected_state,
+                expected_revision,
+            ),
+        ).rowcount
+        if changed_attempt != 1:
+            raise UploadError("upload_attempt_conflict")
+        changed_job = db.execute(
+            "UPDATE jobs SET state=?,code=?,updated_at=? "
+            "WHERE id=? AND state='running'",
+            (state, result.code, now, row["id"]),
+        ).rowcount
+        if changed_job != 1:
+            raise UploadError("upload_attempt_conflict")
+
     def _recover_interrupted_records(self, *, timeout: float = 10) -> None:
         with self._db(timeout=timeout) as db:
             now = _now()
-            db.execute("UPDATE jobs SET state='unknown',code='interrupted_result_unknown',updated_at=? WHERE state='running'", (now,))
+            db.execute("BEGIN IMMEDIATE")
+            interrupted = list(
+                db.execute(
+                    "SELECT j.id AS job_id,j.state AS job_state,u.id AS attempt_id "
+                    "FROM jobs j LEFT JOIN upload_attempts u ON u.job_id=j.id "
+                    "WHERE j.state IN ('running','queued') ORDER BY j.rowid"
+                )
+            )
+            for item in interrupted:
+                if item["attempt_id"] is None:
+                    if item["job_state"] == "running":
+                        db.execute(
+                            "UPDATE jobs SET state='unknown',code='attempt_receipt_missing',"
+                            "updated_at=? WHERE id=? AND state='running'",
+                            (now, item["job_id"]),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE jobs SET state='draft',"
+                            "code='restart_confirmation_required',updated_at=? "
+                            "WHERE id=? AND state='queued'",
+                            (now, item["job_id"]),
+                        )
+                    continue
+                # Recovery must not infer a safe pre-dispatch failure from the
+                # mutable state label alone. Rebuild the complete frozen
+                # identity and require the exact state/timestamp/revision
+                # combination before changing either row. Any mismatch remains
+                # unknown so it can never enter the ordinary retry path.
+                try:
+                    job = self._get_job(db, item["job_id"])
+                    attempt_row = db.execute(
+                        "SELECT * FROM upload_attempts WHERE id=? AND job_id=?",
+                        (item["attempt_id"], item["job_id"]),
+                    ).fetchone()
+                    if attempt_row is None:
+                        raise UploadError("upload_attempt_identity_changed")
+                    attempt = self._attempt_public(attempt_row)
+                    self._validate_attempt_identity_in(db, job, attempt)
+                    self._validate_attempt_state(job, attempt)
+                except UploadError:
+                    db.execute(
+                        "UPDATE jobs SET state='unknown',"
+                        "code='upload_attempt_identity_changed',updated_at=? "
+                        "WHERE id=? AND state IN ('running','queued')",
+                        (now, item["job_id"]),
+                    )
+                    continue
+                if attempt["state"] == "reserved":
+                    changed = db.execute(
+                        "UPDATE upload_attempts SET state='responded',"
+                        "result_status='failed',result_code='upload_dispatch_not_started',"
+                        "evidence_kind=NULL,responded_at=?,revision=revision+1 "
+                        "WHERE id=? AND job_id=? AND state='reserved' AND revision=0 "
+                        "AND dispatch_started_at IS NULL AND responded_at IS NULL",
+                        (now, attempt["id"], item["job_id"]),
+                    ).rowcount
+                    if changed != 1:
+                        raise UploadError("upload_attempt_conflict")
+                    db.execute(
+                        "UPDATE jobs SET state='failed',"
+                        "code='upload_dispatch_not_started',updated_at=? "
+                        "WHERE id=? AND state IN ('running','queued')",
+                        (now, item["job_id"]),
+                    )
+                    continue
+                if attempt["state"] == "dispatch_may_have_started":
+                    changed = db.execute(
+                        "UPDATE upload_attempts SET state='unknown',"
+                        "result_status='unknown',result_code='interrupted_result_unknown',"
+                        "evidence_kind=NULL,revision=revision+1 "
+                        "WHERE id=? AND job_id=? AND state='dispatch_may_have_started' "
+                        "AND revision=1 AND dispatch_started_at IS NOT NULL "
+                        "AND responded_at IS NULL",
+                        (attempt["id"], item["job_id"]),
+                    ).rowcount
+                    if changed != 1:
+                        raise UploadError("upload_attempt_conflict")
+                    db.execute(
+                        "UPDATE jobs SET state='unknown',"
+                        "code='interrupted_result_unknown',updated_at=? "
+                        "WHERE id=? AND state IN ('running','queued')",
+                        (now, item["job_id"]),
+                    )
+                    continue
+                # A responded/reconciled receipt and an active job cannot be
+                # produced by the atomic transitions above. Preserve the job
+                # as unknown rather than inventing a replayable failure.
+                db.execute(
+                    "UPDATE jobs SET state='unknown',"
+                    "code='upload_attempt_identity_changed',updated_at=? "
+                    "WHERE id=? AND state IN ('running','queued')",
+                    (now, item["job_id"]),
+                )
             # Approval from a previous application run is not silently replayed.
-            db.execute("UPDATE jobs SET state='draft',code='restart_confirmation_required',updated_at=? WHERE state='queued'", (now,))
             db.execute("UPDATE operations SET state='failed',code='operation_interrupted',updated_at=? WHERE state IN ('running','queued')", (now,))
             db.execute("UPDATE accounts SET auth_state='unchecked',code='operation_interrupted' WHERE auth_state='checking'")
 
@@ -3674,8 +4640,13 @@ class UploadService:
                                             declaration=options.get("declaration"),
                                             short_title=options.get("short_title"),
                                             content_label=options.get("content_label"))
-                    invoked = True
-                    result = self.backend.upload(request, self._operation_stop)
+                    if not self._mark_upload_dispatch_may_have_started(row["id"]):
+                        result = BackendResult(
+                            "canceled", "canceled_before_upload"
+                        )
+                    else:
+                        invoked = True
+                        result = self.backend.upload(request, self._operation_stop)
         except UploadError as exc:
             result = BackendResult("unknown" if invoked else "failed", exc.code)
         except Exception:
@@ -3686,8 +4657,43 @@ class UploadService:
                     path.unlink(missing_ok=True)
                 except OSError:
                     pass
-        if (not isinstance(result, BackendResult) or not isinstance(result.code, str)
-            or not isinstance(result.status, str) or not _SAFE_CODE.fullmatch(result.code)):
+        if (
+            isinstance(result, BackendResult)
+            and kind == "upload"
+            and result.status == "cancelled"
+        ):
+            result = BackendResult(
+                "canceled", result.code, getattr(result, "evidence_kind", None)
+            )
+        evidence_kind = (
+            getattr(result, "evidence_kind", None)
+            if isinstance(result, BackendResult)
+            else None
+        )
+        invalid_upload_status = (
+            kind == "upload"
+            and isinstance(result, BackendResult)
+            and result.status not in UPLOAD_RESULT_STATUSES
+        )
+        invalid_upload_evidence = kind == "upload" and not upload_evidence_is_valid(
+            row["platform"],
+            row["mode"],
+            getattr(result, "status", None),
+            evidence_kind,
+        )
+        if (
+            not isinstance(result, BackendResult)
+            or not isinstance(result.code, str)
+            or not isinstance(result.status, str)
+            or not _SAFE_CODE.fullmatch(result.code)
+            or evidence_kind is not None
+            and (
+                not isinstance(evidence_kind, str)
+                or evidence_kind not in UPLOAD_EVIDENCE_KINDS
+            )
+            or invalid_upload_status
+            or invalid_upload_evidence
+        ):
             result = BackendResult("unknown" if invoked else "failed", "backend_result_invalid")
         now = _now()
         with self._db() as db:
@@ -3707,15 +4713,18 @@ class UploadService:
                 db.execute("UPDATE operations SET state=?,code=?,updated_at=? WHERE id=? AND state='running'", (state, result.code, now, row["id"]))
                 db.execute("UPDATE accounts SET auth_state=?,code=? WHERE id=?", (auth_state, result.code, row["account_id"]))
             else:
-                state = result.status
-                if state not in ("submitted", "draft_saved", "failed", "unknown", "canceled"):
-                    state = "unknown" if invoked else "failed"
-                if invoked and state == "canceled":
-                    state = "unknown"
-                if state == "draft_saved" and row["mode"] != "draft":
-                    state = "unknown"
-                if state == "submitted" and row["mode"] != "publish":
-                    state = "unknown"
+                state = self._upload_result_state(
+                    result, invoked=invoked, mode=row["mode"]
+                )
+                db.execute("BEGIN IMMEDIATE")
+                self._finalize_upload_attempt_in(
+                    db,
+                    row,
+                    result,
+                    invoked=invoked,
+                    state=state,
+                    now=now,
+                )
                 if result.code in _UPLOAD_AUTH_INVALID_CODES:
                     db.execute(
                         "UPDATE accounts SET auth_state='invalid',code=? "
@@ -3728,4 +4737,3 @@ class UploadService:
                         "WHERE account_id=? AND state='queued'",
                         (now, row["account_id"]),
                     )
-                db.execute("UPDATE jobs SET state=?,code=?,updated_at=? WHERE id=? AND state='running'", (state, result.code, now, row["id"]))

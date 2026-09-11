@@ -20,7 +20,12 @@ from pathlib import Path
 from threading import Event, Lock
 
 from ..windows_job import WindowsKillOnCloseJob
-from .contracts import BackendResult, UploadRequest
+from .contracts import (
+    UPLOAD_EVIDENCE_KINDS,
+    BackendResult,
+    UploadRequest,
+    upload_evidence_is_valid,
+)
 from .login_progress import read_update
 from .runtime_setup import (
     BILIUP_VERSION,
@@ -68,8 +73,6 @@ _RESULTS = frozenset({
     ("draft_saved", "upstream_draft_saved"),
     ("unknown", "upstream_result_unknown"),
 })
-
-
 def _private_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     current = path
@@ -188,6 +191,19 @@ class SauBackend:
         return {**status, "backend": "social-auto-upload", "revision": SAU_COMMIT,
                 "biliup_version": BILIUP_VERSION,
                 "platforms": ["bilibili", "douyin", "tencent"]}
+
+    @staticmethod
+    def receipt_identity(platform: str) -> dict[str, str]:
+        """Return the pinned adapter identity recorded with an upload attempt."""
+
+        if platform == "bilibili":
+            return {"adapter_name": "biliup", "adapter_revision": BILIUP_VERSION}
+        if platform in {"douyin", "tencent"}:
+            return {
+                "adapter_name": "social-auto-upload",
+                "adapter_revision": SAU_COMMIT,
+            }
+        raise ValueError("invalid_platform")
 
     def _inspect_for_execution(self) -> dict:
         """Perform the uncached integrity check required before any child starts."""
@@ -437,7 +453,15 @@ class SauBackend:
                     data["payload"] = upload_payload
                     data["browser_path"] = str(browser) if browser else None
                     request_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                    result = self._execute(operation, action, platform, stop, timeout, on_update)
+                    result = self._execute(
+                        operation,
+                        action,
+                        platform,
+                        stop,
+                        timeout,
+                        on_update,
+                        mode=payload.get("mode") if action == "upload" else None,
+                    )
                 if action == "upload":
                     expected = "draft_saved" if payload.get("mode") == "draft" else "submitted"
                     if result.status in {"ready", "submitted", "draft_saved"} and result.status != expected:
@@ -447,7 +471,8 @@ class SauBackend:
             return BackendResult("failed", "backend_failed")
 
     def _execute(self, operation: Path, action: str, platform: str,
-                 stop: Event, timeout: float, on_update=None) -> BackendResult:
+                 stop: Event, timeout: float, on_update=None,
+                 *, mode: str | None = None) -> BackendResult:
         runtime = self.root / "runtime"
         command = self._bridge_command(operation)
         visible = action == "login" and platform == "bilibili" and os.name == "nt" and on_update is None
@@ -496,11 +521,24 @@ class SauBackend:
             result_path = operation / "result.json"
             if result_path.is_file() and result_path.stat().st_size <= 1024:
                 result = json.loads(result_path.read_text(encoding="utf-8"))
+                if not isinstance(result, dict) or set(result) != {
+                    "status", "code", "evidence_kind"
+                }:
+                    raise ValueError("invalid_backend_result")
                 pair = (result.get("status"), result.get("code"))
-                if pair in _RESULTS and process.returncode == 0:
+                evidence_kind = result.get("evidence_kind")
+                if evidence_kind is not None and evidence_kind not in UPLOAD_EVIDENCE_KINDS:
+                    raise ValueError("invalid_backend_result")
+                evidence_valid = upload_evidence_is_valid(
+                    platform,
+                    mode,
+                    pair[0],
+                    evidence_kind,
+                )
+                if pair in _RESULTS and evidence_valid and process.returncode == 0:
                     # Result classes must also match the operation that was requested.
                     if action == "upload" or pair[0] not in {"submitted", "draft_saved", "unknown"}:
-                        return BackendResult(*pair)
+                        return BackendResult(*pair, evidence_kind=evidence_kind)
             return BackendResult("unknown", "upstream_result_unknown") if action == "upload" else BackendResult("failed", "backend_failed")
         except Exception:
             return BackendResult("unknown", "upstream_result_unknown") if action == "upload" and released else BackendResult("failed", "backend_failed")

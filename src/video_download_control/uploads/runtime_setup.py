@@ -26,13 +26,17 @@ from pathlib import Path, PurePosixPath
 
 from ..source_environment_lock import SourceEnvironmentBusy, source_environment_lock
 from ..windows_job import WindowsKillOnCloseJob
+from .contracts import CURRENT_UPLOAD_ADAPTER_IDENTITIES
 
 
-SAU_COMMIT = "0012d2c355f88f683cc38dde2a2db209e14091bc"
+SAU_COMMIT = CURRENT_UPLOAD_ADAPTER_IDENTITIES["douyin"][1]
 SAU_SHA256 = "c647bfd86be8e9c35bd50dafd92b1a1e150a148891b5f856f3505ebe7fe6615c"
 SAU_URL = f"https://codeload.github.com/dreammis/social-auto-upload/zip/{SAU_COMMIT}"
-BILIUP_VERSION = "v1.2.4"
-BILIUP_URL = "https://github.com/biliup/biliup/releases/download/v1.2.4/biliupR-v1.2.4-x86_64-windows.zip"
+BILIUP_VERSION = CURRENT_UPLOAD_ADAPTER_IDENTITIES["bilibili"][1]
+BILIUP_URL = (
+    "https://github.com/biliup/biliup/releases/download/"
+    f"{BILIUP_VERSION}/biliupR-{BILIUP_VERSION}-x86_64-windows.zip"
+)
 BILIUP_SHA256 = "cb5af47aeaffd63719c94fa354a4d1404dd8437b6cc215513ec4e6054177c93e"
 LOCK_PATH = Path(__file__).with_name("runtime-lock.json")
 RUNTIME_MANIFEST_SCHEMA = 2

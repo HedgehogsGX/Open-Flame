@@ -31,11 +31,18 @@ from . import schema as _schema
 from .activity_lock import UploadActivityBusy, UploadActivityLease, activity_lock_path
 from .contracts import (
     PLATFORMS,
+    UPLOAD_ATTEMPT_STATES,
+    UPLOAD_EVIDENCE_KINDS,
+    UPLOAD_RECONCILIATIONS,
+    UPLOAD_RESULT_STATUSES,
     UploadError,
     is_tencent_short_title_output,
+    legacy_migrated_platform_options,
     normalize_tencent_short_title,
+    upload_adapter_identity_matches,
+    upload_evidence_is_valid,
 )
-from .identity import upload_retry_payload_matches
+from .identity import upload_job_definition_digest, upload_retry_payload_matches
 from .metadata import (
     DOUYIN_DECLARATIONS,
     TENCENT_CONTENT_LABELS,
@@ -47,7 +54,8 @@ from .service import (
     _cover_metadata,
 )
 
-UPLOAD_BACKUP_FORMAT_VERSION = 2
+UPLOAD_BACKUP_FORMAT_VERSION = 3
+_UPLOAD_BACKUP_FORMAT_V2 = 2
 UPLOAD_BACKUP_METADATA_NAME = "backup-metadata.json"
 UPLOAD_BACKUP_MANIFEST_NAME = "backup-manifest.json"
 UPLOAD_BACKUP_MANIFEST_HASH_NAME = "backup-manifest.sha256"
@@ -70,6 +78,10 @@ UploadBackupError = _common.BackupRestoreError
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PRODUCT_IDENTITY = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,95}\+build\.sha256\.[0-9a-f]{64}$"
+)
+_ADAPTER_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _WORKFLOW_UPLOAD_REQUEST = re.compile(
     r"^wf-[0-9a-f]{32}-upload-jobs(?:-[0-9]{3})?$"
 )
@@ -104,13 +116,32 @@ _PRESERVED_TABLES = [
     "jobs",
     "operations",
     "requests",
+    "upload_attempts",
+]
+_FORMAT2_PRESERVED_TABLES = [
+    "accounts",
+    "sources",
+    "upload_assets",
+    "jobs",
+    "operations",
+    "requests",
 ]
 _LEGACY_PRESERVED_TABLES = ["accounts", "sources", "jobs", "operations", "requests"]
-_RESTORE_POLICY = {
+_FORMAT12_RESTORE_POLICY = {
     "ready_or_checking_account": "unchecked_account_missing",
     "queued_job": "draft_restart_confirmation_required",
     "running_job": "unknown_interrupted_result_unknown",
     "queued_or_running_operation": "failed_operation_interrupted",
+}
+_RESTORE_POLICY = {
+    **_FORMAT12_RESTORE_POLICY,
+    # Format 3 is the first format that declares the Schema 4 receipt
+    # contract. A running row without that receipt must say exactly why it
+    # cannot be reconciled; formats 1/2 retain their immutable historical
+    # policy strings and legacy recovery codes.
+    "running_job": "unknown_attempt_receipt_missing",
+    "reserved_upload_attempt": "responded_failed_dispatch_not_started",
+    "dispatch_may_have_started_upload_attempt": "unknown_interrupted_result_unknown",
 }
 _MANIFEST_KEYS = {"algorithm", "entries", "format_version", "metadata_path"}
 _METADATA_KEYS = {
@@ -468,7 +499,10 @@ def _restore_upload_backup_locked(
                         raise UploadBackupError(
                             "upload backup payload path is unexpected"
                         ) from exc
-                    if format_version != UPLOAD_BACKUP_FORMAT_VERSION:
+                    if format_version not in {
+                        _UPLOAD_BACKUP_FORMAT_V2,
+                        UPLOAD_BACKUP_FORMAT_VERSION,
+                    }:
                         raise UploadBackupError("upload backup payload path is unexpected")
                     if len(asset_relative.parts) != 1:
                         raise UploadBackupError("upload backup asset path is invalid")
@@ -492,11 +526,17 @@ def _restore_upload_backup_locked(
                 raise UploadBackupError("upload restored file verification failed")
 
         restored_database = stage / UPLOAD_DATABASE_NAME
-        if format_version == 1:
+        if format_version in {1, _UPLOAD_BACKUP_FORMAT_V2}:
+            source_schema_version = (
+                2 if format_version == 1 else _schema._SCHEMA_V3_VERSION
+            )
             _audit_database_and_media(
                 database_path=restored_database,
                 media_root=stage / "media",
-                schema_version=2,
+                asset_root=(
+                    None if format_version == 1 else stage / "assets"
+                ),
+                schema_version=source_schema_version,
             )
             original_job_states = _job_states(restored_database)
             _schema.ensure_upload_schema(restored_database)
@@ -505,9 +545,14 @@ def _restore_upload_backup_locked(
             media_root=stage / "media",
             asset_root=stage / "assets",
         )
-        if format_version != 1:
+        if format_version == UPLOAD_BACKUP_FORMAT_VERSION:
             original_job_states = _job_states(restored_database)
         _apply_restore_state_policy(restored_database, original_job_states)
+        if format_version == UPLOAD_BACKUP_FORMAT_VERSION:
+            _mark_current_missing_receipts(
+                restored_database,
+                original_job_states,
+            )
         _audit_database_and_media(
             database_path=restored_database,
             media_root=stage / "media",
@@ -711,12 +756,12 @@ def _audit_database_and_media(
     version = _schema.SCHEMA_VERSION if schema_version is None else schema_version
     if version == _schema.SCHEMA_VERSION:
         _schema.validate_upload_schema(database_path)
-    elif version == 2:
-        _schema._validated_schema_version(database_path, frozenset({2}))
+    elif version in {2, _schema._SCHEMA_V3_VERSION}:
+        _schema._validated_schema_version(database_path, frozenset({version}))
     else:
         raise UploadBackupError("upload backup database schema is invalid")
     _common._require_existing_directory(media_root, label="upload backup media root")
-    if version == _schema.SCHEMA_VERSION:
+    if version >= _schema._SCHEMA_V3_VERSION:
         if asset_root is None:
             raise UploadBackupError("upload backup asset root is missing")
         _common._require_existing_directory(asset_root, label="upload backup asset root")
@@ -728,7 +773,7 @@ def _audit_database_and_media(
         asset_rows = list(db.execute(
             "SELECT id,kind,name,suffix,mime_type,size,sha256,width,height,created_at,"
             "media_state,deleted_at FROM upload_assets ORDER BY id"
-        )) if version == _schema.SCHEMA_VERSION else []
+        )) if version >= _schema._SCHEMA_V3_VERSION else []
         if list(db.execute("PRAGMA foreign_key_check")):
             raise UploadBackupError("upload backup foreign keys are invalid")
         for asset_row in asset_rows:
@@ -894,6 +939,7 @@ def _apply_restore_state_policy(
     db = sqlite3.connect(database_path)
     try:
         try:
+            db.row_factory = sqlite3.Row
             mode = db.execute("PRAGMA journal_mode=DELETE").fetchone()
             if mode is None or str(mode[0]).lower() != "delete":
                 raise UploadBackupError("restored upload database journal mode is unsafe")
@@ -909,11 +955,53 @@ def _apply_restore_state_policy(
                     raise UploadBackupError("restored upload job is missing")
                 legacy = isinstance(current[0], str) and current[0].startswith("legacy_")
                 if original_state == "running":
-                    state = "unknown"
-                    code = (
-                        "legacy_metadata_interrupted_result_unknown"
-                        if legacy else "interrupted_result_unknown"
-                    )
+                    attempt = db.execute(
+                        "SELECT id,state,result_code,revision FROM upload_attempts "
+                        "WHERE job_id=?",
+                        (job_id,),
+                    ).fetchone()
+                    if attempt is not None and attempt["state"] == "reserved":
+                        code = "upload_dispatch_not_started"
+                        changed = db.execute(
+                            "UPDATE upload_attempts SET state='responded',"
+                            "result_status='failed',result_code=?,evidence_kind=NULL,"
+                            "responded_at=?,revision=revision+1 "
+                            "WHERE id=? AND state='reserved' AND revision=?",
+                            (code, now, attempt["id"], attempt["revision"]),
+                        ).rowcount
+                        if changed != 1:
+                            raise UploadBackupError(
+                                "restored upload attempt transition failed"
+                            )
+                        state = "failed"
+                    elif (
+                        attempt is not None
+                        and attempt["state"] == "dispatch_may_have_started"
+                    ):
+                        code = "interrupted_result_unknown"
+                        changed = db.execute(
+                            "UPDATE upload_attempts SET state='unknown',"
+                            "result_status='unknown',result_code=?,evidence_kind=NULL,"
+                            "revision=revision+1 WHERE id=? "
+                            "AND state='dispatch_may_have_started' AND revision=?",
+                            (code, attempt["id"], attempt["revision"]),
+                        ).rowcount
+                        if changed != 1:
+                            raise UploadBackupError(
+                                "restored upload attempt transition failed"
+                            )
+                        state = "unknown"
+                    else:
+                        state = "unknown"
+                        code = (
+                            attempt["result_code"]
+                            if attempt is not None
+                            and attempt["state"] == "unknown"
+                            and _is_safe_code(attempt["result_code"])
+                            else "legacy_metadata_interrupted_result_unknown"
+                            if legacy
+                            else "interrupted_result_unknown"
+                        )
                 else:
                     state = "draft"
                     code = (
@@ -935,6 +1023,63 @@ def _apply_restore_state_policy(
             )
             if list(db.execute("PRAGMA foreign_key_check")):
                 raise UploadBackupError("restored upload database foreign keys are invalid")
+            db.commit()
+        except Exception:
+            with suppress(sqlite3.Error):
+                db.rollback()
+            raise
+    finally:
+        db.close()
+    _schema.validate_upload_schema(database_path)
+
+
+def _mark_current_missing_receipts(
+    database_path: Path,
+    original_job_states: Mapping[str, str],
+) -> None:
+    """Give format-3 running rows the precise missing-receipt reason."""
+
+    _schema.validate_upload_schema(database_path)
+    db = sqlite3.connect(database_path)
+    try:
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("BEGIN IMMEDIATE")
+            for job_id, original_state in original_job_states.items():
+                if original_state != "running":
+                    continue
+                row = db.execute(
+                    "SELECT j.state,j.code,u.id AS attempt_id FROM jobs j "
+                    "LEFT JOIN upload_attempts u ON u.job_id=j.id WHERE j.id=?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise UploadBackupError("restored upload job is missing")
+                if row["attempt_id"] is not None:
+                    continue
+                if row["state"] != "unknown" or row["code"] not in {
+                    "interrupted_result_unknown",
+                    "legacy_metadata_interrupted_result_unknown",
+                    "attempt_receipt_missing",
+                }:
+                    raise UploadBackupError(
+                        "restored upload missing-receipt state is invalid"
+                    )
+                changed = db.execute(
+                    "UPDATE jobs SET code='attempt_receipt_missing' "
+                    "WHERE id=? AND state='unknown' AND NOT EXISTS "
+                    "(SELECT 1 FROM upload_attempts WHERE job_id=jobs.id)",
+                    (job_id,),
+                ).rowcount
+                if changed != 1:
+                    raise UploadBackupError(
+                        "restored upload missing-receipt transition failed"
+                    )
+            if list(db.execute("PRAGMA foreign_key_check")):
+                raise UploadBackupError(
+                    "restored upload database foreign keys are invalid"
+                )
             db.commit()
         except Exception:
             with suppress(sqlite3.Error):
@@ -967,7 +1112,8 @@ def _load_and_verify_backup(
     if (
         set(manifest) != _MANIFEST_KEYS
         or type(format_version) is not int
-        or format_version not in {1, UPLOAD_BACKUP_FORMAT_VERSION}
+        or format_version
+        not in {1, _UPLOAD_BACKUP_FORMAT_V2, UPLOAD_BACKUP_FORMAT_VERSION}
         or manifest["algorithm"] != "sha256"
         or manifest["metadata_path"] != UPLOAD_BACKUP_METADATA_NAME
     ):
@@ -1118,10 +1264,23 @@ def _validate_metadata(
         parsed = datetime.fromisoformat(created_at) if isinstance(created_at, str) else None
     except ValueError:
         parsed = None
-    current_format = format_version == UPLOAD_BACKUP_FORMAT_VERSION
-    expected_keys = _METADATA_KEYS if current_format else _LEGACY_METADATA_KEYS
-    expected_schema = _schema.SCHEMA_VERSION if current_format else 2
-    expected_tables = _PRESERVED_TABLES if current_format else _LEGACY_PRESERVED_TABLES
+    has_assets = format_version >= _UPLOAD_BACKUP_FORMAT_V2
+    expected_keys = _METADATA_KEYS if has_assets else _LEGACY_METADATA_KEYS
+    expected_schema = {
+        1: 2,
+        _UPLOAD_BACKUP_FORMAT_V2: _schema._SCHEMA_V3_VERSION,
+        UPLOAD_BACKUP_FORMAT_VERSION: _schema.SCHEMA_VERSION,
+    }[format_version]
+    expected_tables = {
+        1: _LEGACY_PRESERVED_TABLES,
+        _UPLOAD_BACKUP_FORMAT_V2: _FORMAT2_PRESERVED_TABLES,
+        UPLOAD_BACKUP_FORMAT_VERSION: _PRESERVED_TABLES,
+    }[format_version]
+    expected_restore_policy = (
+        _RESTORE_POLICY
+        if format_version == UPLOAD_BACKUP_FORMAT_VERSION
+        else _FORMAT12_RESTORE_POLICY
+    )
     if (
         set(metadata) != expected_keys
         or type(metadata.get("format_version")) is not int
@@ -1131,7 +1290,7 @@ def _validate_metadata(
         or metadata.get("database_payload_path") != UPLOAD_DATABASE_PAYLOAD_PATH
         or metadata.get("media_payload_prefix") != UPLOAD_MEDIA_PAYLOAD_PREFIX.as_posix()
         or (
-            format_version == UPLOAD_BACKUP_FORMAT_VERSION
+            has_assets
             and metadata.get("asset_payload_prefix")
             != UPLOAD_ASSET_PAYLOAD_PREFIX.as_posix()
         )
@@ -1143,14 +1302,14 @@ def _validate_metadata(
         or metadata.get("excluded_paths") != _EXCLUDED_PATHS
         or metadata.get("media_scope") != "registered_present_media_only"
         or (
-            format_version == UPLOAD_BACKUP_FORMAT_VERSION
+            has_assets
             and metadata.get("asset_scope")
             != "registered_present_cover_assets_only"
         )
         or metadata.get("secret_material_included") is not False
         or metadata.get("account_fields") != _ACCOUNT_FIELDS
         or metadata.get("preserved_tables") != expected_tables
-        or metadata.get("restore_policy") != _RESTORE_POLICY
+        or metadata.get("restore_policy") != expected_restore_policy
         or not isinstance(metadata.get("application_version"), str)
         or not metadata.get("application_version")
         or parsed is None
@@ -1164,7 +1323,7 @@ def _validate_metadata(
         path != UPLOAD_DATABASE_PAYLOAD_PATH
         and not PurePosixPath(path).is_relative_to(UPLOAD_MEDIA_PAYLOAD_PREFIX)
         and not (
-            format_version == UPLOAD_BACKUP_FORMAT_VERSION
+            has_assets
             and PurePosixPath(path).is_relative_to(UPLOAD_ASSET_PAYLOAD_PREFIX)
         )
         for path in paths
@@ -1223,7 +1382,7 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
         "id,account_id,source_id,title,description,tags,category_id,mode,"
         "copyright,source_credit,state,code,created_at,updated_at,retry_of"
     )
-    if schema_version == _schema.SCHEMA_VERSION:
+    if schema_version >= _schema._SCHEMA_V3_VERSION:
         job_columns += (
             ",cover_landscape_asset_id,cover_portrait_asset_id,publish_at_unix,"
             "publish_timezone_offset_minutes,platform_options"
@@ -1239,13 +1398,14 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
                 platform_options="{}",
             )
     source_states = dict(db.execute("SELECT id,media_state FROM sources"))
+    source_digests = dict(db.execute("SELECT id,sha256 FROM sources"))
     asset_rows = {
         row["id"]: dict(row)
         for row in db.execute(
             "SELECT id,kind,name,suffix,mime_type,size,sha256,width,height,created_at,"
             "media_state,deleted_at FROM upload_assets"
         )
-    } if schema_version == _schema.SCHEMA_VERSION else {}
+    } if schema_version >= _schema._SCHEMA_V3_VERSION else {}
     job_ids = {row["id"] for row in jobs}
     if len(job_ids) != len(jobs) or any(
         not isinstance(job_id, str) or _ID.fullmatch(job_id) is None for job_id in job_ids
@@ -1317,7 +1477,7 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
         options = _parse_platform_options(
             row["platform_options"],
             platform,
-            require_tencent_short_title=schema_version == _schema.SCHEMA_VERSION,
+            require_tencent_short_title=schema_version >= _schema._SCHEMA_V3_VERSION,
         )
         category_id = row["category_id"]
         landscape_id = row["cover_landscape_asset_id"]
@@ -1337,7 +1497,7 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             )
             or platform not in {"douyin", "tencent"} and portrait_id is not None
             or platform == "douyin" and landscape_id is not None and portrait_id is not None
-            or schema_version == _schema.SCHEMA_VERSION
+            or schema_version >= _schema._SCHEMA_V3_VERSION
             and platform == "bilibili"
             and row["copyright"] == 1
             and bool(row["source_credit"])
@@ -1444,6 +1604,7 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
         "SELECT id,account_id,action,state,code,created_at,updated_at FROM operations"
     ))
     active_operations: set[str] = set()
+    login_operation_accounts: dict[str, str] = {}
     for row in operations:
         if (
             not isinstance(row["id"], str)
@@ -1463,11 +1624,14 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             ):
                 raise UploadBackupError("active upload operation relation is invalid")
             active_operations.add(row["account_id"])
+        if row["action"] == "login":
+            login_operation_accounts[row["id"]] = row["account_id"]
 
     requested_jobs: set[str] = set()
+    request_by_root_job: dict[str, dict[str, object]] = {}
     request_columns = (
         "id,digest,job_ids,digest_version"
-        if schema_version == _schema.SCHEMA_VERSION
+        if schema_version >= _schema._SCHEMA_V3_VERSION
         else "id,digest,job_ids,1 AS digest_version"
     )
     for row in db.execute(f"SELECT {request_columns} FROM requests"):
@@ -1483,7 +1647,7 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             # stable-key sentinel before request metadata is needed.  Preserve
             # that fail-closed tombstone so restore cannot create the fan-out.
             if (
-                schema_version != _schema.SCHEMA_VERSION
+                schema_version < _schema._SCHEMA_V3_VERSION
                 or not isinstance(row["id"], str)
                 or _WORKFLOW_UPLOAD_REQUEST.fullmatch(row["id"]) is None
                 or not isinstance(row["digest"], str)
@@ -1607,8 +1771,285 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             if row["digest"] != _request_digest_v2(digest_payload):
                 raise UploadBackupError("upload request digest does not match its jobs")
         requested_jobs.update(request_jobs)
+        request_record = {
+            "id": row["id"],
+            "digest": row["digest"],
+            "digest_version": row["digest_version"],
+        }
+        for job_id in request_jobs:
+            request_by_root_job[job_id] = request_record
     if requested_jobs != root_job_ids:
         raise UploadBackupError("upload request root job coverage is invalid")
+    if schema_version == _schema.SCHEMA_VERSION:
+        _audit_upload_attempts(
+            db,
+            jobs_by_id=jobs_by_id,
+            retry_parent=retry_parent,
+            job_tags=job_tags,
+            job_options=job_options,
+            account_platforms=account_platforms,
+            source_digests=source_digests,
+            asset_rows=asset_rows,
+            login_operation_accounts=login_operation_accounts,
+            request_by_root_job=request_by_root_job,
+        )
+
+
+def _audit_upload_attempts(
+    db: sqlite3.Connection,
+    *,
+    jobs_by_id: Mapping[str, Mapping[str, object]],
+    retry_parent: Mapping[str, str | None],
+    job_tags: Mapping[str, list[str]],
+    job_options: Mapping[str, dict],
+    account_platforms: Mapping[str, str],
+    source_digests: Mapping[str, str],
+    asset_rows: Mapping[str, Mapping[str, object]],
+    login_operation_accounts: Mapping[str, str],
+    request_by_root_job: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Validate immutable dispatch receipts without inventing legacy attempts."""
+
+    attempts = [
+        dict(row)
+        for row in db.execute(
+            "SELECT id,job_id,root_job_id,request_id,request_digest,"
+            "request_digest_version,job_digest,job_digest_version,account_id,"
+            "platform,session_revision,source_id,source_sha256,"
+            "cover_landscape_asset_id,cover_landscape_sha256,"
+            "cover_portrait_asset_id,cover_portrait_sha256,product_identity,"
+            "adapter_name,adapter_revision,state,result_status,result_code,"
+            "evidence_kind,reconciliation,reconciliation_evidence_kind,created_at,"
+            "dispatch_started_at,responded_at,reconciled_at,revision "
+            "FROM upload_attempts"
+        )
+    ]
+    attempt_ids: set[str] = set()
+    attempt_job_ids: set[str] = set()
+    for attempt in attempts:
+        attempt_id = attempt["id"]
+        job_id = attempt["job_id"]
+        if (
+            not isinstance(attempt_id, str)
+            or _ID.fullmatch(attempt_id) is None
+            or attempt_id in attempt_ids
+            or not isinstance(job_id, str)
+            or _ID.fullmatch(job_id) is None
+            or job_id in attempt_job_ids
+            or job_id not in jobs_by_id
+        ):
+            raise UploadBackupError("upload attempt identity is invalid")
+        attempt_ids.add(attempt_id)
+        attempt_job_ids.add(job_id)
+
+        job = jobs_by_id[job_id]
+        root_job_id = job_id
+        while True:
+            parent_id = retry_parent[root_job_id]
+            if parent_id is None:
+                break
+            root_job_id = parent_id
+        request = request_by_root_job.get(root_job_id)
+        if (
+            attempt["root_job_id"] != root_job_id
+            or request is None
+            or attempt["request_id"] != request["id"]
+            or attempt["request_digest"] != request["digest"]
+            or attempt["request_digest_version"] != request["digest_version"]
+        ):
+            raise UploadBackupError("upload attempt request binding is invalid")
+
+        platform = account_platforms[job["account_id"]]
+        job_payload = {
+            **job,
+            "platform": platform,
+            "tags": job_tags[job_id],
+            "platform_options": job_options[job_id],
+        }
+        try:
+            expected_job_digest = upload_job_definition_digest(job_payload)
+        except UploadError as exc:
+            raise UploadBackupError("upload attempt job digest is invalid") from exc
+        landscape_id = job["cover_landscape_asset_id"]
+        portrait_id = job["cover_portrait_asset_id"]
+        landscape_sha256 = (
+            asset_rows[landscape_id]["sha256"] if landscape_id is not None else None
+        )
+        portrait_sha256 = (
+            asset_rows[portrait_id]["sha256"] if portrait_id is not None else None
+        )
+        session_revision = attempt["session_revision"]
+        if (
+            attempt["job_digest_version"] != 1
+            or attempt["job_digest"] != expected_job_digest
+            or attempt["account_id"] != job["account_id"]
+            or attempt["platform"] != platform
+            or attempt["source_id"] != job["source_id"]
+            or attempt["source_sha256"] != source_digests[job["source_id"]]
+            or attempt["cover_landscape_asset_id"] != landscape_id
+            or attempt["cover_landscape_sha256"] != landscape_sha256
+            or attempt["cover_portrait_asset_id"] != portrait_id
+            or attempt["cover_portrait_sha256"] != portrait_sha256
+            or not isinstance(session_revision, str)
+            or _ID.fullmatch(session_revision) is None
+            or (
+                session_revision != job["account_id"]
+                and login_operation_accounts.get(session_revision) != job["account_id"]
+            )
+        ):
+            raise UploadBackupError("upload attempt frozen identity is invalid")
+
+        state = attempt["state"]
+        status = attempt["result_status"]
+        code = attempt["result_code"]
+        evidence_kind = attempt["evidence_kind"]
+        conclusion = attempt["reconciliation"]
+        reconciliation_evidence = attempt["reconciliation_evidence_kind"]
+        revision = attempt["revision"]
+        if (
+            not isinstance(attempt["product_identity"], str)
+            or _PRODUCT_IDENTITY.fullmatch(attempt["product_identity"]) is None
+            or not isinstance(attempt["adapter_name"], str)
+            or _ADAPTER_IDENTITY.fullmatch(attempt["adapter_name"]) is None
+            or not isinstance(attempt["adapter_revision"], str)
+            or _ADAPTER_IDENTITY.fullmatch(attempt["adapter_revision"]) is None
+            or not upload_adapter_identity_matches(
+                platform, attempt["adapter_name"], attempt["adapter_revision"]
+            )
+            or state not in UPLOAD_ATTEMPT_STATES
+            or status is not None and status not in UPLOAD_RESULT_STATUSES
+            or code is not None and not _is_safe_code(code)
+            or evidence_kind is not None and evidence_kind not in UPLOAD_EVIDENCE_KINDS
+            or conclusion is not None and conclusion not in UPLOAD_RECONCILIATIONS
+            or reconciliation_evidence not in {None, "operator_platform_check"}
+            or not _is_timestamp(attempt["created_at"])
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or not 0 <= revision <= 2_147_483_647
+        ):
+            raise UploadBackupError("upload attempt metadata is invalid")
+
+        dispatch_at = attempt["dispatch_started_at"]
+        responded_at = attempt["responded_at"]
+        reconciled_at = attempt["reconciled_at"]
+        if any(
+            value is not None and not _is_timestamp(value)
+            for value in (dispatch_at, responded_at, reconciled_at)
+        ):
+            raise UploadBackupError("upload attempt timestamp is invalid")
+
+        terminal_code = isinstance(code, str) and bool(code) and _is_safe_code(code)
+        raw_unknown_result = (
+            status in {"unknown", "canceled"}
+            or status == "submitted" and job["mode"] != "publish"
+            or status == "draft_saved" and job["mode"] != "draft"
+        )
+        if state == "reserved":
+            valid_state = (
+                status is None
+                and code is None
+                and evidence_kind is None
+                and dispatch_at is None
+                and responded_at is None
+                and revision == 0
+                and job["state"] == "running"
+            )
+        elif state == "dispatch_may_have_started":
+            valid_state = (
+                status is None
+                and code is None
+                and evidence_kind is None
+                and dispatch_at is not None
+                and responded_at is None
+                and revision == 1
+                and job["state"] == "running"
+            )
+        elif state == "responded":
+            valid_state = (
+                terminal_code
+                and responded_at is not None
+                and (
+                    dispatch_at is None
+                    and revision == 1
+                    and status in {"failed", "canceled"}
+                    and evidence_kind is None
+                    or dispatch_at is not None
+                    and revision == 2
+                    and (
+                        status == "failed"
+                        or status == "submitted" and job["mode"] == "publish"
+                        or status == "draft_saved" and job["mode"] == "draft"
+                    )
+                )
+            )
+        elif state == "unknown":
+            valid_state = (
+                terminal_code
+                and raw_unknown_result
+                and dispatch_at is not None
+                and revision == 2
+                and (
+                    responded_at is not None
+                    or status == "unknown"
+                    and code == "interrupted_result_unknown"
+                    and evidence_kind is None
+                )
+            )
+        else:
+            valid_state = (
+                terminal_code
+                and raw_unknown_result
+                and dispatch_at is not None
+                and conclusion is not None
+                and reconciliation_evidence == "operator_platform_check"
+                and reconciled_at is not None
+                and revision == 3
+                and (
+                    responded_at is not None
+                    or status == "unknown"
+                    and code == "interrupted_result_unknown"
+                    and evidence_kind is None
+                )
+            )
+        if state != "reconciled" and any(
+            value is not None
+            for value in (conclusion, reconciliation_evidence, reconciled_at)
+        ):
+            valid_state = False
+        if not upload_evidence_is_valid(
+            platform,
+            job["mode"],
+            status,
+            evidence_kind,
+        ):
+            valid_state = False
+        if conclusion == "submission_acknowledged" and job["mode"] != "publish":
+            valid_state = False
+        if conclusion == "draft_saved" and (
+            platform != "tencent" or job["mode"] != "draft"
+        ):
+            valid_state = False
+        if state == "responded" and (
+            job["state"] != status or job["code"] != code
+        ):
+            valid_state = False
+        if state == "unknown" and (
+            job["state"] != "unknown" or job["code"] != code
+        ):
+            valid_state = False
+        if state == "reconciled":
+            expected_job_result = {
+                "not_accepted": ("failed", "manual_remote_not_accepted"),
+                "submission_acknowledged": (
+                    "submitted",
+                    "manual_submission_acknowledged",
+                ),
+                "draft_saved": ("draft_saved", "manual_platform_draft_saved"),
+            }.get(conclusion)
+            if expected_job_result != (job["state"], job["code"]):
+                valid_state = False
+        if not valid_state:
+            raise UploadBackupError("upload attempt state is invalid")
 
 
 def _valid_optional_identifier(value: object) -> bool:
@@ -1704,16 +2145,9 @@ def _normalized_platform_options(platform: str, options: dict) -> dict:
 def _legacy_request_platform_options(
     job: Mapping[str, object], platform: str, schema_version: int
 ) -> dict:
-    if schema_version != _schema.SCHEMA_VERSION:
+    if schema_version < _schema._SCHEMA_V3_VERSION:
         return {}
-    if platform == "douyin":
-        return {"declaration": "内容由AI生成"}
-    if platform == "tencent":
-        return {
-            "content_label": "含AI生成内容",
-            "short_title": normalize_tencent_short_title(job["title"]),
-        }
-    return {}
+    return legacy_migrated_platform_options(platform, job["title"])
 
 
 def _is_service_normalized_target(job: Mapping[str, object], platform: str, options: dict) -> bool:
@@ -1805,7 +2239,13 @@ def _validate_manifest_entry_path(relative: str, *, format_version: int) -> None
             asset_relative = pure.relative_to(UPLOAD_ASSET_PAYLOAD_PREFIX)
         except ValueError as exc:
             raise UploadBackupError("upload backup payload path is unexpected") from exc
-        if format_version != UPLOAD_BACKUP_FORMAT_VERSION or len(asset_relative.parts) != 1:
+        if (
+            format_version not in {
+                _UPLOAD_BACKUP_FORMAT_V2,
+                UPLOAD_BACKUP_FORMAT_VERSION,
+            }
+            or len(asset_relative.parts) != 1
+        ):
             raise UploadBackupError("upload backup asset path is invalid")
         name = asset_relative.name
         suffix = PurePosixPath(name).suffix

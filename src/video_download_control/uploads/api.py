@@ -39,6 +39,10 @@ Identifier = Annotated[
     str,
     Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$"),
 ]
+Sha256Digest = Annotated[
+    str,
+    Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+]
 TagInput = Annotated[
     str,
     Field(
@@ -73,6 +77,16 @@ _JOB_FIELDS = (
     "source_media_present", "source_media_state",
     "cover_landscape_asset_id", "cover_portrait_asset_id", "publish_at_unix",
     "publish_timezone_offset_minutes", "platform_options",
+)
+_ATTEMPT_FIELDS = (
+    "id", "job_id", "root_job_id", "request_id", "request_digest",
+    "request_digest_version", "job_digest", "job_digest_version", "account_id",
+    "platform", "session_revision", "source_id", "source_sha256",
+    "cover_landscape_asset_id", "cover_landscape_sha256",
+    "cover_portrait_asset_id", "cover_portrait_sha256", "product_identity",
+    "adapter_name", "adapter_revision", "state", "result_status", "result_code",
+    "evidence_kind", "reconciliation", "reconciliation_evidence_kind",
+    "created_at", "dispatch_started_at", "responded_at", "reconciled_at", "revision",
 )
 
 
@@ -261,6 +275,66 @@ class UploadJobPageResponse(BaseModel):
     next_cursor: str | None
 
 
+class UploadAttemptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: Identifier
+    job_id: Identifier
+    root_job_id: Identifier
+    request_id: str
+    request_digest: Sha256Digest
+    request_digest_version: int
+    job_digest: Sha256Digest
+    job_digest_version: int
+    account_id: Identifier
+    platform: Literal["bilibili", "douyin", "tencent"]
+    session_revision: Identifier
+    source_id: Identifier
+    source_sha256: Sha256Digest
+    cover_landscape_asset_id: Identifier | None
+    cover_landscape_sha256: Sha256Digest | None
+    cover_portrait_asset_id: Identifier | None
+    cover_portrait_sha256: Sha256Digest | None
+    product_identity: str
+    adapter_name: str
+    adapter_revision: str
+    state: Literal[
+        "reserved", "dispatch_may_have_started", "responded", "unknown", "reconciled",
+    ]
+    result_status: Literal[
+        "submitted", "draft_saved", "failed", "unknown", "canceled",
+    ] | None
+    result_code: str | None
+    evidence_kind: Literal[
+        "process_exit_zero",
+        "uploader_returned_after_final_action",
+        "https_errcode_zero",
+        "post_list_navigation",
+    ] | None
+    reconciliation: Literal[
+        "not_accepted", "submission_acknowledged", "draft_saved",
+    ] | None
+    reconciliation_evidence_kind: Literal["operator_platform_check"] | None
+    created_at: str
+    dispatch_started_at: str | None
+    responded_at: str | None
+    reconciled_at: str | None
+    revision: int
+
+
+class ReconcileUploadAttemptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: Identifier
+    expected_revision: int = Field(ge=0, le=2_147_483_647, strict=True)
+    conclusion: Literal["not_accepted", "submission_acknowledged", "draft_saved"]
+    acknowledge_platform_check: Literal[True]
+
+
+class UploadReconciliationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job: UploadJobResponse
+    attempt: UploadAttemptResponse
+
+
 class UploadCoverResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: Identifier
@@ -285,7 +359,6 @@ class UploadCoverPageResponse(BaseModel):
 
 class RetryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    acknowledge_unknown: bool = Field(default=False, strict=True)
 
 
 def _public(record: dict, fields: tuple[str, ...]) -> dict:
@@ -815,6 +888,26 @@ def install_upload_routes(
     async def job(job_id: str):
         return _public(await invoke("job", job_id), _JOB_FIELDS)
 
+    @router.get(
+        "/jobs/{job_id}/attempt",
+        response_model=UploadAttemptResponse,
+        response_model_exclude_unset=True,
+    )
+    async def attempt(job_id: str):
+        return _public(await invoke("attempt", job_id), _ATTEMPT_FIELDS)
+
+    @router.post(
+        "/jobs/{job_id}/reconcile",
+        response_model=UploadReconciliationResponse,
+        response_model_exclude_unset=True,
+    )
+    async def reconcile(job_id: str, payload: ReconcileUploadAttemptRequest):
+        result = await invoke("reconcile_unknown", job_id, **payload.model_dump())
+        return {
+            "job": _public(result["job"], _JOB_FIELDS),
+            "attempt": _public(result["attempt"], _ATTEMPT_FIELDS),
+        }
+
     @router.post(
         "/jobs",
         status_code=201,
@@ -852,6 +945,6 @@ def install_upload_routes(
         response_model_exclude_unset=True,
     )
     async def retry(job_id: str, payload: RetryRequest):
-        return _public(await invoke("retry", job_id, **payload.model_dump()), _JOB_FIELDS)
+        return _public(await invoke("retry", job_id), _JOB_FIELDS)
 
     app.include_router(router)

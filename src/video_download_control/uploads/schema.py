@@ -15,8 +15,9 @@ from uuid import uuid4
 
 from .contracts import normalize_tencent_short_title
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_V2_VERSION = 2
+_SCHEMA_V3_VERSION = 3
 
 LEGACY_SCHEMA_STATEMENTS = (
     "CREATE TABLE metadata(version INTEGER NOT NULL)",
@@ -80,7 +81,7 @@ SCHEMA_V2_INDEX_STATEMENTS = (
 SCHEMA_V2_STATEMENTS = SCHEMA_V2_TABLE_STATEMENTS + SCHEMA_V2_INDEX_STATEMENTS
 SCHEMA_V2_DDL = ";\n".join(SCHEMA_V2_STATEMENTS) + ";"
 
-SCHEMA_TABLE_STATEMENTS = (
+SCHEMA_V3_TABLE_STATEMENTS = (
     SCHEMA_V2_TABLE_STATEMENTS[0],
     SCHEMA_V2_TABLE_STATEMENTS[1],
     SCHEMA_V2_TABLE_STATEMENTS[2],
@@ -108,9 +109,55 @@ SCHEMA_TABLE_STATEMENTS = (
  id TEXT PRIMARY KEY, digest TEXT NOT NULL, job_ids TEXT NOT NULL,
  digest_version INTEGER NOT NULL DEFAULT 1)""",
 )
-SCHEMA_INDEX_STATEMENTS = SCHEMA_V2_INDEX_STATEMENTS + (
+SCHEMA_V3_INDEX_STATEMENTS = SCHEMA_V2_INDEX_STATEMENTS + (
     "CREATE INDEX jobs_cover_landscape_state ON jobs(cover_landscape_asset_id,state)",
     "CREATE INDEX jobs_cover_portrait_state ON jobs(cover_portrait_asset_id,state)",
+)
+SCHEMA_V3_STATEMENTS = SCHEMA_V3_TABLE_STATEMENTS + SCHEMA_V3_INDEX_STATEMENTS
+SCHEMA_V3_DDL = ";\n".join(SCHEMA_V3_STATEMENTS) + ";"
+
+_UPLOAD_ATTEMPTS_TABLE_STATEMENT = """CREATE TABLE upload_attempts(
+ id TEXT PRIMARY KEY,
+ job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id),
+ root_job_id TEXT NOT NULL REFERENCES jobs(id),
+ request_id TEXT NOT NULL REFERENCES requests(id),
+ request_digest TEXT NOT NULL,
+ request_digest_version INTEGER NOT NULL CHECK(request_digest_version IN (1,2)),
+ job_digest TEXT NOT NULL,
+ job_digest_version INTEGER NOT NULL CHECK(job_digest_version=1),
+ account_id TEXT NOT NULL REFERENCES accounts(id),
+ platform TEXT NOT NULL CHECK(platform IN ('bilibili','douyin','tencent')),
+ session_revision TEXT NOT NULL,
+ source_id TEXT NOT NULL REFERENCES sources(id),
+ source_sha256 TEXT NOT NULL,
+ cover_landscape_asset_id TEXT REFERENCES upload_assets(id),
+ cover_landscape_sha256 TEXT,
+ cover_portrait_asset_id TEXT REFERENCES upload_assets(id),
+ cover_portrait_sha256 TEXT,
+ product_identity TEXT NOT NULL,
+ adapter_name TEXT NOT NULL, adapter_revision TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN
+ ('reserved','dispatch_may_have_started','responded','unknown','reconciled')),
+ result_status TEXT CHECK(result_status IN
+ ('submitted','draft_saved','failed','unknown','canceled')),
+ result_code TEXT, evidence_kind TEXT CHECK(evidence_kind IN
+ ('process_exit_zero','uploader_returned_after_final_action','https_errcode_zero',
+  'post_list_navigation')),
+ reconciliation TEXT CHECK(reconciliation IN
+ ('not_accepted','submission_acknowledged','draft_saved')),
+ reconciliation_evidence_kind TEXT CHECK(
+ reconciliation_evidence_kind='operator_platform_check'),
+ created_at TEXT NOT NULL, dispatch_started_at TEXT, responded_at TEXT,
+ reconciled_at TEXT, revision INTEGER NOT NULL DEFAULT 0)"""
+_UPLOAD_ATTEMPTS_INDEX_STATEMENT = (
+    "CREATE INDEX upload_attempts_request_state ON upload_attempts(request_id,state)"
+)
+
+SCHEMA_TABLE_STATEMENTS = SCHEMA_V3_TABLE_STATEMENTS + (
+    _UPLOAD_ATTEMPTS_TABLE_STATEMENT,
+)
+SCHEMA_INDEX_STATEMENTS = SCHEMA_V3_INDEX_STATEMENTS + (
+    _UPLOAD_ATTEMPTS_INDEX_STATEMENT,
 )
 SCHEMA_STATEMENTS = SCHEMA_TABLE_STATEMENTS + SCHEMA_INDEX_STATEMENTS
 SCHEMA_DDL = ";\n".join(SCHEMA_STATEMENTS) + ";"
@@ -179,7 +226,7 @@ _V2_COLUMNS["sources"] = _LEGACY_COLUMNS["sources"] + (
     (6, "media_state", "TEXT", 1, "'present'", 0, 0),
     (7, "deleted_at", "TEXT", 0, None, 0, 0),
 )
-_COLUMNS = {
+_V3_COLUMNS = {
     "metadata": _V2_COLUMNS["metadata"],
     "accounts": _V2_COLUMNS["accounts"],
     "sources": _V2_COLUMNS["sources"],
@@ -209,9 +256,44 @@ _COLUMNS = {
         (3, "digest_version", "INTEGER", 1, "1", 0, 0),
     ),
 }
+_COLUMNS = dict(_V3_COLUMNS)
+_COLUMNS["upload_attempts"] = (
+    (0, "id", "TEXT", 0, None, 1, 0),
+    (1, "job_id", "TEXT", 1, None, 0, 0),
+    (2, "root_job_id", "TEXT", 1, None, 0, 0),
+    (3, "request_id", "TEXT", 1, None, 0, 0),
+    (4, "request_digest", "TEXT", 1, None, 0, 0),
+    (5, "request_digest_version", "INTEGER", 1, None, 0, 0),
+    (6, "job_digest", "TEXT", 1, None, 0, 0),
+    (7, "job_digest_version", "INTEGER", 1, None, 0, 0),
+    (8, "account_id", "TEXT", 1, None, 0, 0),
+    (9, "platform", "TEXT", 1, None, 0, 0),
+    (10, "session_revision", "TEXT", 1, None, 0, 0),
+    (11, "source_id", "TEXT", 1, None, 0, 0),
+    (12, "source_sha256", "TEXT", 1, None, 0, 0),
+    (13, "cover_landscape_asset_id", "TEXT", 0, None, 0, 0),
+    (14, "cover_landscape_sha256", "TEXT", 0, None, 0, 0),
+    (15, "cover_portrait_asset_id", "TEXT", 0, None, 0, 0),
+    (16, "cover_portrait_sha256", "TEXT", 0, None, 0, 0),
+    (17, "product_identity", "TEXT", 1, None, 0, 0),
+    (18, "adapter_name", "TEXT", 1, None, 0, 0),
+    (19, "adapter_revision", "TEXT", 1, None, 0, 0),
+    (20, "state", "TEXT", 1, None, 0, 0),
+    (21, "result_status", "TEXT", 0, None, 0, 0),
+    (22, "result_code", "TEXT", 0, None, 0, 0),
+    (23, "evidence_kind", "TEXT", 0, None, 0, 0),
+    (24, "reconciliation", "TEXT", 0, None, 0, 0),
+    (25, "reconciliation_evidence_kind", "TEXT", 0, None, 0, 0),
+    (26, "created_at", "TEXT", 1, None, 0, 0),
+    (27, "dispatch_started_at", "TEXT", 0, None, 0, 0),
+    (28, "responded_at", "TEXT", 0, None, 0, 0),
+    (29, "reconciled_at", "TEXT", 0, None, 0, 0),
+    (30, "revision", "INTEGER", 1, "0", 0, 0),
+)
 _COLUMNS_BY_VERSION = {
     1: _LEGACY_COLUMNS,
     _SCHEMA_V2_VERSION: _V2_COLUMNS,
+    _SCHEMA_V3_VERSION: _V3_COLUMNS,
     SCHEMA_VERSION: _COLUMNS,
 }
 
@@ -244,15 +326,22 @@ _V2_INDEXES = {
     },
     "requests": {("pk", 1, 0, (("id", 0, "BINARY"),))},
 }
-_INDEXES = dict(_V2_INDEXES)
-_INDEXES["upload_assets"] = {("pk", 1, 0, (("id", 0, "BINARY"),))}
-_INDEXES["jobs"] = _V2_INDEXES["jobs"] | {
+_V3_INDEXES = dict(_V2_INDEXES)
+_V3_INDEXES["upload_assets"] = {("pk", 1, 0, (("id", 0, "BINARY"),))}
+_V3_INDEXES["jobs"] = _V2_INDEXES["jobs"] | {
     ("c", 0, 0, (("cover_landscape_asset_id", 0, "BINARY"), ("state", 0, "BINARY"))),
     ("c", 0, 0, (("cover_portrait_asset_id", 0, "BINARY"), ("state", 0, "BINARY"))),
+}
+_INDEXES = dict(_V3_INDEXES)
+_INDEXES["upload_attempts"] = {
+    ("pk", 1, 0, (("id", 0, "BINARY"),)),
+    ("u", 1, 0, (("job_id", 0, "BINARY"),)),
+    ("c", 0, 0, (("request_id", 0, "BINARY"), ("state", 0, "BINARY"))),
 }
 _INDEXES_BY_VERSION = {
     1: _LEGACY_INDEXES,
     _SCHEMA_V2_VERSION: _V2_INDEXES,
+    _SCHEMA_V3_VERSION: _V3_INDEXES,
     SCHEMA_VERSION: _INDEXES,
 }
 _V2_FOREIGN_KEYS = {
@@ -269,15 +358,32 @@ _V2_FOREIGN_KEYS = {
     },
     "requests": set(),
 }
-_FOREIGN_KEYS = dict(_V2_FOREIGN_KEYS)
-_FOREIGN_KEYS["upload_assets"] = set()
-_FOREIGN_KEYS["jobs"] = _V2_FOREIGN_KEYS["jobs"] | {
+_V3_FOREIGN_KEYS = dict(_V2_FOREIGN_KEYS)
+_V3_FOREIGN_KEYS["upload_assets"] = set()
+_V3_FOREIGN_KEYS["jobs"] = _V2_FOREIGN_KEYS["jobs"] | {
     ("upload_assets", "cover_landscape_asset_id", "id", "NO ACTION", "NO ACTION", "NONE"),
     ("upload_assets", "cover_portrait_asset_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+}
+_FOREIGN_KEYS = dict(_V3_FOREIGN_KEYS)
+_FOREIGN_KEYS["upload_attempts"] = {
+    ("jobs", "job_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    ("jobs", "root_job_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    ("requests", "request_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    ("accounts", "account_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    ("sources", "source_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+    (
+        "upload_assets", "cover_landscape_asset_id", "id",
+        "NO ACTION", "NO ACTION", "NONE",
+    ),
+    (
+        "upload_assets", "cover_portrait_asset_id", "id",
+        "NO ACTION", "NO ACTION", "NONE",
+    ),
 }
 _FOREIGN_KEYS_BY_VERSION = {
     1: _V2_FOREIGN_KEYS,
     _SCHEMA_V2_VERSION: _V2_FOREIGN_KEYS,
+    _SCHEMA_V3_VERSION: _V3_FOREIGN_KEYS,
     SCHEMA_VERSION: _FOREIGN_KEYS,
 }
 
@@ -311,6 +417,10 @@ _V2_CANONICAL_SQL = {
     name: _normalized_sql(statement)
     for name, statement in zip(_V2_COLUMNS, SCHEMA_V2_TABLE_STATEMENTS, strict=True)
 }
+_V3_CANONICAL_SQL = {
+    name: _normalized_sql(statement)
+    for name, statement in zip(_V3_COLUMNS, SCHEMA_V3_TABLE_STATEMENTS, strict=True)
+}
 _CANONICAL_SQL = {
     name: _normalized_sql(statement)
     for name, statement in zip(_COLUMNS, SCHEMA_TABLE_STATEMENTS, strict=True)
@@ -318,6 +428,7 @@ _CANONICAL_SQL = {
 _CANONICAL_SQL_BY_VERSION = {
     1: _LEGACY_CANONICAL_SQL,
     _SCHEMA_V2_VERSION: _V2_CANONICAL_SQL,
+    _SCHEMA_V3_VERSION: _V3_CANONICAL_SQL,
     SCHEMA_VERSION: _CANONICAL_SQL,
 }
 _EXPLICIT_INDEX_SQL_BY_VERSION = {
@@ -331,17 +442,23 @@ _EXPLICIT_INDEX_SQL_BY_VERSION = {
             ("operations_account_state", "operations", SCHEMA_V2_INDEX_STATEMENTS[3]),
         )
     },
-    SCHEMA_VERSION: {
+    _SCHEMA_V3_VERSION: {
         name: (owner, _normalized_sql(statement))
         for name, owner, statement in (
-            ("accounts_active_name", "accounts", SCHEMA_INDEX_STATEMENTS[0]),
-            ("jobs_account_state", "jobs", SCHEMA_INDEX_STATEMENTS[1]),
-            ("jobs_source_state", "jobs", SCHEMA_INDEX_STATEMENTS[2]),
-            ("operations_account_state", "operations", SCHEMA_INDEX_STATEMENTS[3]),
-            ("jobs_cover_landscape_state", "jobs", SCHEMA_INDEX_STATEMENTS[4]),
-            ("jobs_cover_portrait_state", "jobs", SCHEMA_INDEX_STATEMENTS[5]),
+            ("accounts_active_name", "accounts", SCHEMA_V3_INDEX_STATEMENTS[0]),
+            ("jobs_account_state", "jobs", SCHEMA_V3_INDEX_STATEMENTS[1]),
+            ("jobs_source_state", "jobs", SCHEMA_V3_INDEX_STATEMENTS[2]),
+            ("operations_account_state", "operations", SCHEMA_V3_INDEX_STATEMENTS[3]),
+            ("jobs_cover_landscape_state", "jobs", SCHEMA_V3_INDEX_STATEMENTS[4]),
+            ("jobs_cover_portrait_state", "jobs", SCHEMA_V3_INDEX_STATEMENTS[5]),
         )
     },
+}
+_EXPLICIT_INDEX_SQL_BY_VERSION[SCHEMA_VERSION] = {
+    **_EXPLICIT_INDEX_SQL_BY_VERSION[_SCHEMA_V3_VERSION],
+    "upload_attempts_request_state": (
+        "upload_attempts", _normalized_sql(_UPLOAD_ATTEMPTS_INDEX_STATEMENT)
+    ),
 }
 _INITIALIZE_LOCK = threading.Lock()
 _SNAPSHOT_ATTEMPTS = 5
@@ -376,16 +493,21 @@ _MIGRATION_V1_TO_V2 = (
     "UPDATE metadata SET version=2",
 )
 _MIGRATION_V2_TO_V3 = (
-    SCHEMA_TABLE_STATEMENTS[3],
+    SCHEMA_V3_TABLE_STATEMENTS[3],
     "ALTER TABLE jobs ADD COLUMN cover_landscape_asset_id TEXT REFERENCES upload_assets(id)",
     "ALTER TABLE jobs ADD COLUMN cover_portrait_asset_id TEXT REFERENCES upload_assets(id)",
     "ALTER TABLE jobs ADD COLUMN publish_at_unix INTEGER",
     "ALTER TABLE jobs ADD COLUMN publish_timezone_offset_minutes INTEGER",
     "ALTER TABLE jobs ADD COLUMN platform_options TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE requests ADD COLUMN digest_version INTEGER NOT NULL DEFAULT 1",
-    SCHEMA_INDEX_STATEMENTS[4],
-    SCHEMA_INDEX_STATEMENTS[5],
+    SCHEMA_V3_INDEX_STATEMENTS[4],
+    SCHEMA_V3_INDEX_STATEMENTS[5],
     "UPDATE metadata SET version=3",
+)
+_MIGRATION_V3_TO_V4 = (
+    _UPLOAD_ATTEMPTS_TABLE_STATEMENT,
+    _UPLOAD_ATTEMPTS_INDEX_STATEMENT,
+    "UPDATE metadata SET version=4",
 )
 
 
@@ -1323,6 +1445,12 @@ def _migrate_to_latest(path: Path) -> None:
                 db.execute(statement)
             _populate_v3_legacy_platform_options(db)
             _preserve_v3_legacy_review_state_reasons(db, original_job_states)
+            _validate_connection(db, _SCHEMA_V3_VERSION)
+            version = _SCHEMA_V3_VERSION
+        if version == _SCHEMA_V3_VERSION:
+            _validate_connection(db, _SCHEMA_V3_VERSION)
+            for statement in _MIGRATION_V3_TO_V4:
+                db.execute(statement)
             _validate_connection(db, SCHEMA_VERSION)
             version = SCHEMA_VERSION
         if version == SCHEMA_VERSION:
@@ -1397,14 +1525,16 @@ def initialize_upload_schema(path: Path) -> None:
 
 
 def ensure_upload_schema(path: Path) -> None:
-    """Atomically create Schema 3 or migrate one exact Schema 1/2 database."""
+    """Atomically create Schema 4 or migrate one exact Schema 1/2/3 database."""
     with _INITIALIZE_LOCK:
         if not path.exists():
             _publish_upload_schema(path)
         with _exclusive_schema_access(path):
             version = _validated_schema_version(
                 path,
-                frozenset({1, _SCHEMA_V2_VERSION, SCHEMA_VERSION}),
+                frozenset(
+                    {1, _SCHEMA_V2_VERSION, _SCHEMA_V3_VERSION, SCHEMA_VERSION}
+                ),
             )
             if version != SCHEMA_VERSION:
                 _migrate_to_latest(path)

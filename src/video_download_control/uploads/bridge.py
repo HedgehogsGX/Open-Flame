@@ -114,6 +114,7 @@ async def submit_tencent_once(uploader, page) -> None:
         except Exception:
             raise SubmissionUncertain() from None
         uploader._open_flame_acknowledged = True
+        uploader._open_flame_evidence_kind = "post_list_navigation"
         return
     try:
         async with page.expect_response(tencent_create_response, timeout=30000) as observed:
@@ -125,6 +126,7 @@ async def submit_tencent_once(uploader, page) -> None:
         if not isinstance(data, dict) or type(data.get("errCode")) is not int or data["errCode"] != 0:
             raise SubmissionUncertain()
         uploader._open_flame_acknowledged = True
+        uploader._open_flame_evidence_kind = "https_errcode_zero"
     except Exception:
         raise SubmissionUncertain() from None
 
@@ -822,33 +824,35 @@ def install_statement_policy(platform: str, uploader, request: dict,
     raise ValueError("invalid_platform")
 
 
-def run_bilibili(data: dict) -> tuple[str, str]:
+def run_bilibili(data: dict) -> tuple[str, str, str | None]:
     action = data["action"]
     account = Path(data["account_file"])
     binary = data["biliup"]
     if action == "login":
         if os.name != "nt":
-            return "failed", "login_terminal_unavailable"
+            return "failed", "login_terminal_unavailable", None
         # This console is opened only for an explicit UI login action. Its QR
         # code/prompts stay in the local console, never in the HTTP response.
         rc = subprocess.run([binary, "-u", str(account), "login"], check=False).returncode
-        return ("ready", "account_ready") if rc == 0 and account.is_file() else ("failed", "login_failed")
+        return (("ready", "account_ready", None) if rc == 0 and account.is_file()
+                else ("failed", "login_failed", None))
     if not account.is_file():
-        return "failed", "account_missing"
+        return "failed", "account_missing", None
     rc = subprocess.run([binary, "-u", str(account), "renew"], check=False,
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                         stdin=subprocess.DEVNULL).returncode
     if rc != 0:
-        return "failed", "account_invalid"
+        return "failed", "account_invalid", None
     if action == "check":
-        return "ready", "account_ready"
+        return "ready", "account_ready", None
     command = [binary, *bilibili_arguments(data["payload"], account)]
     rc = subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL).returncode
-    return ("submitted", "upstream_submitted") if rc == 0 else ("unknown", "upstream_result_unknown")
+    return (("submitted", "upstream_submitted", "process_exit_zero") if rc == 0
+            else ("unknown", "upstream_result_unknown", None))
 
 
-async def run_browser(data: dict) -> tuple[str, str]:
+async def run_browser(data: dict) -> tuple[str, str, str | None]:
     platform = data["platform"]
     module = importlib.import_module(f"uploader.{platform}_uploader.main")
     action = data["action"]
@@ -857,15 +861,16 @@ async def run_browser(data: dict) -> tuple[str, str]:
         setup = module.douyin_setup if platform == "douyin" else module.tencent_setup
         result = await setup(account, handle=True, return_detail=True, headless=False)
         success = isinstance(result, dict) and result.get("success") is True
-        return ("ready", "account_ready") if success and Path(account).is_file() else ("failed", "login_failed")
+        return (("ready", "account_ready", None) if success and Path(account).is_file()
+                else ("failed", "login_failed", None))
     # Never ask setup(handle=True) during check/upload: authentication is a
     # separate, explicit action. Existing browser profiles are not imported.
     if not Path(account).is_file():
-        return "failed", "account_missing"
+        return "failed", "account_missing", None
     if not await module.cookie_auth(account):
-        return "failed", "account_invalid"
+        return "failed", "account_invalid", None
     if action == "check":
-        return "ready", "account_ready"
+        return "ready", "account_ready", None
     request = data["payload"]
     guard = SingleSubmission(platform, request.get("publish_at_unix"))
     guard.install()
@@ -885,15 +890,21 @@ async def run_browser(data: dict) -> tuple[str, str]:
         install_statement_policy(platform, uploader, request, guard)
         install_platform_parameter_policy(platform, uploader, request, guard)
         uploader._open_flame_acknowledged = False
+        uploader._open_flame_evidence_kind = None
         uploader.submit_publish = types.MethodType(submit_tencent_once, uploader)
         await uploader.tencent_upload_video()
         if not uploader._open_flame_acknowledged:
-            return "unknown", "upstream_result_unknown"
+            return "unknown", "upstream_result_unknown", None
     if not guard.attempted:
-        return "unknown", "upstream_result_unknown"
+        return "unknown", "upstream_result_unknown", None
     if request.get("mode") == "draft":
-        return "draft_saved", "upstream_draft_saved"
-    return "submitted", "upstream_submitted"
+        return "draft_saved", "upstream_draft_saved", uploader._open_flame_evidence_kind
+    evidence_kind = (
+        "uploader_returned_after_final_action"
+        if platform == "douyin"
+        else uploader._open_flame_evidence_kind
+    )
+    return "submitted", "upstream_submitted", evidence_kind
 
 
 def check_install(source: Path, operation: Path) -> int:
@@ -931,7 +942,8 @@ def main() -> int:
             return 1
         time.sleep(0.02)
     data = json.loads((operation / "request.json").read_text(encoding="utf-8"))
-    result = ("unknown", "upstream_result_unknown") if data["action"] == "upload" else ("failed", "backend_failed")
+    result = (("unknown", "upstream_result_unknown", None)
+              if data["action"] == "upload" else ("failed", "backend_failed", None))
     try:
         if data["action"] == "login" and data.get("inline_login") is True:
             # Only our own sibling modules are loaded, inside the owned child.
@@ -941,23 +953,28 @@ def main() -> int:
             emit("preparing")
             if data["platform"] == "bilibili":
                 from bilibili_login import login_bilibili
-                result = login_bilibili(data, emit)
+                status, code = login_bilibili(data, emit)
             else:
                 from browser_login import login_browser
-                result = asyncio.run(login_browser(data, emit))
+                status, code = asyncio.run(login_browser(data, emit))
+            result = status, code, None
         elif data["platform"] == "bilibili":
             result = run_bilibili(data)
         else:
             configure_source(Path(data["source"]), operation, Path(data["browser_path"]))
             result = asyncio.run(run_browser(data))
     except ScheduleWindowElapsed:
-        result = ("failed", "schedule_window_elapsed")
+        result = ("failed", "schedule_window_elapsed", None)
     except PlatformParameterMismatch:
-        result = ("failed", "platform_parameter_mismatch")
+        result = ("failed", "platform_parameter_mismatch", None)
     except (Exception, SubmissionUncertain):
         pass
     temp = operation / "result.tmp"
-    temp.write_text(json.dumps({"status": result[0], "code": result[1]}), encoding="utf-8")
+    temp.write_text(json.dumps({
+        "status": result[0],
+        "code": result[1],
+        "evidence_kind": result[2],
+    }), encoding="utf-8")
     temp.replace(operation / "result.json")
     return 0
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 
@@ -202,6 +204,26 @@ def upload_retry_payload_matches(parent: object, successor: object) -> bool:
     )
 
 
+def upload_job_definition_digest(job: object) -> str:
+    """Hash only the immutable upload intent shared by retry successors."""
+
+    if not isinstance(job, Mapping) or any(
+        field not in job for field in UPLOAD_RETRY_PAYLOAD_KEYS
+    ):
+        raise UploadError("invalid_upload_job_definition")
+    try:
+        encoded = json.dumps(
+            {field: job[field] for field in UPLOAD_RETRY_PAYLOAD_KEYS},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        ).encode()
+    except (TypeError, ValueError):
+        raise UploadError("invalid_upload_job_definition") from None
+    return hashlib.sha256(encoded).hexdigest()
+
+
 __all__ = [
     "ACCOUNT_BINDING_KEYS",
     "UPLOAD_RETRY_PAYLOAD_KEYS",
@@ -210,5 +232,6 @@ __all__ = [
     "normalize_account_bindings",
     "normalize_upload_job_batch",
     "normalize_upload_targets",
+    "upload_job_definition_digest",
     "upload_retry_payload_matches",
 ]
