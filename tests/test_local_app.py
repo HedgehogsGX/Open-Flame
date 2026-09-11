@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import json
 import multiprocessing
 import signal
@@ -211,6 +213,10 @@ def test_windows_local_path_rejects_root_unc_device_unsafe_or_reserved_component
         local_app_module._validate_windows_local_path(path, "test path")
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows-only local application host semantics",
+)
 def test_windows_local_path_accepts_a_normal_absolute_path() -> None:
     path = Path("C:\\safe-root\\plain-directory\\file.json")
 
@@ -479,6 +485,10 @@ def test_child_environment_is_rebuilt_from_a_small_allowlist(
     }
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows-only local application host semantics",
+)
 def test_reserve_loopback_socket_rejects_an_occupied_port() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
         occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -519,6 +529,10 @@ def test_non_windows_host_is_rejected_before_any_runtime_side_effect(
     assert not config.database_path.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows-only local application host semantics",
+)
 def test_occupied_port_fails_before_database_child_or_browser_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

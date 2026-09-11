@@ -157,6 +157,10 @@ def test_legacy_runtime_requires_explicit_reinstall(tmp_path):
     }
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="upload runtime install requires the verified Windows x64 host",
+)
 def test_install_never_resigns_legacy_runtime(tmp_path, monkeypatch):
     test_legacy_runtime_requires_explicit_reinstall(tmp_path)
     monkeypatch.setattr(
@@ -1531,6 +1535,10 @@ def test_tencent_response_must_match_exact_origin_and_operation(url):
     assert not tencent_create_response(response)
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="upload runtime install requires the verified Windows x64 host",
+)
 def test_confirmed_result_is_bounded_and_no_raw_output_is_exposed(tmp_path, monkeypatch, capsys):
     backend = ready_backend(tmp_path, monkeypatch)
     account(tmp_path)

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from video_download_control.editing.api import install_editing_routes
+from video_download_control.editing.schema import SCHEMA_VERSION
 from video_download_control.editing import api as editing_api
 from video_download_control.editing.contracts import (
     EditRecipe,
@@ -152,7 +153,7 @@ def test_editing_manager_takes_root_exclusive_lease_before_service_recovery(
     first = install_editing_routes(first_app, data_root=tmp_path / "data")
     second = install_editing_routes(second_app, data_root=tmp_path / "data")
     try:
-        assert first.get().status()["schema_version"] == 1
+        assert first.get().status()["schema_version"] == SCHEMA_VERSION
         assert len(constructed) == 1
         with pytest.raises(EditingError, match="editing_worker_busy"):
             second.get()
@@ -160,7 +161,7 @@ def test_editing_manager_takes_root_exclusive_lease_before_service_recovery(
         first.stop()
         with pytest.raises(EditingError, match="editing_manager_stopped"):
             first.get()
-        assert second.get().status()["schema_version"] == 1
+        assert second.get().status()["schema_version"] == SCHEMA_VERSION
         assert len(constructed) == 2
     finally:
         first.stop()
@@ -228,7 +229,7 @@ def test_worker_releases_root_lease_after_a_timed_out_stop(tmp_path: Path):
         deadline = time.monotonic() + 5
         while True:
             try:
-                assert second.get().status()["schema_version"] == 1
+                assert second.get().status()["schema_version"] == SCHEMA_VERSION
                 break
             except EditingError as error:
                 assert error.code == "editing_worker_busy"
