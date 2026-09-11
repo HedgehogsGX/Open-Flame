@@ -1,10 +1,12 @@
 # Open-Flame / Video Download Control v0.28.0 Runbook
 
-> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 4、独立上传数据库 Schema 3、独立 Workflow Schema 3。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
+> 当前版本：Iteration 0.28.0 / v0.28.0，下载数据库 Schema 11、独立编辑数据库 Schema 4、独立上传数据库 Schema 4、独立 Workflow Schema 3。编辑页支持版本化草稿、分段、封面、可选隔离 AI runtime、审核时间轴、字幕和标准音色配音；自动流程页把一个 URL 串接到下载、编辑、AI 与所选三平台上传草稿，并保留逐节点确认或预授权。上传首批为 Bilibili、抖音、视频号。Windows 仍为 direct/non-isolated；本地 runtime 完整性和 synthetic 回归不等于真实 OpenAI 可用、真实平台投稿、定时发布、免 Python EXE 或第三方再分发许可。`VDC_ENABLE_X_GRAPH_V2` 和通用控制面 `VDC_ENABLE_SHORT_LINK_RESOLUTION` 默认 `0`，真实 `YtDlpAdapter.supports_exact_selector=False`。
 
 0.28.0 AI runtime、自动流程与本地验证边界见[本轮证据](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[AI Runtime](AI_RUNTIME.md)和[编辑指南](EDITOR.md)；此前 [0.27.0 编辑工作台](../validation/iteration-0.27.0-editing-workspace-evidence.md)及更早记录保留各自冻结构建的历史范围。首次使用见 [安装与修复](WINDOWS_SETUP.md)，日常使用见 [Windows 启动器](WINDOWS_LAUNCHER.md)。上传另见 [上传指南](UPLOADER.md)、[运行环境](UPLOAD_RUNTIME.md)、[测试计划与构建身份](UPLOADER_TEST_PLAN.md)。重复批次不创建新下载，也不改变原任务的凭证。
 
-0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.27.0 使用 Editing Schema 1，0.28.0 冻结版本先使用 Editing Schema 3 和 Workflow Schema 1。这些短语只用于识别旧记录。当前发布后源码将精确 Editing Schema 1/2/3 向前迁移到 Schema 4，并把精确 Workflow Schema 1 或 2 迁移到 Workflow Schema 3；Schema 1 会在同一事务内先重建合法单输出 `outputs_json`。上传库仍为 Schema 3，上传备份仍使用格式 2。不能用旧程序打开当前数据。
+0.24.3 的历史数据口径是“下载数据库 Schema 11、独立上传数据库 Schema 1”；0.25.0 使用上传 Schema 2，0.26.0/0.27.0 及后续一段发布后源码使用上传 Schema 3，0.27.0 使用 Editing Schema 1，0.28.0 冻结版本先使用 Editing Schema 3 和 Workflow Schema 1。这些短语只用于识别旧记录。当前发布后源码将精确 Editing Schema 1/2/3 向前迁移到 Schema 4，把精确 Workflow Schema 1 或 2 迁移到 Workflow Schema 3，并把精确 Upload Schema 1/2/3 迁移到 Upload Schema 4；旧上传记录不会补造 attempt receipt。Workflow Schema 1 会在同一事务内先重建合法单输出 `outputs_json`。当前上传备份使用格式 3；格式 1 / Schema 2 和格式 2 / Schema 3 只作为严格只读输入在 staging 中迁移。不能用旧程序打开当前数据。
+
+2026-09-10 的当前实际 app root 运行记录停在 Upload Schema 1→3 数据保留迁移。当前源码的 Schema 4 只在独立临时根验证，本轮尚未对该实际 app root 执行或审计 Schema 4 迁移。让当前源码首次打开实际根前，应先正常停机，用与迁移前 Schema 3 匹配的历史工具或已审计 SQLite backup API 在 Git 外保存恢复点；迁移成功并核对后再用当前格式 3 建立新 baseline。当前格式 3 create 只接受 Schema 4，不能用临时根结果或当前工具伪装 Schema 3 的迁移前备份。
 
 ### 启动失败时
 
@@ -36,7 +38,11 @@ CLI 在 stderr 输出单行 JSON，并独立写入 `%LOCALAPPDATA%/Open-Flame/di
 - 控制面与 Worker 具有本地、有界、轮转、字段白名单的 JSONL 排障日志；`/health` 在队列未暂停时报告 `worker=external_status_unknown`，明确表示控制面不知道外部 Worker 进程状态，而不是心跳、在线或已启动证明。
 - `/workflows` 的 AI 步骤把首个已选分段起点到末个已选分段终点的连续派生音频发送给听写；启用 AI 时各分段必须首尾连续，不能把未选择的间隙一并外发。单 cue 上限 4096 字符。字幕与配音按每个分段过滤并把时间归零，边界切入 cue 时拒绝，空 B-roll 段使用本地静音，保留原声时固定压到 22% 后混音。应用重启时，只有 canonical profile 已预授权且域恢复证明为原始、尚未 dispatch 的 queued AI/render/upload 会重新校验并续跑；手动流程、所有 retry、running/canceling、账本 dispatched/unknown 与上传 unknown 都停下。远程调用账本不保存 provider request ID，人工 reconciliation 也不能把未知结果改写成可静默重试。
 - Workflow 冻结每个上传账号的 `session_revision`。待确认的账号若重新登录则以 `account_session_changed` 停下；上传重试只沿账号、来源和平台不变的唯一 retry leaf 对账，分叉、循环或身份变化失败关闭。远端 `unknown` 永远要求先查平台后台，不能自动重发。
-- 完整 fan-out 进入 `upload_job_failed` 后，`/workflows` 可建立失败投稿重试。系统会在同一个 Upload 事务中重新核对稳定 request key/digest、完整投稿参数、当前 leaf、账号 session、source/cover、schedule 与平台合同，只为 failed/canceled slot 建立 draft；submitted、draft_saved、queued、running 与既有 draft 保持原位。所有 retry draft 都必须再次明确确认，即使原 profile 已预授权自动上传。若同批还含重启后或其他原因留下的原 draft，页面显示 `upload_retry_mixed_confirmation_required`，最终确认会同时排队这些原 draft，应先通过 `/uploads` 逐项核对。Workflow 在创建重试前先观察 Upload 域并写回当前 leaf，因此 Upload 提交成功但 Workflow 响应丢失时不会重复建后继。完整行为与边界见[Workflow 投稿重试验证](../validation/iteration-0.28.0-workflow-upload-retry.md)。
+- 完整 fan-out 进入 `upload_job_failed` 后，`/workflows` 可建立失败投稿重试。系统会在同一个 Upload 事务中重新核对稳定 request key/digest、完整投稿参数、当前 leaf、账号 session、source/cover、schedule 与平台合同，只为 attempt receipt 完整校验后具备资格的 failed/canceled slot 建立 draft；submitted、draft_saved、queued、running 与既有 draft 保持原位。所有 retry draft 都必须再次明确确认，即使原 profile 已预授权自动上传。若同批还含重启后或其他原因留下的原 draft，页面显示 `upload_retry_mixed_confirmation_required`，最终确认会同时排队这些原 draft，应先通过 `/uploads` 逐项核对。Workflow 在创建重试前先观察 Upload 域并写回当前 leaf，因此 Upload 提交成功但 Workflow 响应丢失时不会重复建后继。完整行为与边界见[Workflow 投稿重试验证](../validation/iteration-0.28.0-workflow-upload-retry.md)。
+- Upload Schema 4 为每个已领取 job 保存唯一 attempt receipt。领取事务同时写入 `reserved` receipt 和 `queued → running`；调用适配器前单独持久化 `dispatch_may_have_started`，返回后再把 receipt 结果与 job 终态同事务提交。receipt 绑定 request/job 摘要、账号 session revision、source/cover SHA-256、product build、当前追加式允许表中的 adapter identity、结果和固定 evidence；它只是本地观察，不是平台签名回执、作品 ID、审核、定时执行或公开可见证明。完整行为与边界见[Upload Schema 4 attempt receipt](../validation/iteration-0.28.0-upload-attempt-receipts.md)。
+- 自动成功只接受平台、模式和固定 evidence 的精确组合：Bilibili publish 为 `process_exit_zero`，抖音 publish 为 `uploader_returned_after_final_action`，视频号 publish 为 `https_errcode_zero`，视频号 draft 为 `post_list_navigation`。adapter identity 缺失或漂移以 `upload_attempt_identity_changed` 失败关闭。`unknown` 不能直接重试；先读取 receipt 并在对应平台后台核对，再以 revision CAS 提交 `not_accepted`、publish 的 `submission_acknowledged` 或视频号草稿的 `draft_saved`。仍不确定就保持 `unknown`；只有 `not_accepted` 转为明确失败后才能建立并再次确认新草稿。
+- 恢复以持久 dispatch 边界判定：`reserved` 关闭为 `failed / upload_dispatch_not_started`，`dispatch_may_have_started` 关闭为 `unknown / interrupted_result_unknown`，当前格式 3 / Schema 4 的 running job 没有 receipt 时为 `unknown / attempt_receipt_missing`；queued 仍回到需确认草稿。格式 1/2 保留 metadata 已声明的历史 running 恢复码，但同样不能读取 receipt、人工 reconciliation 或安全重传。主视频在交给适配器前会复核 SHA-256，但适配器或子进程随后按路径重开文件，之间仍有 P2 TOCTOU 窗口；不要在同一 Windows 账号下并发改写上传 `media/`。receipt 的 source SHA-256 不能单独证明子进程最终读取了同一字节。
+- 没有 receipt 的 job 一律不能安全 retry，因为无法证明它是否越过 dispatch 边界；应从重新核验的受管 source 手工建新草稿。`canceled / canceled` 也不例外，因为可变 job 状态不能单独证明取消发生在领取前。
 - `/workflows` 顶部的“自动执行就绪度”分别读取本次托管下载 Worker 心跳、AI runtime/三项 authorization、上传 runtime/当前 scheduler，以及 `active + ready` 的所选账号。四项探针相互独立；“可执行”只表示创建前本地条件通过，不证明 URL、provider 或平台会接受。页面状态有时间差，创建、worker 领取和实际执行仍由服务端重新校验；详见[就绪度界面记录](../validation/iteration-0.28.0-workflow-readiness-ui.md)。
 - `/workflows` 默认使用下载来源标题。首次先选择账号并填写 Bilibili 分区、标签、原创/转载、各平台声明、封面和发布时间等不可推断参数，再保存预设；后续恢复该预设时可只更换 URL。页面只有在预设、账号和 AI capability 都读取成功且用户尚未编辑时才恢复上次预设；读取失败会保留表单并允许刷新后重试。下载 ready 后，Workflow Schema 3 把公共标题和每个账号按当前 capability 截断后的最终标题一次冻结到 `resolved_upload`；显式账号标题优先。普通 ready asset 使用自身来源标题，X 附件标题缺失时只回退到同一 Job 输入的父来源标题。重启、分段 fan-out 与取消对账复用该快照，冻结后 asset ID 也不可改。`workflow_source_metadata_unavailable` 表示来源标题或本地 capability 暂不可读，修复后点“立即对账”只重试本地解析，不重复下载或换绑素材。预设只保存参数和账号 ID，不保存 URL、密钥或登录会话。
 
@@ -759,7 +765,7 @@ data/
 
 ```text
 data-uploads/
-  uploads.sqlite3             # Upload Schema 3
+  uploads.sqlite3             # Upload Schema 4
   uploads.sqlite3-wal         # 运行中可能存在
   media/                      # 登记的上传视频受管副本
   assets/                     # 登记的上传封面受管副本
@@ -775,7 +781,7 @@ data-uploads/
 
 ## 9. 可执行备份
 
-下载和上传使用两套互不包含的备份格式。`video-download-backup` 处理下载 Schema 11 与下载资产；`video-upload-backup` 使用备份格式 2 处理旁路 `data-uploads` 的 Upload Schema 3、登记受管视频/封面及非秘密账号元数据。任何一个命令成功都不能证明另一套数据已备份。Linux candidate 仍仅是下载 Worker 路径，不提供 Windows 上传运行时的跨平台验收。
+下载和上传使用两套互不包含的备份格式。`video-download-backup` 处理下载 Schema 11 与下载资产；`video-upload-backup` 使用备份格式 3 处理旁路 `data-uploads` 的 Upload Schema 4、attempt receipts、登记受管视频/封面及非秘密账号元数据。任何一个命令成功都不能证明另一套数据已备份。Linux candidate 仍仅是下载 Worker 路径，不提供 Windows 上传运行时的跨平台验收。
 
 对 9.1～9.3 的下载备份而言：**本节命令不包含这些上传数据**；对 9.4 的上传备份而言，它也不包含下载数据库或下载资产。
 
@@ -837,7 +843,7 @@ backup-target/
 
 `backup-manifest.json` 以 SHA-256 覆盖 metadata 与每个 payload 文件的规范相对路径、字节数和内容；`backup-manifest.sha256` 覆盖 manifest 自身。这能检出意外损坏，但同目录 hash sidecar 不是数字签名，不能独自证明攻击者未同时替换 manifest 与 sidecar。生产备份应复制到独立介质，并在独立受保护位置保存或签名 manifest hash。
 
-### 9.4 Upload Schema 3 / 备份格式 2 停机备份
+### 9.4 Upload Schema 4 / 备份格式 3 停机备份
 
 上传备份只处理上传根。运行中的当前控制面从 FastAPI lifespan 开始即在 sibling `.<root-name>.activity.lock` 持 shared lease，即使上传服务尚未按需初始化也一样；started active 和 standby `UploadService` 也持续持 shared lease，停止状态下的本地读写只持短 shared lease。`video-upload-backup create` 在源上传根取得 exclusive lease，并保留旧 `.worker.lock` 兼容检查，直到稳定 main/WAL 字节快照、登记媒体复制、业务审计和最终发布完成。
 
@@ -857,9 +863,9 @@ uv run video-upload-backup create `
   --backup-target $UploadBackupTarget
 ```
 
-命令只接受精确 Upload Schema 3。备份格式 2 的 payload 包含静态 `uploads.sqlite3`、非秘密账号历史/墓碑、sources、upload_assets、jobs、operations、requests/retry 关系，以及所有 `media_state=present` 且大小/SHA-256 与登记一致的受管视频和封面。它明确排除 `private/`、`runtime/`、`incoming/`、锁、账号登录秘密、操作临时文件、未登记文件以及不是 present 的媒体；当前格式没有“包含秘密”选项。WAL 核对只在独立临时目录打开 SQLite，不在源根创建 SHM。源、备份目标或 staging 路径重叠、文件不稳定、路径别名/link/reparse/hard link/alternate data stream、Schema/外键/业务关系异常或最终同步失败都会失败关闭并清理未发布 staging。格式 1 / Schema 2 备份只作为只读兼容输入，经 staging 精确迁移后恢复为 Schema 3；不会改写旧备份。
+命令只接受精确 Upload Schema 4。备份格式 3 的 payload 包含静态 `uploads.sqlite3`、非秘密账号历史/墓碑、sources、upload_assets、jobs、operations、requests/retry 关系、attempt receipts，以及所有 `media_state=present` 且大小/SHA-256 与登记一致的受管视频和封面。业务审计会重算 request/job/source/cover 身份，并核对 receipt 的 adapter identity 追加式允许表、state/result/evidence/reconciliation 组合及 revision/timestamp 关系。它明确排除 `private/`、`runtime/`、`incoming/`、锁、账号登录秘密、操作临时文件、未登记文件以及不是 present 的媒体；当前格式没有“包含秘密”选项。WAL 核对只在独立临时目录打开 SQLite，不在源根创建 SHM。源、备份目标或 staging 路径重叠、文件不稳定、路径别名/link/reparse/hard link/alternate data stream、Schema/外键/业务关系异常或最终同步失败都会失败关闭并清理未发布 staging。格式 1 / Schema 2 与格式 2 / Schema 3 备份只作为只读兼容输入，经 staging 精确迁移后恢复为 Schema 4；不会改写旧备份，也不会为旧 job 补造 attempt receipt。
 
-成功 stdout JSON 包含 `status=ok`、`operation=create`、`schema_version=3`、文件数、总字节、manifest hash 与备份根。该成功只覆盖上传域；仍须另跑 `video-download-backup` 才能保存下载 Schema 11 与下载资产。
+成功 stdout JSON 包含 `status=ok`、`operation=create`、`schema_version=4`、文件数、总字节、manifest hash 与备份根。该成功只覆盖上传域；仍须另跑 `video-download-backup` 才能保存下载 Schema 11 与下载资产。
 
 ## 10. 可执行独立根恢复演练
 
@@ -915,7 +921,7 @@ uv run video-download-control
 
 该 0.6 记录只证明当时代码能处理小型离线 Schema 8 graph 快照，不证明 Docker/Linux 文件权限、真实媒体容量、NAS/跨卷 durability、offsite 介质、RTO/RPO、真实 Cookie 或灾难主机切换。生产验收必须另行记录对应部署 revision、Schema 8 baseline、制品/tool digest、备份 ID、文件数/字节、manifest hash、存储介质、开始/完成时间、恢复检查与失败处置；不得沿用本机临时目录结果。
 
-### 10.3 Upload Schema 3 新根恢复
+### 10.3 Upload Schema 4 新根恢复
 
 上传恢复使用上传专属格式，只接受不存在且与备份根不重叠的新目标。restore 在目标 sibling activity lock 上持 exclusive lease，覆盖 staging 复制、恢复策略、二次审计、目录同步和一次 rename 发布；目标若已由当前应用/API/active 或 standby 服务使用，立即拒绝并保持目标不存在。旧版本或手工 writer 不采用当前锁时仍须由操作者另行排除。
 
@@ -933,9 +939,9 @@ uv run video-upload-backup restore `
   --restore-upload-root $UploadRestoreRoot
 ```
 
-恢复在发布前核对 manifest sidecar、规范相对路径、文件 inventory/大小/SHA-256、link/reparse/hard link/alternate data stream、精确 Upload Schema 3、`quick_check`、外键，以及账号、来源、封面、任务、operation、request 与 retry 的业务关系。当前格式中原 `running` 任务恢复为 `unknown / interrupted_result_unknown`，原 `queued` 任务恢复为 `draft / restart_confirmation_required`；旧格式任务同时发生平台参数或标签迁移时改用 `legacy_metadata_interrupted_result_unknown` / `legacy_metadata_restart_confirmation_required`，让页面同时说明中断状态和迁移复核。未完成账号操作变为 `failed / operation_interrupted`；活动账号原 `ready`/`checking` 变为 `unchecked / account_missing`。断开账号墓碑、历史任务、平台参数和定时值保留，媒体恢复不会自动执行旧任务。
+恢复在发布前核对 manifest sidecar、规范相对路径、文件 inventory/大小/SHA-256、link/reparse/hard link/alternate data stream、精确 Upload Schema 4、`quick_check`、外键，以及账号、来源、封面、任务、operation、request/retry 与 attempt receipt 的业务关系。格式 3 中原 `running` 任务按 receipt 的持久边界恢复：`reserved` 转为 `failed / upload_dispatch_not_started`，`dispatch_may_have_started` 转为 `unknown / interrupted_result_unknown`，已经是 `unknown` 的合法 receipt 保持其安全结果；原 `queued` 转为 `draft / restart_confirmation_required`。格式 1 / Schema 2 与格式 2 / Schema 3 没有 receipt，不会被补造；旧 running 任务保守转为 `unknown`，若同时发生平台参数或标签迁移则使用 `legacy_metadata_interrupted_result_unknown`，旧 queued 的对应代码为 `legacy_metadata_restart_confirmation_required`。未完成账号操作变为 `failed / operation_interrupted`；活动账号原 `ready`/`checking` 变为 `unchecked / account_missing`。断开账号墓碑、历史任务、平台参数和定时值保留，媒体恢复不会自动执行旧任务。
 
-恢复过程不构造上传 backend，不读取账号秘密，不登录、扫码或发起上传。成功后先以独立端口/独立 app root 打开恢复副本，核对账号墓碑、来源/封面状态、任务与 storage summary；重新登录仍由测试员显式执行，任何 `unknown` 任务仍须先到平台后台核对。当前 0.28.0 只完成本机 synthetic/offline 工程演练，真实容量、异机/offsite、NAS、RTO/RPO 和人工值班流程仍为 NOT RUN。
+恢复过程不构造上传 backend，不读取账号秘密，不登录、扫码或发起上传。成功后先以独立端口/独立 app root 打开恢复副本，核对账号墓碑、来源/封面状态、任务、attempt receipt 与 storage summary；重新登录仍由测试员显式执行，任何 `unknown` 任务仍须先读取 receipt（若存在）并到平台后台核对。当前 0.28.0 只完成本机 synthetic/offline 工程演练，真实平台调用为 0；真实容量、当前实际 app root Schema 4 迁移、异机/offsite、NAS、RTO/RPO 和人工值班流程仍为 NOT RUN。
 
 ## 11. 升级与回滚（Schema 11 forward-only）
 

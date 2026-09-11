@@ -10,12 +10,13 @@
 | --- | --- |
 | 仓库 | [HedgehogsGX/Open-Flame](https://github.com/HedgehogsGX/Open-Flame) |
 | 开发版本 | `0.28.0` |
-| 数据库 | Download Schema 11；Editing Schema 4；Upload Schema 3；Workflow Schema 3；Workflow preset Schema 2 |
-| 上传备份格式 | 2 |
+| 数据库 | Download Schema 11；Editing Schema 4；Upload Schema 4；Workflow Schema 3；Workflow preset Schema 2 |
+| 上传备份格式 | 3 |
 | 首批上传平台 | Bilibili、抖音、视频号（内部 ID `tencent`） |
 | 前端方向 | 方向 C“编辑式玻璃”，遵循 [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) |
 | Git 交付 | 关键步骤后签名提交并直接推送 `origin/main`；禁止 force push |
 | Git 身份 | `Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>` |
+| Upload Schema 4 源码提交 | `496fb63f9d0010c22fa1abc660e6450cd403b6be`；已签名直推 `origin/main`，GitHub author/committer 均归属 `novahanser` |
 
 当前源码位于 0.28.0 发布后的持续开发链。`0592b6f` 的五件制品和包外 receipt
 只证明其冻结构建；之后的提交尚未形成新的 clean release receipt。判断当前源码时以
@@ -70,15 +71,37 @@
   视频号短标题/内容标签、草稿模式和平台允许范围内的定时发布。最多选择 3 个账号；
   1–10 个输出最多形成 30 个上传 slot；重试后继必须保持账号、来源、平台及完整投稿参数
   不变，标题、标签、封面、模式、发布时间或平台选项漂移都会失败关闭。
+- Upload Schema 4 在既有上传库中为每个已领取 job 保存唯一的本地 attempt receipt。receipt
+  绑定 request/job 摘要、账号 session revision、来源与封面 SHA-256、当前 product build 和适配器
+  身份；`reserved` 与 `queued → running` 原子提交，调用适配器前再持久标记
+  `dispatch_may_have_started`，最终 receipt 与 job 同事务落库。自有适配器只有在平台、模式、
+  结果与固定 evidence 完全匹配时才接受成功：Bilibili publish 为 `process_exit_zero`，抖音
+  publish 为 `uploader_returned_after_final_action`，视频号 publish 为 `https_errcode_zero`，
+  视频号 draft 为 `post_list_navigation`。这些是本地工具观察，不是平台签名回执、作品 ID、
+  审核或公开可见证明。
+- `unknown` 不再接受直接重试。操作者须先读取 receipt、到对应平台后台核对并勾选确认，再在
+  固定结论中选择：`not_accepted` 转明确失败后才允许建立新草稿；publish 可记
+  `submission_acknowledged`；视频号 draft 可记 `draft_saved`。revision CAS、当前 lineage 与
+  完整身份会在写入前复核，同结论的响应丢失重放保持幂等。重启时未越过 dispatch 边界的
+  `reserved` 任务安全失败为 `upload_dispatch_not_started`；可能已经调用平台的任务保持
+  `unknown / interrupted_result_unknown`；当前格式 3 / Schema 4 的 running job 没有 receipt
+  时保持 `unknown / attempt_receipt_missing`，不会伪造历史回执。旧格式 1/2 恢复保留其
+  metadata 已声明的历史 interruption code，但同样没有 receipt。其他没有 receipt 的 job，包括
+  `canceled / canceled`，同样不能 retry，须从重新核验的 source 手工建新草稿；可变 job
+  状态不能证明任务从未越过 dispatch 边界。
+- 上传备份格式 3 保存并语义审计 Schema 4 receipt；严格通过的旧格式 1 / Schema 2 与格式 2 /
+  Schema 3 只在 staging 中迁移，旧备份本身不改写，也不为旧 job 补造 receipt。恢复仍不读取
+  账号秘密、不构造 backend、不登录或上传。
 - 完整 Workflow fan-out 出现 `upload_job_failed` 时可在流程页建立批量重试。Upload 域在单一
   `BEGIN IMMEDIATE` 事务中先按稳定 request key/digest、request-owned root、完整 retry lineage、账号 session、媒体、
   schedule 与当前平台合同核对全部 slot。Workflow 还会从冻结的投稿配置、账号绑定与已选封面
   重建每段完整 request；即使 Upload root 和重算 digest 彼此自洽，只要标题、简介、标签、封面、
-  模式、发布时间或平台参数与 Workflow 冻结意图不符，也会在建后继前失败关闭。随后只为 failed/canceled leaf 创建新草稿；成功、平台草稿
+  模式、发布时间或平台参数与 Workflow 冻结意图不符，也会在建后继前失败关闭。随后只为 attempt receipt 完整校验后具备资格的 failed/canceled leaf 创建新草稿；成功、平台草稿
   与 active slot 原位保留，任一 `unknown` 整批阻断。新草稿始终要求再次明确确认；同批另有原
   draft 时使用独立 mixed review code，避免把其确认原因伪装成重试。Workflow 先观察并 checkpoint
   当前 leaf，因此 Upload 已提交而 Workflow 尚未写回的窗口不会重复建后继。该切片没有新增表、
-  Schema、服务、线程、队列、runtime、依赖或框架。
+  Schema、服务、线程、队列、runtime、依赖或框架；这是此前 Workflow retry 切片的范围，当前
+  Upload Schema 4 receipt 作为后续上传执行门禁单独记录。
 - 本地 HTTP 写操作使用域独立 CSRF 与严格 loopback Host/Origin/Fetch-Site 防护；受管媒体
   使用同一文件身份、匹配打开、有界散列和不可变字节 snapshot 原语，同时保留
   AI render 的增强文件属性/规范路径校验及 Editing/Upload 各自错误与事务边界。
@@ -97,6 +120,7 @@
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
+| 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
@@ -111,10 +135,15 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    真人试听仍未知。
 2. **真实三平台发布未验收。** 本地账号显示 ready 只说明本地 session 记录状态；不能证明
    远端 session 仍有效，也不能证明上传、审核、定时发布或公开可见成功。
-3. **当前源码未冻结。** `0592b6f` 之后的功能与架构提交需要新的 clean candidate、源码/
-   wheel 独立安装和包外 receipt，才能形成新的发布结论。
+3. **当前源码尚未形成新的 release candidate。** Upload Schema 4 源码里程碑已冻结并签名
+   推送为 `496fb63f9d0010c22fa1abc660e6450cd403b6be`，但 `0592b6f` 之后的功能与架构提交仍需
+   新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
+   2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
+   应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
 4. **托管 CI 仍为红色。** CI 已在 Windows/Linux 与 CPython 3.12/3.13 真实执行；环境和
    提交范围门禁通过后，完整 pytest 因冻结历史测试与当前安全/Schema/版本合同不一致而失败。
+   本轮受影响的上传回归为 483 passed、56 failed；精确命令、分组原因与当前 validator 结果见
+   [Upload Schema 4 attempt receipt 记录](validation/iteration-0.28.0-upload-attempt-receipts.md)。
    按仓库策略不得通过修改这些测试或弱化生产合同来伪造绿色结果。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
@@ -138,6 +167,8 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    本机路径或 `validation/local/` 内容。
 2. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交并直推
    `origin/main`。首批上传范围保持 Bilibili、抖音、视频号。
+   对 `unknown` 上传先保存数据库与日志、读取本次 receipt 并在对应平台后台核对；只有固定
+   `not_accepted` 结论落库后才能建立 retry 草稿，不得使用旧请求体或手工改库直接重传。
 3. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
    明确授权、凭据留在 Git 外且精确候选固定后进行。每个结果按平台、来源类型、适配器版本、
    环境和 commit 单独记录。来源封面还需分别用 Bilibili 与 Douyin 的已授权样本对照平台可见

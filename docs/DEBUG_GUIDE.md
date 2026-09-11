@@ -49,12 +49,14 @@ Invoke-RestMethod "$debugBase/api/v1/uploads/status"
   data\                 下载 Schema 11、资产、temporary、logs
   data-edits\           Editing Schema 4、编辑副本与成品
   data-workflows\       Workflow Schema 3、无秘密预设
-  data-uploads\         Upload Schema 3、受管媒体、账号私有目录、上传 runtime
+  data-uploads\         Upload Schema 4、受管媒体、账号私有目录、上传 runtime
   data-ai-runtime\      隔离 AI runtime
   runtime-tools\        固定本地工具链（如由 Setup 放置）
 ```
 
 四个业务域各自拥有状态；下载、编辑和上传域分别拥有自己的媒体，Workflow 只保存跨域 ID、不可变参数快照与状态机。不要把数据库合并，也不要从一个域直接改另一个域的文件。正常 Start 由 supervisor 管理 control、download Worker 和浏览器；EditingManager、Upload scheduler、WorkflowManager 在 control 生命周期内各自持有必要的 worker/owner。
+
+2026-09-10 的当前实际 app root 记录只证明 Upload Schema 1→3 数据保留迁移；本轮没有在该实际 app root 执行或审计 Schema 4 迁移。排查当前源码时不要把临时 Schema 4 数据根、synthetic smoke 或历史运行记录解释为实际 app root 已升级；先正常停机，用与迁移前 Schema 3 匹配的历史工具或已审计 SQLite backup API 在 Git 外固定恢复点，再在独立副本上检查。当前格式 3 create 只接受 Schema 4，不能用它伪装 Schema 3 的迁移前备份。
 
 ## 3. 先固定复现
 
@@ -207,27 +209,33 @@ workflow.edit_project_id
 
 ## 8. 上传域
 
-关键链路：`account → source/cover assets → local draft → queued → running → submitted/draft_saved/failed/unknown`。
+关键链路：`account → source/cover assets → local draft → queued → running + reserved receipt → dispatch_may_have_started → responded/unknown → optional reconciled`。job 的终态包括 `submitted/draft_saved/failed/unknown/canceled`；receipt 状态描述本地上传尝试，不能替代 job 或平台后台状态。
 
 - runtime：`/api/v1/uploads/status` 同时看 backend ready、manifest Schema、worker 和 scheduler。`standby` 表示另一实例持有 owner，不应启动第二 scheduler。
 - account：只把 `active + ready` 当作本次可选；重登会改变 session revision，旧任务必须停下重建。
 - metadata：对照平台 capability 检查标题长度、标签、封面方向、Bilibili 分区/原创转载、抖音声明、视频号 mode/短标题/内容标记和定时窗口。
 - confirm：确认前服务再次校验 media/cover SHA、账号 session、schedule 和平台参数。页面预览成功不能替代确认时检查。
+- attempt receipt：对 `running`、`unknown` 或已完成任务读取 `GET /api/v1/uploads/jobs/{job_id}/attempt`，核对 attempt/job/request 摘要、账号 session revision、source/cover SHA-256、product build、adapter identity、dispatch/result 时间、固定 `evidence_kind` 和 revision。receipt 是本地工具观察，不是平台签名回执、作品 ID、审核结果、定时执行或公开可见证明。
+- adapter/evidence：当前受支持适配器必须提供精确、已列入追加式历史允许表的身份；缺失、版本漂移或 receipt 绑定不一致返回 `upload_attempt_identity_changed`。自动成功只接受固定组合：Bilibili publish 为 `process_exit_zero`，抖音 publish 为 `uploader_returned_after_final_action`，视频号 publish 为 `https_errcode_zero`，视频号 draft 为 `post_list_navigation`。组合不符不能提升为成功。
 - cancellation：draft/queued 可安全取消；running 只发取消请求。若 backend 已调用且结果不能确认，最终必须是 `unknown`。
 - `submitted` / `draft_saved`：到平台后台按唯一测试编号核对。部分账号成功、部分取消/失败时不能把整个 workflow 写成 canceled。
+- recovery：`reserved` 说明尚未越过 dispatch 边界，重启后安全关闭为 `failed / upload_dispatch_not_started`；`dispatch_may_have_started` 变为 `unknown / interrupted_result_unknown`；当前格式 3 / Schema 4 恢复或普通 Schema 4 启动遇到 running job 没有 receipt 时，变为 `unknown / attempt_receipt_missing`。格式 1/2 继续保留其 metadata 已声明的历史 running 恢复码。这些状态都不能靠改库或旧 `acknowledge_unknown` 请求体绕过。
+- legacy/no-receipt retry：任意没有 receipt 的旧 job 都缺少可信 dispatch 边界。`failed`/`canceled` 的 `retry` 返回 `attempt_receipt_missing`；`unknown` 保持远端结果阻断，读取尝试时显示本地回执缺失，不能提交人工 reconciliation。从重新核验的受管 source 手工建新草稿。`canceled / canceled` 也不例外，因为这两个可变字段不能单独证明任务从未 dispatch。
+- source TOCTOU（P2）：主视频会在适配器调用前复核大小和 SHA-256，但适配器或其子进程随后按路径重新打开文件，两者之间仍有非原子的改写窗口；封面已使用本次尝试的私有副本。排查疑似字节漂移时先停止调度并保留受管文件/数据库证据，不要在同一 Windows 账号下并发改写 `media/`。当前 receipt 中的 source SHA-256 只绑定复核时读到的字节，不能证明子进程最终读取了同一字节。
 
-`upload_job_failed` 的 Workflow 重试只适用于所有分段都已完成上传准备的完整 fan-out。点击“建立失败投稿重试”后，先到 `/uploads` 核对当前每个 slot；系统只为 failed/canceled leaf 建立新 draft，submitted、draft_saved、queued、running 与原有 draft 不会被复制。新 draft 即使来自预授权 workflow 也必须再次明确确认。
+`upload_job_failed` 的 Workflow 重试只适用于所有分段都已完成上传准备的完整 fan-out。点击“建立失败投稿重试”后，先到 `/uploads` 核对当前每个 slot；系统只为 attempt receipt 完整校验后具备资格的 failed/canceled leaf 建立新 draft，submitted、draft_saved、queued、running 与原有 draft 不会被复制。新 draft 即使来自预授权 workflow 也必须再次明确确认。
 
 - `upload_retry_confirmation_required`：本批只有 retry draft 等待确认。
 - `upload_retry_mixed_confirmation_required`：除了新 retry draft，同批还有原任务 draft；最终确认会把两类 draft 一起排队，必须先逐项核对原因。
-- `upload_result_unknown` / `verify_remote_result_first`：停止重试，到平台后台按账号、标题、时间和测试编号核对。Workflow 不允许 acknowledge 后直接重发。
+- `upload_result_unknown` / `verify_remote_result_first`：停止重试，先读取本次 attempt receipt，再到平台后台按账号、标题、时间和测试编号核对。只有固定 `not_accepted` 结论把任务转为 `failed / manual_remote_not_accepted` 后，普通显式 retry 才可建立新草稿；publish 可记录 `submission_acknowledged`，视频号 draft 可记录 `draft_saved`，后二者不会建立重试。
+- `upload_attempt_identity_changed` / `upload_attempt_conflict`：receipt、request/job 摘要、lineage、adapter identity、state 或 revision 与当前读取不一致。保留数据库/WAL 和日志，刷新后重新读取；不要改库、替换适配器标识或重放人工结论。
 - `upload_request_mismatch`：稳定 request 摘要、root job 或 Workflow 冻结的标题、简介、标签、封面、模式、发布时间、账号绑定及平台参数彼此不一致；即使手工重算 Upload 摘要也不能把漂移后的请求变成合法重试。不要改数据库，保留副本并重建 workflow。
 - `upload_request_invalid` / `upload_job_set_invalid` / `job_retry_lineage_invalid`：request 或 retry lineage 不完整、分叉、循环或身份异常；保留 Upload/Workflow 数据库、WAL 与日志，停止确认和重试。
 - `account_session_changed`、source/cover 校验失败或发布时间已过：修复账号或素材后重建 workflow；冻结投稿参数不会在 retry 中被静默替换。
 
 如果 Upload 已建立 successor，但 Workflow 仍保存父 job ID，先刷新或点一次“立即对账/建立失败投稿重试”。正常恢复会沿唯一 lineage 写回当前 leaf 并停在确认门，不会再建一代；不要手工改 `upload_job_ids` 或 `retry_of`。完整本地验证见[Workflow 投稿重试记录](../validation/iteration-0.28.0-workflow-upload-retry.md)。
 
-不确定结果处理顺序：停止自动重试 → 记录本地 job/code/time → 到平台后台搜索测试编号 → 记录 `received/not received/unknown` → 仅在确定未收到且产品允许时创建显式 retry。
+不确定结果处理顺序：停止自动重试 → 读取并保存本地 job/attempt/code/revision/time → 到对应平台后台搜索测试编号 → 勾选已经完成平台核对 → 只提交固定 `not_accepted`、`submission_acknowledged` 或视频号草稿的 `draft_saved` 结论。仍不确定时保持 `unknown`，不要提交猜测；只有 `not_accepted` 落库后才按产品入口创建并再次确认显式 retry。操作者勾选与人工结论是声明，不是独立平台证明。
 
 ## 9. Web/UI Debug
 

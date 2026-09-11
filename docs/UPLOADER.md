@@ -56,15 +56,39 @@ Open-Flame 的上传页面位于 `/uploads`，下载首页也有入口。首批�
 | `draft` | 本地草稿，尚未允许上传；检查后明确确认 |
 | `queued` | 已确认，等待执行 |
 | `running` | 正在与平台交互；不能据此判断是否已发布 |
-| `submitted` | 上游工具报告提交完成；不等于审核通过、公开可见或我们验证了远端作品 |
-| `draft_saved` | 上游工具报告视频号草稿已保存；不是公开发布 |
+| `submitted` | 本地适配器返回了该平台 publish 的固定成功 evidence，或操作者在后台确认投稿；不等于审核通过、公开可见或我们验证了远端作品 |
+| `draft_saved` | 视频号 draft 返回固定导航 evidence，或操作者在后台确认草稿；不是公开发布 |
 | `failed` | 明确的准备或执行失败；修复原因后创建新草稿 |
 | `canceled` | 本地取消；执行已经开始后的不确定结果按 `unknown` 处理 |
-| `unknown` | 可能已在平台产生结果；先检查创作者后台，确认不会重复后再显式创建重试草稿 |
+| `unknown` | 可能已在平台产生结果；先读取本次 attempt receipt，再检查正确账号的创作者后台并记录固定结论；不能直接重传 |
 
-重试创建新的本地草稿，保留原任务和关联关系；仍需再次确认。服务重启时，原 `running` 变为 `unknown`，原 `queued` 退回需确认的本地草稿，避免在重启后意外补发。平台审核和作品最终状态目前需在创作者后台核对。
+Upload Schema 4 会在领取任务时保存唯一的本地 attempt receipt。receipt 把 request/job 摘要、
+账号 session revision、来源与封面 SHA-256、product build、适配器身份、dispatch 时间、原始结果
+与固定 evidence 绑定在一起；它不是平台签名回执。`reserved` 的写入和任务进入 `running` 在同一
+事务，调用适配器前再提交 `dispatch_may_have_started`，适配器返回后的 receipt 与 job 也在同一
+事务写入。Bilibili publish、抖音 publish、视频号 publish 与视频号 draft 分别只接受
+`process_exit_zero`、`uploader_returned_after_final_action`、`https_errcode_zero` 与
+`post_list_navigation`；这些只说明固定本地观察发生，不证明审核、定时执行或公开可见。
 
-自动流程的投稿重试按完整 fan-out 批量处理：只有 Workflow 已记录全部分段 × 账号 slot 且状态为 `upload_job_failed` 时才显示入口。系统在一个本地事务中重新核对稳定 request key/digest、完整投稿参数、账号会话、媒体、封面、发布时间和 retry lineage，只为当前 `failed`/`canceled` leaf 新建草稿；`submitted`、`draft_saved`、`queued`、`running` 和已有草稿保留原位。任一 `unknown` 会停止整批重试。新草稿及同批原草稿均须在 `/uploads` 核对后明确确认，预授权不会自动越过这次确认。
+`unknown` 页面先读取 receipt；勾选“我已在对应平台后台核对”后，只能选择与任务模式相容的固定
+结论。“平台未接收”把任务转为明确失败，之后才可建立新的本地草稿并再次确认；publish 可记录
+“平台已确认投稿”，视频号 draft 可记录“平台已保存草稿”。提交结论使用 receipt revision CAS，
+相同结论的响应丢失重放幂等，冲突结论失败关闭。旧 `acknowledge_unknown` 请求体不再接受。
+
+普通重试创建新的本地草稿，保留原任务、attempt receipt 和关联关系；仍需再次确认。服务重启时，
+只有 receipt 仍为 `reserved` 才能证明尚未调用适配器，并以
+`failed / upload_dispatch_not_started` 关闭；已经标记 `dispatch_may_have_started` 的任务变为
+`unknown / interrupted_result_unknown`；当前格式 3 / Schema 4 的 running job 没有 receipt 时
+保守记为 `unknown / attempt_receipt_missing`。旧格式 1/2 保留 metadata 已声明的历史 running
+恢复码，但同样没有 receipt，不能人工 reconciliation 或安全重传。原 `queued` 仍退回需确认的本地草稿。平台审核和作品最终
+状态目前需在创作者后台核对。
+
+任何 Schema 1–3 或其他没有 receipt 的 `failed` job 都不能作为安全重试依据，因为旧记录无法
+证明是否越过 dispatch 边界；重试会返回 `attempt_receipt_missing`。应从仍在位且重新核验通过的
+受管 source 手工创建新草稿并再次确认。无 receipt 的 `canceled / canceled` 同样不能重试，
+因为可变 job 状态本身无法证明取消发生在领取和 dispatch 之前。
+
+自动流程的投稿重试按完整 fan-out 批量处理：只有 Workflow 已记录全部分段 × 账号 slot 且状态为 `upload_job_failed` 时才显示入口。系统在一个本地事务中重新核对稳定 request key/digest、完整投稿参数、账号会话、媒体、封面、发布时间和 retry lineage，只为 attempt receipt 完整校验后具备资格的 `failed`/`canceled` leaf 新建草稿；`submitted`、`draft_saved`、`queued`、`running` 和已有草稿保留原位。任一 `unknown` 会停止整批重试。新草稿及同批原草稿均须在 `/uploads` 核对后明确确认，预授权不会自动越过这次确认。
 
 如果任务结果写入失败，调度会先停止新领取并尝试有界恢复：已开始的任务记为 `unknown`、尚未执行的排队任务退回本地草稿、未完成账号操作中断；不会自动重传。持续故障时页面显示“上传调度故障”。先处理存储空间、数据库锁等原因，再点击“恢复上传调度”；恢复只对账并恢复调度，旧任务仍需核对及再次确认。不要用直接改数据库状态来重新发送。
 
@@ -86,9 +110,9 @@ Open-Flame 的上传页面位于 `/uploads`，下载首页也有入口。首批�
 
 上传目录在下载数据目录的同级，名称为下载目录名加 `-uploads`。普通 Windows Start 的默认位置是 `%LOCALAPPDATA%\Open-Flame\video-download-control\data-uploads`；开发控制面默认使用源码目录旁的 `data-uploads`。自定义 `--app-root` 会相应改变位置。
 
-上传目录包含 `uploads.sqlite3`、受管视频 `media`、受管封面 `assets`、导入临时目录 `incoming`、账号等私有状态 `private` 和独立工具环境 `runtime`。上传库独立使用 Schema 3，不修改下载 Schema 11，也不复用下载 CredentialProfile 或 Cookie 文件。
+上传目录包含 `uploads.sqlite3`、受管视频 `media`、受管封面 `assets`、导入临时目录 `incoming`、账号等私有状态 `private` 和独立工具环境 `runtime`。上传库独立使用 Schema 4，不修改下载 Schema 11，也不复用下载 CredentialProfile 或 Cookie 文件。
 
-启动时区分新库与已有库：新库原子建立；精确 Schema 1 先在同一事务内完成既有生命周期迁移，再升级到 Schema 3；精确 Schema 2 直接迁移到 Schema 3。Schema 3 新增封面资源、每任务定时与平台参数以及版本化幂等摘要。旧标签中的井号/全角逗号会转换为无语法歧义的文本；旧视频号任务会把此前隐式生成的短标题写成可审阅参数。受影响的活动任务会撤回旧确认并要求重新核对。已有库的主库及 WAL 会先复制到独立临时目录并核对源文件稳定性，再检查完整表、列、索引、外键和数据库状态。SQLite 的共享内存文件只在临时目录建立，不在源目录新建 SHM。未知、损坏或更高版本返回 `upload_schema_unsupported`，不会补建缺失结构或修改原库。
+启动时区分新库与已有库：新库原子建立；精确 Schema 1 先在同一事务内完成既有生命周期迁移，再依次升级到 Schema 3 和 Schema 4；精确 Schema 2/3 也只沿固定迁移链进入 Schema 4。Schema 3 新增封面资源、每任务定时与平台参数以及版本化幂等摘要，Schema 4 再增加 attempt receipts；迁移不会为旧 job 补造 receipt。旧标签中的井号/全角逗号会转换为无语法歧义的文本；旧视频号任务会把此前隐式生成的短标题写成可审阅参数。受影响的活动任务会撤回旧确认并要求重新核对。已有库的主库及 WAL 会先复制到独立临时目录并核对源文件稳定性，再检查完整表、列、索引、外键和数据库状态。SQLite 的共享内存文件只在临时目录建立，不在源目录新建 SHM。未知、损坏或更高版本返回 `upload_schema_unsupported`，不会补建缺失结构或修改原库。
 
 **下载备份不包含上传目录，上传备份也不包含下载数据。** 上传数据使用独立的停机命令；先正常停止所有使用该上传根的 Open-Flame 应用和 active/standby 上传服务，并确认没有扫码、检查、导入或投稿仍在执行：
 
@@ -102,11 +126,11 @@ uv run video-upload-backup restore `
   --restore-upload-root C:\vdc-upload-restore-drill
 ```
 
-`create` 只接受精确 Upload Schema 3 和不存在的备份目标。当前应用 lifespan、started active/standby `UploadService` 和短事务在上传根旁的 `.<root-name>.activity.lock` 持 shared lease；备份在源上传根持 exclusive lease，并同时取得旧 `.worker.lock`，直到静态快照、视频/封面复制、审计和最终发布全部结束。任何当前应用或 standby 实例仍在运行时都会拒绝开始，因此“所有实例已停止”是明确前提。这个锁不会让未采用当前合同的旧版本、手工 SQLite 连接或自写文件 writer 自动停下；这些 writer 也必须由操作者另行停止。sibling activity lock 是协调文件，不属于备份 payload，不要把它改成普通数据文件或手工替换。
+`create` 只接受精确 Upload Schema 4 和不存在的备份目标。当前应用 lifespan、started active/standby `UploadService` 和短事务在上传根旁的 `.<root-name>.activity.lock` 持 shared lease；备份在源上传根持 exclusive lease，并同时取得旧 `.worker.lock`，直到静态快照、视频/封面复制、审计和最终发布全部结束。任何当前应用或 standby 实例仍在运行时都会拒绝开始，因此“所有实例已停止”是明确前提。这个锁不会让未采用当前合同的旧版本、手工 SQLite 连接或自写文件 writer 自动停下；这些 writer 也必须由操作者另行停止。sibling activity lock 是协调文件，不属于备份 payload，不要把它改成普通数据文件或手工替换。
 
-备份格式 2 从稳定的 main/WAL 字节快照生成静态数据库，只复制 `media_state=present` 且大小/SHA-256 一致的登记视频和封面；`private`、`runtime`、`incoming`、锁、账号登录秘密、操作临时文件和未登记文件均排除。读取 WAL 时不会在源目录打开 SQLite 或生成新的 SHM；源文件在前后身份/大小/元数据不稳定时失败关闭。
+备份格式 3 从稳定的 main/WAL 字节快照生成静态数据库，保存 Schema 4 attempt receipts，并只复制 `media_state=present` 且大小/SHA-256 一致的登记视频和封面；`private`、`runtime`、`incoming`、锁、账号登录秘密、操作临时文件和未登记文件均排除。审计会重建 request/job/source/cover 身份，核对 pinned adapter revision 的追加式允许列表、结果 evidence、状态组合和人工结论。读取 WAL 时不会在源目录打开 SQLite 或生成新的 SHM；源文件在前后身份/大小/元数据不稳定时失败关闭。
 
-`restore` 在不存在的目标上传根旁持 exclusive activity lease，覆盖 staging、恢复策略、复核与一次 rename 发布；同一路径若已有当前应用持 shared lease会立即拒绝。它严格核对 manifest、路径、大小、SHA-256、链接/重解析点/硬链接、Schema、外键及账号/来源/upload_assets/任务参数/request/retry 业务语义，只写入不存在的新独立目录。经严格核验的旧备份格式 1 / Schema 2 可以作为只读输入，在 staging 中迁移为 Schema 3；旧备份本身不被修改。恢复后，当前格式中的 `running` 任务变为 `unknown / interrupted_result_unknown`，`queued` 任务回到 `draft / restart_confirmation_required`；旧格式任务同时需要平台参数或标签迁移复核时使用 `legacy_metadata_interrupted_result_unknown` / `legacy_metadata_restart_confirmation_required`，保留中断状态与迁移原因。未完成账号操作变为失败，活动账号的 ready/checking 状态变为 `unchecked / account_missing`。恢复不构造上传 backend、不登录、不上传，也不会把运行环境或账号登录秘密带到新根。
+`restore` 在不存在的目标上传根旁持 exclusive activity lease，覆盖 staging、恢复策略、复核与一次 rename 发布；同一路径若已有当前应用持 shared lease会立即拒绝。它严格核对 manifest、路径、大小、SHA-256、链接/重解析点/硬链接、Schema、外键及账号/来源/upload_assets/任务参数/request/retry/attempt 业务语义，只写入不存在的新独立目录。经严格核验的旧备份格式 1 / Schema 2 和格式 2 / Schema 3 可以作为只读输入，在 staging 中迁移为 Schema 4；旧备份本身不被修改，也不会补造旧 attempt。当前格式恢复按 receipt 的 dispatch 边界执行上述 `reserved`/`dispatch_may_have_started` 策略，`queued` 任务回到 `draft / restart_confirmation_required`；旧格式任务同时需要平台参数或标签迁移复核时使用 `legacy_metadata_interrupted_result_unknown` / `legacy_metadata_restart_confirmation_required`，保留中断状态与迁移原因。未完成账号操作变为失败，活动账号的 ready/checking 状态变为 `unchecked / account_missing`。恢复不构造上传 backend、不登录、不上传，也不会把运行环境或账号登录秘密带到新根。
 
 备份目录、恢复目录、账号状态、日志、数据库、媒体和运行环境不得加入 Git 或公开交接包。应在受保护的本机或加密介质上保管备份，并用独立新根实际演练恢复；CLI 成功不证明真实平台状态或异机灾难恢复已经验收。
 

@@ -24,6 +24,16 @@ results belong outside Git or under ignored `validation/local/`.
   dedicated WeChat Channels extractor.
 - Workflow now has an explicit source-cover preference with a generated-cover
   fallback; see the scoped [validation record](iteration-0.28.0-workflow-source-cover-preference.md).
+- Upload Schema 4 now records one durable local attempt receipt for every
+  claimed job, and upload backup format 3 preserves and audits those receipts.
+  `unknown` can only move through the fixed operator conclusions after the
+  receipt is read and the corresponding platform backend is checked; only
+  `not_accepted` permits a later explicit retry. A receipt is a local tool
+  observation, not a platform-signed acknowledgement, work ID, moderation or
+  public-visibility proof. Real platform calls in this milestone are **0**,
+  and the 2026-09-10 actual app-root record stops at Upload Schema 1→3; Schema
+  4 has not been migrated or audited in that actual root. See the scoped
+  [attempt receipt record](iteration-0.28.0-upload-attempt-receipts.md).
 - Explicit dubbing render retries can reuse individually verified cue WAV
   checkpoints from the same immutable retry lineage; see the scoped
   [validation record](iteration-0.28.0-speech-checkpoint-retry.md).
@@ -55,6 +65,7 @@ The concise current development state, risks and next actions live in
   [AI snapshot](iteration-0.28.0-ai-snapshot-application.md)
 - [Upload identity contract](iteration-0.28.0-upload-identity-contract.md),
   [upload retry payload identity](iteration-0.28.0-upload-retry-payload-identity.md),
+  [Upload Schema 4 attempt receipts](iteration-0.28.0-upload-attempt-receipts.md),
   [Workflow profile contract](iteration-0.28.0-workflow-profile-contract.md) and
   [upload metadata contract](iteration-0.28.0-upload-metadata-contract.md)
 - [Download HTTP boundary](iteration-0.28.0-download-http-boundary.md) and

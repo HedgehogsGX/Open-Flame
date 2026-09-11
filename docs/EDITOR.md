@@ -195,7 +195,7 @@ data-edits/
     └── <plan_id>/<claim_token>/
 ```
 
-编辑根与下载数据库/媒体、下载 Cookie、上传 Schema 3、上传媒体及上传账号凭据相互隔离。上传导入会再次复制文件，不通过共享路径绕过两个域的校验。
+编辑根与下载数据库/媒体、下载 Cookie、上传 Schema 4、上传媒体及上传账号凭据相互隔离。上传导入会再次复制文件，不通过共享路径绕过两个域的校验。
 
 Editing Schema 4 使用 SQLite `application_id=0x4F464544` 和 `user_version=4`。Schema 1/2/3 只有在结构与语义精确匹配时才按顺序向前迁移；Schema 3 为每个 AI render plan 增加不可变的已批准时间轴绑定及父时间轴摘要，Schema 4 再增加不可变的远程 AI invocation 定义和受 trigger 约束的单向状态转换。启动时要求表、索引和 trigger 与精确 DDL 一致，并执行 `quick_check` 与 foreign-key 检查；未知表、缺失索引、损坏、更高版本、替换竞态或不安全数据库文件都会拒绝打开。
 
