@@ -271,7 +271,8 @@ def _seed_unapproved_evidence(
 def test_capability_static_layers_and_empty_governance_store(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         legacy = client.get("/api/v1/download-capabilities")
         implementations = client.get("/api/v1/capability-implementations")
         evidence = client.get("/api/v1/capability-evidence")
@@ -314,7 +315,8 @@ def test_capability_evidence_and_decision_dtos_are_strictly_separated(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         seeded = _seed_approved_capability(app)
         implementations = client.get("/api/v1/capability-implementations")
         evidence_response = client.get("/api/v1/capability-evidence")
@@ -397,7 +399,8 @@ def test_capability_governance_endpoints_fail_closed_when_readiness_breaks(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         with app.state.database.connect() as connection:
             connection.execute("DROP TRIGGER trg_capability_evidence_no_update")
 
@@ -443,7 +446,8 @@ def test_snapshot_sanitizes_product_identity_failures(
 
     monkeypatch.setattr(api_module, "current_product_identity", fail_identity)
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/capability-snapshot")
 
     assert response.status_code == 503
@@ -454,7 +458,8 @@ def test_snapshot_sanitizes_product_identity_failures(
 def test_home_page_exposes_three_capability_layers_with_safe_dom_updates(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         page = client.get("/")
 
     assert page.status_code == 200
@@ -490,7 +495,8 @@ def test_snapshot_includes_older_evidence_referenced_by_current_decision(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         seeded = _seed_approved_capability(app)
         _seed_unapproved_evidence(
             app,
@@ -536,7 +542,8 @@ def test_snapshot_performs_one_readiness_check(
         return original()
 
     monkeypatch.setattr(app.state.database, "readiness", counted_readiness)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/capability-snapshot")
 
     assert response.status_code == 200
@@ -547,7 +554,8 @@ def test_capability_routes_do_not_create_rejected_log_events(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         seeded = _seed_approved_capability(app)
         responses = [
             client.get("/api/v1/download-capabilities"),

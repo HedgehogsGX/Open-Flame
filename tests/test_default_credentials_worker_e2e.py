@@ -160,7 +160,8 @@ def test_http_default_mode_reaches_private_cookie_and_ready_asset(
         runtime_logger=worker_logger,
     )
     public_payloads: list[str] = []
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         defaults_status = client.get("/api/v1/credential-defaults")
         assert defaults_status.status_code == 200
         assert defaults_status.json()["platforms"] == ["youtube"]

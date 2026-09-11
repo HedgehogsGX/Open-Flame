@@ -145,7 +145,7 @@ def _asgi_get_messages(app, path: str) -> list[dict[str, Any]]:
                 "raw_path": path.encode("ascii"),
                 "query_string": b"",
                 "root_path": "",
-                "headers": [(b"host", b"testserver")],
+                "headers": [(b"host", b"127.0.0.1")],
                 "client": ("testclient", 50000),
                 "server": ("testserver", 80),
                 "state": {},
@@ -162,7 +162,8 @@ def test_asset_listing_skips_malformed_auxiliary_rows_and_keeps_original(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         batch_id, valid_asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -199,7 +200,8 @@ def test_large_auxiliary_download_streams_with_exact_content_length(
     payload = b"large-sidecar\n" + bytes(range(256)) * 4097
     assert len(payload) > 1024 * 1024
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         _, asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -238,7 +240,8 @@ def test_large_original_download_streams_verified_bytes_in_chunks(
     payload = b"large-original\n" + bytes(range(256)) * 4097
     assert len(payload) > 1024 * 1024
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/original-resilience"]},
@@ -314,7 +317,7 @@ def test_verified_auxiliary_response_closes_rolled_spool_on_send_failure() -> No
                     "raw_path": b"/artifact",
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},
@@ -367,7 +370,7 @@ def test_verified_original_response_closes_rolled_spool_on_send_failure(
                     "raw_path": b"/asset",
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},
@@ -426,7 +429,7 @@ def test_verified_chunk_manifest_stops_before_sending_an_in_place_change(
                     "raw_path": b"/registered.mp4",
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},
@@ -540,7 +543,7 @@ def test_original_snapshot_response_outer_cancel_stops_copy_and_listener(
                     "raw_path": b"/asset",
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},
@@ -625,7 +628,7 @@ def test_original_snapshot_response_send_failure_stops_listener_and_closes_spool
                     "raw_path": b"/asset",
                     "query_string": b"",
                     "root_path": "",
-                    "headers": [(b"host", b"testserver")],
+                    "headers": [(b"host", b"127.0.0.1")],
                     "client": ("testclient", 50000),
                     "server": ("testserver", 80),
                     "state": {},

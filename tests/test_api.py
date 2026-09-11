@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from video_download_control import __version__
 from video_download_control.api import create_app
 from video_download_control.config import Settings
 from video_download_control.credentials import CredentialRepository
@@ -86,7 +87,8 @@ class _TikTokAttestedResolver:
 
 
 def test_health_and_web_page(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         health = client.get("/health")
         page = client.get("/")
         openapi = client.get("/openapi.json")
@@ -103,7 +105,7 @@ def test_health_and_web_page(settings: Settings) -> None:
     }
     assert page.status_code == 200
     assert openapi.status_code == 200
-    assert openapi.json()["info"]["version"] == "0.27.0"
+    assert openapi.json()["info"]["version"] == __version__
     assert remote_docs.status_code == 404
     assert remote_redoc.status_code == 404
     assert "<title>Open-Flame · 下载</title>" in page.text
@@ -181,7 +183,8 @@ def test_health_and_web_page(settings: Settings) -> None:
 def test_download_capability_matrix_is_public_and_candidate_only(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/download-capabilities")
 
     assert response.status_code == 200
@@ -224,7 +227,8 @@ def test_download_capability_matrix_is_public_and_candidate_only(
 
 def test_liveness_and_readiness_detect_broken_schema(settings: Settings) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         assert client.get("/health/live").status_code == 200
         assert client.get("/health/ready").status_code == 200
         with app.state.database.connect() as connection:
@@ -252,7 +256,8 @@ def test_health_coalesces_deep_readiness_until_schema_changes(
         return original()
 
     monkeypatch.setattr(app.state.database, "readiness", counted_readiness)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         assert client.get("/health").status_code == 200
         assert client.get("/health/ready").status_code == 200
         assert calls == 1
@@ -278,7 +283,8 @@ def test_health_fails_closed_if_schema_changes_during_deep_audit(
         app.state.database, "readiness", lambda: (True, "ok")
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/health/ready")
 
     assert response.status_code == 503
@@ -307,7 +313,8 @@ def test_health_fails_closed_if_final_schema_cookie_is_unavailable(
         app.state.database, "readiness", lambda: (True, "ok")
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/health/ready")
 
     assert response.status_code == 503
@@ -317,7 +324,8 @@ def test_health_fails_closed_if_final_schema_cookie_is_unavailable(
 
 def test_create_and_get_batch(settings: Settings) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={
@@ -346,7 +354,8 @@ def test_create_and_get_batch(settings: Settings) -> None:
 
 
 def test_missing_batch_and_invalid_payload(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         missing = client.get("/api/v1/batches/not-found")
         invalid = client.post("/api/v1/batches", json={"inputs": []})
 
@@ -364,8 +373,9 @@ def test_api_queues_attested_short_link_without_exposing_redirect_material(
         short_link_attestation_key_file=settings.data_root / "short-link.key",
     )
     with TestClient(
-        create_app(enabled_settings, short_link_resolver=_AttestedResolver())
+        create_app(enabled_settings, short_link_resolver=_AttestedResolver()), base_url="http://127.0.0.1"
     ) as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://t.co/api-safe"]},
@@ -390,7 +400,8 @@ def test_api_rejects_injected_short_link_resolver_without_explicit_gate(
 def test_api_keeps_tiktok_short_link_resolution_default_off(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://vt.tiktok.com/ZShortApi"]},
@@ -418,8 +429,9 @@ def test_api_queues_attested_tiktok_short_link_as_tiktok_video(
         create_app(
             enabled_settings,
             short_link_resolver=_TikTokAttestedResolver(),
-        )
+        ), base_url="http://127.0.0.1"
     ) as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://vm.tiktok.com/ZApiSafe?tracking=drop"]},
@@ -444,7 +456,8 @@ def test_batch_api_rejects_admin_only_credential_profile_id(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         rejected = client.post(
             "/api/v1/batches",
             json={
@@ -462,7 +475,8 @@ def test_batch_api_rejects_admin_only_credential_profile_id(
 
 
 def test_cancel_queued_job_updates_batch_aggregate(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/cancel-api1"]},
@@ -488,7 +502,8 @@ def test_explicit_job_retry_returns_narrow_new_generation_response(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/retry-api"]},
@@ -531,7 +546,8 @@ def test_explicit_job_retry_returns_narrow_new_generation_response(
 def test_explicit_job_retry_maps_missing_and_conflicting_state(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/retry-conflict-api"]},
@@ -548,7 +564,8 @@ def test_explicit_job_retry_maps_missing_and_conflicting_state(
 def test_cancel_input_updates_batch_aggregate_and_missing_is_404(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/cancel-input-api"]},
@@ -573,7 +590,8 @@ def test_rediscover_rejects_missing_non_graph_and_nonterminal_inputs(
     settings: Settings,
 ) -> None:
     graph_settings = replace(settings, x_graph_v2_enabled=True)
-    with TestClient(create_app(graph_settings)) as client:
+    with TestClient(create_app(graph_settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         flat = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/rediscover-flat-api"]},
@@ -604,7 +622,8 @@ def test_terminal_graph_rediscover_returns_only_public_control_fields(
     graph_settings = replace(settings, x_graph_v2_enabled=True)
     app = create_app(graph_settings)
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": [f"https://x.com/example/status/{source_id}"]},
@@ -689,7 +708,8 @@ def test_terminal_graph_rediscover_returns_only_public_control_fields(
 
 
 def test_openapi_defines_nested_batch_contract(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         schemas = client.get("/openapi.json").json()["components"]["schemas"]
 
     assert "InputRecordResponse" in schemas

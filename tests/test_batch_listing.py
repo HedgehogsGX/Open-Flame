@@ -18,8 +18,9 @@ def test_batch_listing_is_bounded_recent_first_and_contains_no_urls(
                 data_root=data_root,
                 database_path=data_root / "control.sqlite3",
             )
-        )
+        ), base_url="http://127.0.0.1"
     ) as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         first = client.post(
             "/api/v1/batches",
             json={"name": "first", "inputs": ["https://youtu.be/first"]},
@@ -46,7 +47,8 @@ def test_batch_listing_limit_is_validated(tmp_path: Path) -> None:
                 data_root=data_root,
                 database_path=data_root / "control.sqlite3",
             )
-        )
+        ), base_url="http://127.0.0.1"
     ) as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         assert client.get("/api/v1/batches", params={"limit": 0}).status_code == 422
         assert client.get("/api/v1/batches", params={"limit": 101}).status_code == 422

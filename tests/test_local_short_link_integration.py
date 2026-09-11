@@ -153,7 +153,8 @@ def test_local_app_short_links_queue_and_reach_offline_ready(
     settings = config.control_settings()
     app = create_app(settings)
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = submit(client, entrypoint)
         assert response.status_code == 201
         payload = response.json()
@@ -209,7 +210,8 @@ def test_local_app_without_direct_network_does_not_resolve_short_links(
     config = LocalAppConfig(app_root=tmp_path.resolve(), allow_direct_network=False)
     settings = config.control_settings()
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = submit(client, "json")
 
     assert response.status_code == 201
@@ -231,7 +233,8 @@ def test_short_link_import_keeps_health_and_job_cancel_responsive(
     config = LocalAppConfig(app_root=tmp_path.resolve(), allow_direct_network=True)
     app = create_app(config.control_settings())
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         queued = submit(
             client, "json", links=("https://www.youtube.com/watch?v=cancel-during-import",),
         )

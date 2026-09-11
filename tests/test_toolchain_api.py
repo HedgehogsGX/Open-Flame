@@ -38,7 +38,8 @@ def _payload(*, state: str) -> dict[str, object]:
 def test_toolchain_endpoint_integrates_with_the_real_unconfigured_inspector(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()
@@ -65,7 +66,8 @@ def test_unconfigured_toolchain_is_visible_without_changing_worker_health(
 
     monkeypatch.setattr(api_module, "inspect_toolchain", inspect)
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         health = client.get("/health")
         response = client.get("/api/v1/operations/tools")
 
@@ -106,7 +108,8 @@ def test_ready_local_tools_never_claim_an_isolated_or_verified_worker(
 
     monkeypatch.setattr(api_module, "inspect_toolchain", inspect)
 
-    with TestClient(create_app(configured)) as client:
+    with TestClient(create_app(configured), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()
@@ -141,7 +144,8 @@ def test_invalid_toolchain_returns_a_bounded_detail_code(
         lambda observed: _Inspection(_payload(state="invalid")),
     )
 
-    with TestClient(create_app(configured)) as client:
+    with TestClient(create_app(configured), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()

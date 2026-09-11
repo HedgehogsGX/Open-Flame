@@ -77,7 +77,8 @@ def test_raw_csv_api_creates_batch_without_multipart_dependency(
 ) -> None:
     from fastapi.testclient import TestClient
 
-    with TestClient(create_app(settings(tmp_path))) as client:
+    with TestClient(create_app(settings(tmp_path)), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.post(
             "/api/v1/batches/import",
             params={"filename": "urls.csv", "name": "CSV import"},
@@ -101,7 +102,8 @@ def test_import_api_rejects_media_type_and_stream_over_limit(
 ) -> None:
     from fastapi.testclient import TestClient
 
-    with TestClient(create_app(settings(tmp_path))) as client:
+    with TestClient(create_app(settings(tmp_path)), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         wrong_type = client.post(
             "/api/v1/batches/import",
             params={"filename": "urls.csv"},

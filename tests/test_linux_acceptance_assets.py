@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from video_download_control import __version__
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,7 +115,7 @@ def test_linux_acceptance_assets_target_v018_schema_11_contract() -> None:
     for contract in (
         'RESTORE_NAME="vdc-schema11-acceptance-$RUN_ID"',
         "--backup-root ABSOLUTE_SCHEMA11_BACKUP_DIR",
-        '"video-download-control": "0.27.0"',
+        f'"video-download-control": "{__version__}"',
         "SCHEMA_VERSION == 11",
         "schema11_exact_runtime_lock_and_no_real_exact_selector",
         "schema11_empty_database_ready",

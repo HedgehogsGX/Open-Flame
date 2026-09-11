@@ -33,7 +33,8 @@ def test_short_link_file_import_runs_blocking_resolution_outside_event_loop(sett
         short_link_transport_socket=settings.data_root / "transport.sock",
         short_link_attestation_key_file=settings.data_root / "key",
     )
-    with TestClient(create_app(configured, short_link_resolver=Resolver())) as client:
+    with TestClient(create_app(configured, short_link_resolver=Resolver()), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         response = client.post(
             "/api/v1/batches/import?filename=links.txt",
             content="https://b23.tv/synthetic",

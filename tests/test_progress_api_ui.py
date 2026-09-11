@@ -17,7 +17,8 @@ def test_get_batch_exposes_exact_downloading_and_postprocessing_progress(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/progress-api-contract"]},
@@ -67,7 +68,8 @@ def test_frontend_executes_real_progress_renderer_for_active_phases(
     if node is None:
         pytest.skip("Node.js is unavailable for the executable frontend contract test")
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         page = client.get("/")
 
     assert page.status_code == 200

@@ -38,7 +38,8 @@ def default_config(tmp_path, settings, database):
 def test_json_and_file_creation_bind_credentials_without_disclosing_them(settings, database, default_config, mode):
     defaults, logger = default_config
     app = create_app(settings, credential_defaults=defaults, runtime_logger=logger)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         status = client.get("/api/v1/credential-defaults")
         assert status.status_code == 200
         assert status.json()["platforms"] == ["youtube"]
@@ -63,7 +64,8 @@ def test_json_and_file_creation_bind_credentials_without_disclosing_them(setting
 
 def test_default_profile_change_fails_without_partial_batch(settings, database, default_config):
     defaults, logger = default_config
-    with TestClient(create_app(settings, credential_defaults=defaults, runtime_logger=logger)) as client:
+    with TestClient(create_app(settings, credential_defaults=defaults, runtime_logger=logger), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         with database.connect() as connection:
             connection.execute("UPDATE credential_profiles SET disabled_at = '2026-09-01T00:00:00.000Z'")
         response = client.post("/api/v1/batches", json={"inputs": ["https://www.youtube.com/watch?v=disabled-default"]})
@@ -85,7 +87,8 @@ def test_other_run_defaults_are_rejected(settings, default_config):
 def test_retry_explicit_choice_or_legacy_preserve(settings, database, default_config, mode, initial_mode):
     defaults, logger = default_config
     app = create_app(settings, credential_defaults=defaults, runtime_logger=logger)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         batch = client.post("/api/v1/batches", json={
             "inputs": ["https://youtu.be/credential-retry"], "credential_mode": initial_mode,
         }).json()
@@ -116,7 +119,8 @@ def test_retry_explicit_choice_or_legacy_preserve(settings, database, default_co
     {"credential_mode": "anonymous", "credential_ref": "untrusted"},
 ])
 def test_invalid_credential_modes_rejected_before_creating_or_retrying(settings, database, body):
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         assert client.post("/api/v1/batches", json={"inputs": ["https://youtu.be/bad-mode"], **body}).status_code == 422
         assert client.post("/api/v1/jobs/not-found/retry", json=body).status_code == 422
     with database.connect() as connection:
@@ -125,7 +129,8 @@ def test_invalid_credential_modes_rejected_before_creating_or_retrying(settings,
 
 def test_changed_config_can_only_be_bypassed_by_explicit_anonymous_choice(settings, database, default_config):
     defaults, logger = default_config
-    with TestClient(create_app(settings, credential_defaults=defaults, runtime_logger=logger)) as client:
+    with TestClient(create_app(settings, credential_defaults=defaults, runtime_logger=logger), base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         defaults.config.path.chmod(0o644)
         defaults.config.path.write_text("{}", encoding="utf-8")
         defaults.config.path.chmod(0o444)

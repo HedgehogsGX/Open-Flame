@@ -21,7 +21,8 @@ def test_metrics_are_aggregate_only_and_include_disk_and_queue(tmp_path: Path) -
             database_path=data_root / "control.sqlite3",
         )
     )
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={
@@ -56,8 +57,9 @@ def test_empty_metrics_have_null_percentiles(tmp_path: Path) -> None:
                 data_root=data_root,
                 database_path=data_root / "control.sqlite3",
             )
-        )
+        ), base_url="http://127.0.0.1"
     ) as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         metrics = client.get("/api/v1/metrics").json()
     assert metrics["queue_depth"] == 0
     assert metrics["average_attempts"] == 0
@@ -76,7 +78,8 @@ def test_graph_metrics_count_discover_as_work_but_only_children_as_outcomes(
             x_graph_v2_enabled=True,
         )
     )
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://x.com/example/status/950001"]},

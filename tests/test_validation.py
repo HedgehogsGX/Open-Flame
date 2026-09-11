@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import video_download_control.validation_cli as validation_cli_module
+from video_download_control import __version__
 from video_download_control.build_identity import (
     ProductBuildDriftError,
     ProductBuildUnavailableError,
@@ -601,7 +602,7 @@ def test_validation_cli_reports_current_build_identity(
     assert code == 0
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["product_version"] == "0.27.0"
+    assert payload["product_version"] == __version__
     assert re.fullmatch(
         re.escape(payload["product_version"]) + r"\+build\.sha256\.[0-9a-f]{64}",
         payload["product_identity"],

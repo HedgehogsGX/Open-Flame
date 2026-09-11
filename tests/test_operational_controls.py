@@ -232,7 +232,8 @@ def test_platform_circuit_reset_api_rejects_automatic_cooldown_and_missing(
             """
         )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         automatic = client.post("/api/v1/platform-circuits/youtube/reset")
         missing = client.post("/api/v1/platform-circuits/instagram/reset")
 
@@ -312,7 +313,8 @@ def test_operations_api_reports_pause_and_refuses_unsafe_resume(
         now=NOW,
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         assert client.get("/health").json()["worker"] == "paused"
         assert client.get("/health/ready").status_code == 503
         assert client.get("/api/v1/operations/queue").json()["paused"] is True
@@ -352,7 +354,8 @@ def test_platform_circuit_api_exposes_and_resets_manual_state(settings) -> None:
             """
         )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         listed = client.get("/api/v1/platform-circuits")
         reset = client.post("/api/v1/platform-circuits/x/reset")
 

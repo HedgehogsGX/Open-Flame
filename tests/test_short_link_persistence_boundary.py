@@ -75,7 +75,8 @@ def test_signed_final_location_never_crosses_api_database_or_backup_boundary(
         short_link_resolver=_ResolverReturningSignedLocation(),
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["X-Download-CSRF"] = client.get("/api/v1/session").json()["csrf_token"]
         created = client.post(
             "/api/v1/batches",
             json={"inputs": [USER_SUBMITTED_SHORT_URL]},
