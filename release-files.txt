@@ -130,6 +130,7 @@ src/video_download_control/editing/ai_runtime_builder.py
 src/video_download_control/editing/ai_runtime_cli.py
 src/video_download_control/editing/ai_worker.py
 src/video_download_control/editing/api.py
+src/video_download_control/editing/captions.py
 src/video_download_control/editing/contracts.py
 src/video_download_control/editing/manager.py
 src/video_download_control/editing/media.py
@@ -281,3 +282,4 @@ validation/iteration-0.9.0-local-worker-e2e-evidence.md
 validation/linux-docker-acceptance.md
 validation/results.template.csv
 validation/sample_manifest.template.csv
+validation/iteration-0.28.0-chinese-caption-style.md

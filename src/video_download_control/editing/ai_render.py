@@ -41,6 +41,16 @@ from .ai_authorization import (
 )
 from .ai_bridge import AiBridgeError
 from .ai_pipeline import AiPipelineError, canonical_timeline
+from .captions import (
+    CHINESE_CAPTION_STYLE,
+    CaptionError,
+    caption_display_texts,
+    check_captions,
+    hold_captions,
+    is_chinese_language,
+    serialize_ass,
+    serialize_caption_report,
+)
 from .contracts import (
     DubbingSpec,
     EditRecipe,
@@ -56,7 +66,12 @@ from .media import (
     SEGMENT_DURATION_TOLERANCE_MS,
     MediaProcessor,
 )
-from .timeline import TimelineCue, TimelineError, serialize_webvtt
+from .timeline import (
+    TimelineCue,
+    TimelineError,
+    serialize_srt,
+    serialize_webvtt,
+)
 
 
 MAX_CAPTION_BYTES = 8 * 1024 * 1024
@@ -914,21 +929,42 @@ class AiRenderProcessor:
             raise EditingError("ai_timeline_invalid")
 
         output_count = len(ordinary.segments) if ordinary.segments else 1
-        caption_paths = tuple(
-            destination
-            / (
-                "caption.vtt"
-                if output_count == 1
-                else f"caption-{ordinal:03d}.vtt"
+
+        def caption_names(stem: str, suffix: str) -> tuple[Path, ...]:
+            return tuple(
+                destination
+                / (
+                    f"{stem}{suffix}"
+                    if output_count == 1
+                    else f"{stem}-{ordinal:03d}{suffix}"
+                )
+                for ordinal in range(1, output_count + 1)
             )
-            for ordinal in range(1, output_count + 1)
+
+        # Chinese reads differently on screen than it does on a review page, so a
+        # Chinese translation also gets the on-screen style, a styled ASS file an
+        # operator can hand to a burn-in step, an SRT the upload pages accept, and
+        # the readability observations behind both.
+        caption_style = (
+            CHINESE_CAPTION_STYLE
+            if translation.enabled and is_chinese_language(translation.target_language)
+            else None
+        )
+        caption_paths = caption_names("caption", ".vtt")
+        subrip_paths = caption_names("caption", ".srt")
+        advanced_paths = caption_names("caption", ".ass")
+        check_paths = caption_names("caption-checks", ".json")
+        styled_caption_paths = (
+            subrip_paths + advanced_paths + check_paths
+            if caption_style is not None
+            else ()
         )
         dubbed_paths = tuple(
             destination / f"dubbed-video-{ordinal:03d}.mp4"
             for ordinal in range(1, output_count + 1)
         )
         planned = (
-            (caption_paths if translation.enabled else ())
+            (caption_paths + styled_caption_paths if translation.enabled else ())
             + (dubbed_paths if dubbing.enabled else ())
         )
         if any(path.exists() or path.is_symlink() for path in planned):
@@ -1030,30 +1066,119 @@ class AiRenderProcessor:
                 completed_bytes = sum(asset.size_bytes for asset in base.assets)
 
             if translation.enabled:
-                for ordinal, (caption_path, cues, window) in enumerate(
-                    zip(caption_paths, windowed_cues, windows, strict=True), start=1
-                ):
-                    try:
-                        caption = serialize_webvtt(cues) if cues else b"WEBVTT\n\n"
-                    except (TimelineError, UnicodeError) as exc:
-                        raise EditingError("ai_caption_invalid") from exc
-                    size, digest = _write_exclusive(caption_path, caption)
-                    owned.append(caption_path)
+
+                def emit_caption(
+                    path: Path,
+                    payload: bytes,
+                    *,
+                    mime_type: str,
+                    container: str,
+                    ordinal: int,
+                    duration_ms: int | None,
+                ) -> None:
+                    nonlocal completed_bytes
+                    size, digest = _write_exclusive(path, payload)
+                    owned.append(path)
                     completed_bytes += size
                     if completed_bytes > MAX_OUTPUT_BYTES:
                         raise EditingError("media_output_too_large")
                     outputs.append(
                         RenderAsset(
                             kind="caption",
-                            path=caption_path,
-                            name=caption_path.name,
-                            mime_type="text/vtt",
+                            path=path,
+                            name=path.name,
+                            mime_type=mime_type,
                             ordinal=ordinal,
                             size_bytes=size,
                             sha256=digest,
-                            duration_ms=window[1] - window[0],
-                            container="webvtt",
+                            duration_ms=duration_ms,
+                            container=container,
                         )
+                    )
+
+                for ordinal, (
+                    caption_path,
+                    subrip_path,
+                    advanced_path,
+                    check_path,
+                    cues,
+                    window,
+                ) in enumerate(
+                    zip(
+                        caption_paths,
+                        subrip_paths,
+                        advanced_paths,
+                        check_paths,
+                        windowed_cues,
+                        windows,
+                        strict=True,
+                    ),
+                    start=1,
+                ):
+                    duration_ms = window[1] - window[0]
+                    shown = cues
+                    try:
+                        texts = None
+                        if caption_style is not None and cues:
+                            texts = caption_display_texts(cues, caption_style)
+                            shown = hold_captions(
+                                cues, texts, caption_style, limit_ms=duration_ms
+                            )
+                        caption = (
+                            serialize_webvtt(shown, texts) if shown else b"WEBVTT\n\n"
+                        )
+                    except (CaptionError, TimelineError, UnicodeError) as exc:
+                        raise EditingError("ai_caption_invalid") from exc
+                    emit_caption(
+                        caption_path,
+                        caption,
+                        mime_type="text/vtt",
+                        container="webvtt",
+                        ordinal=ordinal,
+                        duration_ms=duration_ms,
+                    )
+                    # A window with no approved caption has nothing to style or
+                    # check, and an empty SubRip file has no valid bytes to write.
+                    if caption_style is None or not shown:
+                        continue
+                    try:
+                        subrip = serialize_srt(shown, texts)
+                        advanced = serialize_ass(shown, texts or {}, caption_style)
+                        checks = serialize_caption_report(
+                            check_captions(
+                                shown,
+                                texts or {},
+                                caption_style,
+                                language=translation.target_language,
+                            )
+                        )
+                    except (CaptionError, TimelineError, UnicodeError) as exc:
+                        raise EditingError("ai_caption_invalid") from exc
+                    emit_caption(
+                        subrip_path,
+                        subrip,
+                        mime_type="application/x-subrip",
+                        container="subrip",
+                        ordinal=ordinal,
+                        duration_ms=duration_ms,
+                    )
+                    emit_caption(
+                        advanced_path,
+                        advanced,
+                        mime_type="text/x-ssa",
+                        container="ass",
+                        ordinal=ordinal,
+                        duration_ms=duration_ms,
+                    )
+                    emit_caption(
+                        check_path,
+                        checks,
+                        mime_type="application/json",
+                        container="caption-checks",
+                        ordinal=ordinal,
+                        # A report of what the captions look like has no duration
+                        # of its own.
+                        duration_ms=None,
                     )
 
             if dubbing.enabled:

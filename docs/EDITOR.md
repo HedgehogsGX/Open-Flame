@@ -71,6 +71,20 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 
 页面中的“下载成品”读取正式受管输出。每次读取都会在同一个打开的文件句柄上复核大小和 SHA-256，同时建立 1 MiB 分块摘要；响应每个分块前会再次核对其摘要，等长原地改写也不能把新字节混入完整响应。实现不会校验后重新按路径打开，也不会为大文件建立完整 TEMP 副本；文件缺失或被修改时不会继续提供。源视频预览使用相同边界。
 
+翻译目标语言为中文时，同一批已批准 cue 另外写出 `caption.srt`、带样式的 `caption.ass`
+（`Microsoft YaHei` 48，1920×1080 script 分辨率）和 `caption-checks.json`，与 `caption.vtt`
+一同登记为 `caption` 成品。这些文件按上屏样式排版：删除句读标点，只在两侧都足够长时保留
+一个全角逗号，token 内部的 `3.5`、`12:30`、`K/D` 不受影响，按 22 字折行，并把每条字幕的
+显示结束时间延长到足以读完——`+250 ms` 收尾、最短 1 秒、按 9 字/秒计算读完所需时间，上限
+是下一条开始前 100 ms。起始时间从不移动，结束时间从不缩短，不制造新的重叠，也不超出该
+输出的媒体长度。
+
+这些只改变写出的字幕文件。已批准的 translation revision 保留自然标点，配音仍按原始 cue
+时间对轨；目标语言不是中文时，渲染结果与本切片前逐字节相同，仍只有 `caption.vtt`。
+`caption-checks.json` 只记录行宽、阅读速度、不允许的标点、一行多个逗号与重叠等观察，不阻止
+渲染，也不是对翻译正确性的判断。本轮没有把字幕烧录进视频：烧录、字体落地与 Windows 上的
+libass 渲染仍未实现、未验证。详见[中文字幕上屏样式](../validation/iteration-0.28.0-chinese-caption-style.md)。
+
 ### 1.5 显式导入上传
 
 只有 `ready` 的 `segment` 或未来的 `dubbed_video` 可成为上传视频来源。封面、字幕和独立音频不能通过视频入口导入。
@@ -316,4 +330,4 @@ Schema 3→4 迁移只为“可能已经 dispatch 到远程 provider”的旧 AI
 
 ## 10. 当前可以准确声称的结果
 
-0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、精确 `revision_id` 绑定的处理计划、本地分段/封面/字幕/标准音色与可选语速配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复，原始预授权 queued 工作可在重启后重新校验并续跑。自动流程页可恢复配音语速，并可填写首批三平台的独立内容、定时、发布模式和专属选项。译文绑定切片的服务验证为 17/17 PASS、严格浏览器检查及 4 个既有浏览器回归 PASS，full-chain/full-video/speech-rate/multisegment 也均 PASS；聚焦 pytest 为 69 passed、2 个既有 Editing Schema 1 旧断言失败，测试文件未改。仓库内验证仍只覆盖本机定义、ignored validator、synthetic/fake 编排和本地媒体处理；以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真实下载、真人试听、三平台真实上传/投稿/发布或新发行制品证据。
+0.28.0 当前发布后源码建立了下载成品到独立编辑副本、版本化草稿、可审核 AI 时间轴、精确 `revision_id` 绑定的处理计划、本地分段/封面/字幕（中文另出 SRT/ASS 上屏样式与检查记录，未烧录）/标准音色与可选语速配音渲染、编辑成品、显式导入上传和持久化 URL 自动流程，并把新 AI 操作绑定到精确 runtime/model/operation/外发范围、固定输入/调用上限及 Schema 4 脱敏远程调用账本。Workflow Schema 2 进一步保存最多 10 个有序输出及其 segment/source/account/platform/job 关系，最多 30 个草稿在一次批量确认中进入上传；逐段准备失败可从已保存 prefix 幂等恢复，原始预授权 queued 工作可在重启后重新校验并续跑。自动流程页可恢复配音语速，并可填写首批三平台的独立内容、定时、发布模式和专属选项。译文绑定切片的服务验证为 17/17 PASS、严格浏览器检查及 4 个既有浏览器回归 PASS，full-chain/full-video/speech-rate/multisegment 也均 PASS；聚焦 pytest 为 69 passed、2 个既有 Editing Schema 1 旧断言失败，测试文件未改。仓库内验证仍只覆盖本机定义、ignored validator、synthetic/fake 编排和本地媒体处理；以上结果不构成价格预算、精确 HTTP/usage/账单收据、远端 alias 冻结、真实 OpenAI 账号调用、真实下载、真人试听、三平台真实上传/投稿/发布或新发行制品证据。
