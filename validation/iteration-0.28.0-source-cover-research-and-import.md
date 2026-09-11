@@ -166,9 +166,10 @@ yt-dlp path.
 
 ## 2026-09-11 selected-thumbnail identity increment
 
-Status: current uncommitted working tree; no release receipt. The 2026-09-10
-validation table above remains the frozen result of its earlier implementation
-slice and is not presented as a rerun for this increment.
+Status: validated before commit and subsequently committed as a source
+milestone; no release receipt. The 2026-09-10 validation table above remains
+the frozen result of its earlier implementation slice and is not presented as
+a rerun for this increment.
 
 The pinned yt-dlp source archive was rechecked against the current Windows x64
 lock: its size is `6020567` bytes and its SHA-256 is
