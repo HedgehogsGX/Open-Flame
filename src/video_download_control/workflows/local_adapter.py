@@ -1423,25 +1423,31 @@ class LocalWorkflowAdapter:
             raise WorkflowError(error_code) from None
         if expected_project_id is not None and project_id != expected_project_id:
             raise WorkflowError(error_code)
-        rows = self.editing_manager.invoke("ai_tasks", project_id=project_id)
-        if not isinstance(rows, list):
+        try:
+            resolved = self.editing_manager.invoke(
+                "resolve_ai_task_retry", task_id, project_id=project_id
+            )
+        except EditingError as error:
+            if error.code == error_code:
+                raise WorkflowError(error_code) from error
+            raise
+        if not isinstance(resolved, tuple) or len(resolved) != 2:
             raise WorkflowError(error_code)
-
-        records: dict[str, Mapping[str, Any]] = {}
-        for row in rows:
-            if not isinstance(row, Mapping) or row.get("project_id") != project_id:
-                raise WorkflowError(error_code)
-            try:
-                current_id = _record_id(row)
-            except WorkflowError:
-                raise WorkflowError(error_code) from None
-            if current_id in records:
-                raise WorkflowError(error_code)
-            records[current_id] = row
-
-        start = records.get(task_id)
-        if start is None or any(
+        start, leaf = resolved
+        if (
+            not isinstance(start, Mapping)
+            or not isinstance(leaf, Mapping)
+            or start.get("id") != task_id
+            or leaf.get("project_id") != project_id
+        ):
+            raise WorkflowError(error_code)
+        try:
+            _record_id(leaf)
+        except WorkflowError:
+            raise WorkflowError(error_code) from None
+        if any(
             start.get(field) != task.get(field)
+            or leaf.get(field) != start.get(field)
             for field in (
                 "project_id",
                 "operation",
@@ -1450,41 +1456,7 @@ class LocalWorkflowAdapter:
             )
         ):
             raise WorkflowError(error_code)
-
-        successors: dict[str, str] = {}
-        for current_id, row in records.items():
-            retry_of = row.get("retry_of")
-            if retry_of is None:
-                continue
-            try:
-                parent_id = _hex_identifier(retry_of)
-            except WorkflowError:
-                raise WorkflowError(error_code) from None
-            if (
-                parent_id not in records
-                or parent_id == current_id
-                or parent_id in successors
-            ):
-                raise WorkflowError(error_code)
-            parent = records[parent_id]
-            if any(
-                row.get(field) != parent.get(field)
-                for field in (
-                    "operation",
-                    "source_revision_id",
-                    "request_sha256",
-                )
-            ):
-                raise WorkflowError(error_code)
-            successors[parent_id] = current_id
-
-        _validate_retry_successors(
-            tuple(records), successors, error_code=error_code
-        )
-        current_id = task_id
-        while current_id in successors:
-            current_id = successors[current_id]
-        return records[current_id]
+        return leaf
 
     def _ai_task_retry_blocked(self, task: Mapping[str, Any]) -> bool:
         """Read the full project-level recursive block set, independent of paging."""

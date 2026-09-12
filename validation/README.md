@@ -14,6 +14,7 @@ results belong outside Git or under ignored `validation/local/`.
   and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
 - Workflow form rules: [shared validation and incomplete absolute schedules](iteration-0.28.0-workflow-shared-validation.md).
+- Editing AI retry graph: [one owner for resolution and project cancellation](iteration-0.28.0-editing-ai-retry-ownership.md).
 - Upload cover ownership: [shared format/platform rules and backup audit](iteration-0.28.0-upload-cover-ownership.md).
   The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
   the three added failures still patch the former service decoder location.

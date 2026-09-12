@@ -1773,47 +1773,8 @@ class EditingService:
             "SELECT 1 FROM projects WHERE id=?", (project_id,)
         ).fetchone() is None:
             raise EditingError("project_not_found")
-        rows = db.execute(
-            "SELECT * FROM ai_tasks WHERE project_id=? ORDER BY created_at,id",
-            (project_id,),
-        ).fetchall()
-        records: dict[str, dict[str, Any]] = {}
-        successor_by_parent: dict[str, str] = {}
         try:
-            for row in rows:
-                task = self._ai_task_from_row(row)[0]
-                task_id = task["id"]
-                if task["project_id"] != project_id or task_id in records:
-                    raise EditingError("ai_task_set_invalid")
-                records[task_id] = task
-            for task_id, task in records.items():
-                parent_id = task["retry_of"]
-                if parent_id is None:
-                    continue
-                parent = records.get(parent_id)
-                if (
-                    parent is None
-                    or parent_id == task_id
-                    or parent_id in successor_by_parent
-                    or any(
-                        task[field] != parent[field]
-                        for field in (
-                            "operation",
-                            "source_revision_id",
-                            "request_sha256",
-                        )
-                    )
-                ):
-                    raise EditingError("ai_task_set_invalid")
-                successor_by_parent[parent_id] = task_id
-            for task_id in records:
-                seen: set[str] = set()
-                cursor = task_id
-                while cursor in successor_by_parent:
-                    if cursor in seen:
-                        raise EditingError("ai_task_set_invalid")
-                    seen.add(cursor)
-                    cursor = successor_by_parent[cursor]
+            records, successor_by_parent = self._ai_retry_forest_in(db, project_id)
         except EditingError as error:
             if error.code == "ai_task_set_invalid":
                 raise
@@ -1823,6 +1784,76 @@ class EditingService:
             task_id for task_id in records if task_id not in successor_by_parent
         ]
         return self._cancel_ai_task_ids_in(db, leaf_ids)
+
+    def _ai_retry_forest_in(
+        self, db: sqlite3.Connection, project_id: str
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Decode and validate the whole project, including unrelated retry chains."""
+
+        rows = db.execute(
+            "SELECT * FROM ai_tasks WHERE project_id=? ORDER BY created_at,id",
+            (project_id,),
+        ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        successor_by_parent: dict[str, str] = {}
+        for row in rows:
+            task = self._ai_task_from_row(row)[0]
+            task_id = task["id"]
+            if task["project_id"] != project_id or task_id in records:
+                raise EditingError("ai_task_set_invalid")
+            records[task_id] = task
+        for task_id, task in records.items():
+            parent_id = task["retry_of"]
+            if parent_id is None:
+                continue
+            parent = records.get(parent_id)
+            if (
+                parent is None
+                or parent_id == task_id
+                or parent_id in successor_by_parent
+                or any(
+                    task[field] != parent[field]
+                    for field in (
+                        "operation",
+                        "source_revision_id",
+                        "request_sha256",
+                    )
+                )
+            ):
+                raise EditingError("ai_task_set_invalid")
+            successor_by_parent[parent_id] = task_id
+
+        resolved: set[str] = set()
+        for task_id in records:
+            cursor = task_id
+            path: set[str] = set()
+            while cursor in successor_by_parent and cursor not in resolved:
+                if cursor in path:
+                    raise EditingError("ai_task_set_invalid")
+                path.add(cursor)
+                cursor = successor_by_parent[cursor]
+            resolved.update(path)
+        return records, successor_by_parent
+
+    def resolve_ai_task_retry(
+        self, task_id: str, *, project_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return the canonical start and leaf after validating its entire project.
+
+        The caller can compare the start against its independently frozen identity.
+        Invalid task rows keep their decoding errors; invalid forests fail closed.
+        """
+
+        task_id, project_id = _identifier(task_id), _identifier(project_id)
+        with self._db() as db:
+            records, successors = self._ai_retry_forest_in(db, project_id)
+            start = records.get(task_id)
+            if start is None:
+                raise EditingError("ai_task_set_invalid")
+            current_id = task_id
+            while current_id in successors:
+                current_id = successors[current_id]
+            return start, records[current_id]
 
     def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
         return self.cancel_ai_tasks((task_id,))[0]

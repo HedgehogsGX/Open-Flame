@@ -12,8 +12,9 @@
 重整架构并解决完整 CI；**尚未完成，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
-下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；后续仍须完成 AI 重试图、
-Workflow 重试结果/取消尾段、公共备份文件操作、完整测试维护及四格 hosted CI 验证。
+下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
+统一校验。后续仍须完成 Workflow 重试结果/取消尾段、公共备份文件操作、完整测试维护及四格
+hosted CI 验证。
 Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
@@ -131,6 +132,7 @@ Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成�
 | --- | --- |
 | 当前状态与 CI 策略 | [文档状态收敛](validation/iteration-0.28.0-document-status-consolidation.md) |
 | 封面规则与当前回归 | [Upload 封面所有权及备份审计](validation/iteration-0.28.0-upload-cover-ownership.md) |
+| AI 重试图所有权 | [Editing 统一校验与取消事务](validation/iteration-0.28.0-editing-ai-retry-ownership.md) |
 | 表单校验与日期意图 | [Workflow 共享校验](validation/iteration-0.28.0-workflow-shared-validation.md) |
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
@@ -192,7 +194,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，收敛 Editing AI 重试图和 Workflow 重复规则，并处理发行
+1. 继续当前架构重置目标，收敛 Workflow 重复规则，并处理发行
    文档链接与公共备份基础边界。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标
    不能缩成局部通过或文档审查。
    临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。
