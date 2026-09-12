@@ -29,7 +29,11 @@ from uuid import uuid4
 
 from . import __version__
 from .database import SCHEMA_VERSION, Database
-from .managed_files import close_binary_on_error, discard_created_file
+from .managed_files import (
+    close_binary_on_error,
+    discard_created_file,
+    fdopen_owned_binary,
+)
 from .graph import (
     GraphValidationError,
     XPostIdentity,
@@ -1180,10 +1184,26 @@ def _iter_managed_source_files(
     yield from walk(data_root, Path())
 
 
-def _sqlite_online_backup(source: Path, destination: Path) -> None:
-    source_connection = sqlite3.connect(str(source), timeout=5.0)
-    destination_connection = sqlite3.connect(str(destination), timeout=5.0)
+@contextmanager
+def _owned_sqlite_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Close each acquired connection once without replacing an earlier error."""
+
+    connection = sqlite3.connect(str(path), timeout=5.0)
     try:
+        yield connection
+    except BaseException:
+        with suppress(BaseException):
+            connection.close()
+        raise
+    else:
+        connection.close()
+
+
+def _sqlite_online_backup(source: Path, destination: Path) -> None:
+    with (
+        _owned_sqlite_connection(source) as source_connection,
+        _owned_sqlite_connection(destination) as destination_connection,
+    ):
         source_connection.execute("PRAGMA query_only = ON")
         source_connection.backup(destination_connection)
         destination_connection.commit()
@@ -1195,9 +1215,6 @@ def _sqlite_online_backup(source: Path, destination: Path) -> None:
         quick = destination_connection.execute("PRAGMA quick_check").fetchone()
         if quick is None or quick[0] != "ok":
             raise BackupRestoreError("database snapshot quick_check failed")
-    finally:
-        destination_connection.close()
-        source_connection.close()
     _sync_file(destination)
 
 
@@ -1262,12 +1279,7 @@ def _scan_backup_files(root: Path) -> tuple[str, ...]:
 def _owned_binary_reader(descriptor: int) -> Iterator[BinaryIO]:
     """Transfer a raw descriptor once, preserving any earlier failure on close."""
 
-    try:
-        handle = os.fdopen(descriptor, "rb", closefd=True)
-    except BaseException:
-        with suppress(BaseException):
-            os.close(descriptor)
-        raise
+    handle = fdopen_owned_binary(descriptor, "rb")
     with close_binary_on_error(handle):
         yield handle
     handle.close()

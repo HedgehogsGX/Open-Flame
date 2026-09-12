@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from .. import __version__
 from .. import backup as _common
+from ..managed_files import fdopen_owned_binary
 from . import schema as _schema
 from .activity_lock import UploadActivityBusy, UploadActivityLease, activity_lock_path
 from .contracts import (
@@ -590,7 +591,7 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
     flags = os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags, 0o600)
-        handle = os.fdopen(descriptor, "r+b", closefd=True)
+        handle = fdopen_owned_binary(descriptor, "r+b")
     except OSError as exc:
         raise UploadBackupError("upload worker lock is unavailable") from exc
     locked = False

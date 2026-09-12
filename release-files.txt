@@ -331,4 +331,5 @@ validation/iteration-0.28.0-backup-file-ownership.md
 validation/iteration-0.28.0-editing-copy-ownership.md
 validation/iteration-0.28.0-upload-manager-ownership.md
 validation/iteration-0.28.0-editing-registration-cleanup.md
+validation/iteration-0.28.0-backup-resource-handoff.md
 validation/iteration-0.28.0-workflow-request-construction.md

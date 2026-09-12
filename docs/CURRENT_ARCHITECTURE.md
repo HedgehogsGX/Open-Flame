@@ -364,7 +364,9 @@ stateDiagram-v2
    recover/stop 竞争和系统锁交接均已验证，见[生命周期记录](../validation/iteration-0.28.0-upload-manager-ownership.md)。
    Editing 成品的纯元数据校验已前移到复制前，复制后立即加入共同清理清单，关闭登记前
    孤儿路径，见[登记清理记录](../validation/iteration-0.28.0-editing-registration-cleanup.md)。
-   备份锁 descriptor 包装与第二个 SQLite 连接失败的回收仍待补齐，再迁移公共备份文件操作。
+   备份锁与普通 reader 现共用公开 raw descriptor 交接；SQLite 每个连接取得后立即进入
+   关闭范围，保留主异常并回收另一个连接，见[资源回收记录](../validation/iteration-0.28.0-backup-resource-handoff.md)。
+   公共备份文件操作的独立 Module 迁移仍待完成。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake

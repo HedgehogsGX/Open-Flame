@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, TypeAlias
+from typing import BinaryIO, Literal, TypeAlias
 
 
 FileSignature: TypeAlias = tuple[int, int, int, int]
@@ -123,6 +123,19 @@ def close_binary_on_error(handle: BinaryIO) -> Iterator[BinaryIO]:
     except BaseException:
         try:
             handle.close()
+        except BaseException:
+            pass
+        raise
+
+
+def fdopen_owned_binary(descriptor: int, mode: Literal["rb", "r+b"]) -> BinaryIO:
+    """Consume a raw descriptor, closing it if file-object wrapping fails."""
+
+    try:
+        return os.fdopen(descriptor, mode, closefd=True)
+    except BaseException:
+        try:
+            os.close(descriptor)
         except BaseException:
             pass
         raise
