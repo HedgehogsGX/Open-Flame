@@ -16,6 +16,8 @@ Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与�
 统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续仍须完成公共备份文件操作、
 完整测试维护及四格 hosted CI 验证。
 Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
+备份复制的目标所有权、三个读取入口的 descriptor 交接及关闭失败保留主异常已修复，
+公共备份文件操作的迁移仍待完成。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -134,6 +136,7 @@ Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成�
 | 封面规则与当前回归 | [Upload 封面所有权及备份审计](validation/iteration-0.28.0-upload-cover-ownership.md) |
 | AI 重试图所有权 | [Editing 统一校验与取消事务](validation/iteration-0.28.0-editing-ai-retry-ownership.md) |
 | Workflow 重试与取消 | [共用结果应用和取消尾段](validation/iteration-0.28.0-workflow-retry-cancel-tails.md) |
+| 备份文件所有权 | [复制目标与 descriptor 失败清理](validation/iteration-0.28.0-backup-file-ownership.md) |
 | 表单校验与日期意图 | [Workflow 共享校验](validation/iteration-0.28.0-workflow-shared-validation.md) |
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |

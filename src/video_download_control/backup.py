@@ -19,16 +19,17 @@ import sqlite3
 import stat
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 from urllib.parse import unquote
 from uuid import uuid4
 
 from . import __version__
 from .database import SCHEMA_VERSION, Database
+from .managed_files import close_binary_on_error
 from .graph import (
     GraphValidationError,
     XPostIdentity,
@@ -1257,6 +1258,37 @@ def _scan_backup_files(root: Path) -> tuple[str, ...]:
     return tuple(files)
 
 
+@contextmanager
+def _owned_binary_reader(descriptor: int) -> Iterator[BinaryIO]:
+    """Transfer a raw descriptor once, preserving any earlier failure on close."""
+
+    try:
+        handle = os.fdopen(descriptor, "rb", closefd=True)
+    except BaseException:
+        with suppress(BaseException):
+            os.close(descriptor)
+        raise
+    with close_binary_on_error(handle):
+        yield handle
+    handle.close()
+
+
+def _discard_created_copy(path: Path, created: os.stat_result | None) -> None:
+    """Best-effort failure cleanup, restricted to the file this copy created."""
+
+    if created is None:
+        return
+    with suppress(BaseException):
+        current = path.lstat()
+        if (
+            stat.S_ISREG(current.st_mode)
+            and current.st_nlink == 1
+            and not _is_link_or_reparse(path, current)
+            and _same_path_identity(created, current)
+        ):
+            path.unlink()
+
+
 def _copy_regular_file(
     source: Path,
     destination: Path,
@@ -1273,15 +1305,16 @@ def _copy_regular_file(
     if expected_size is not None and initial.st_size != expected_size:
         raise BackupRestoreError("copy source size mismatch")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    copied = 0
+    created: os.stat_result | None = None
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(source, flags)
     except OSError as exc:
         raise BackupRestoreError("copy source could not be opened safely") from exc
-    digest = hashlib.sha256()
-    copied = 0
     try:
-        with os.fdopen(descriptor, "rb", closefd=True) as source_handle:
+        with _owned_binary_reader(descriptor) as source_handle:
             opened = os.fstat(source_handle.fileno())
             if not _same_file_identity(initial, opened):
                 raise BackupRestoreError("copy source changed before reading")
@@ -1289,7 +1322,8 @@ def _copy_regular_file(
                 target_handle = destination.open("xb")
             except OSError as exc:
                 raise BackupRestoreError("copy destination could not be created") from exc
-            with target_handle:
+            with close_binary_on_error(target_handle):
+                created = os.fstat(target_handle.fileno())
                 while True:
                     chunk = source_handle.read(COPY_CHUNK_BYTES)
                     if not chunk:
@@ -1304,20 +1338,20 @@ def _copy_regular_file(
                     raise BackupRestoreError("copy source changed during reading")
                 target_handle.flush()
                 os.fsync(target_handle.fileno())
+            target_handle.close()
+        value = digest.hexdigest()
+        if expected_sha256 is not None and value != expected_sha256:
+            raise BackupRestoreError("copy source hash mismatch")
+        return value, copied
     except BackupRestoreError:
-        with suppress(OSError):
-            destination.unlink()
+        _discard_created_copy(destination, created)
         raise
     except OSError as exc:
-        with suppress(OSError):
-            destination.unlink()
+        _discard_created_copy(destination, created)
         raise BackupRestoreError("file copy failed") from exc
-    value = digest.hexdigest()
-    if expected_sha256 is not None and value != expected_sha256:
-        with suppress(OSError):
-            destination.unlink()
-        raise BackupRestoreError("copy source hash mismatch")
-    return value, copied
+    except BaseException:
+        _discard_created_copy(destination, created)
+        raise
 
 
 def _entry_for_file(path: Path, *, relative_path: str) -> _ManifestEntry:
@@ -1356,10 +1390,10 @@ def _sha256_regular_file(path: Path) -> str:
         raise BackupRestoreError("hash source has multiple filesystem links")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
         digest = hashlib.sha256()
         size = 0
-        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+        descriptor = os.open(path, flags)
+        with _owned_binary_reader(descriptor) as handle:
             opened = os.fstat(handle.fileno())
             if not _same_file_identity(initial, opened):
                 raise BackupRestoreError("hash source changed before reading")
@@ -1389,7 +1423,7 @@ def _read_bounded_regular_file(path: Path, max_bytes: int) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+        with _owned_binary_reader(descriptor) as handle:
             opened = os.fstat(handle.fileno())
             if not _same_file_identity(info, opened):
                 raise BackupRestoreError(

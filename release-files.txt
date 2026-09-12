@@ -326,4 +326,5 @@ validation/iteration-0.28.0-upload-cover-ownership.md
 validation/iteration-0.28.0-workflow-shared-validation.md
 validation/iteration-0.28.0-editing-ai-retry-ownership.md
 validation/iteration-0.28.0-workflow-retry-cancel-tails.md
+validation/iteration-0.28.0-backup-file-ownership.md
 validation/iteration-0.28.0-workflow-request-construction.md
