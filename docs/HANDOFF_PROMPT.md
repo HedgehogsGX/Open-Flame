@@ -58,7 +58,7 @@ git config --get core.hooksPath
 - Schema：Download 11、Editing 4、Upload 4、Workflow 3、Workflow preset 2。
 - 上传备份格式：3。
 - 首批上传平台仅限 Bilibili、抖音、视频号；视频号内部 ID 为 `tencent`。
-- 本提示词生成前的远端 `main`：`30548f32e072ee549a322b840374d09486d63110`。
+- 2026-09-13 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
 - `0592b6f` 的 release receipt 只覆盖该冻结构建，不覆盖后续源码。
 - 2026-09-10 的实际应用根只完成 Upload Schema 1→3；Schema 4 只在独立临时根验收。
@@ -101,8 +101,9 @@ git config --get core.hooksPath
 
 ## 5. 验证与提交门禁
 
-不得新增或修改 tracked 自动化测试文件。只有用户明确要求的独立测试清理提交可以删除历史测试；
-不得修改测试来适配新实现或伪造绿色结果。
+一般规则是不新增或修改 tracked 自动化测试文件。2026-09-13 用户已明确批准 `AGENTS.md`
+记载的限定差分，并已提交为 `3e482f0`，无需再次审批。其他测试改动须有对应的明确授权；
+只删除历史测试仍可使用独立清理提交。不得通过减少收集范围或放宽安全断言伪造绿色结果。
 
 按改动范围运行：
 

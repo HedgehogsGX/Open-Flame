@@ -185,18 +185,15 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    真人试听仍未知。
 2. **真实三平台发布未验收。** 本地账号显示 ready 只说明本地 session 记录状态；不能证明
    远端 session 仍有效，也不能证明上传、审核、定时发布或公开可见成功。
-3. **当前源码尚未形成新的 release candidate。** Upload Schema 4 源码里程碑已冻结并签名
-   推送为 `496fb63f9d0010c22fa1abc660e6450cd403b6be`，但 `0592b6f` 之后的功能与架构提交仍需
-   新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
+3. **最终 release 验收尚未闭合。** `c07b0af` 已完成五件制品构建、源码/wheel 独立安装和
+   包外安装记录，但其 CI 尚未通过；此后生产修复仍须绑定最终提交重新冻结验收。
    2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **完整 CI 尚未恢复。** tracked tests 的标准入口仍受备份旧私有 helper import 阻断。
-   原 `773dc5d` 完整诊断为 2,091 passed / 329 failed / 16 skipped / 1 collection error。
-   2026-09-13 的隔离副本包含控件保留源码修复与测试维护草案，完整结果为
-   **2,442 passed / 16 skipped**，没有增加 skip；它不能替代当前 tracked tests 或 hosted CI。
-   44 个历史测试文件、2 个显式 fixture helper、限定完整差分的门禁例外均已准备为具体补丁，
-   尚未获得用户批准，尚未应用或提交。基线 `773dc5d` hosted run 34697513834 四格仍失败。
-   具体证据、补丁身份及保留的安全边界见[控件保留与 CI 维护记录](validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
+4. **完整 CI 尚未恢复。** 已批准测试补丁 `3e482f0` 修复旧 import 与合同漂移，其两组
+   Windows hosted CI 均通过 2442 项、跳过 16 项。后续生产修复 `4b0cf3a` 的本地完整回归为
+   **2442 passed / 16 skipped**；两组 Linux CI 均收敛为 **21 failed / 2300 passed / 137 skipped**。
+   六个测试文件的平台假设和故障注入仍需维护，新增候选保存在 ignored 目录，尚未应用。
+   最新提交还须单独核对，不能用旧结果代替。见[CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -209,17 +206,16 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
-8. **架构重置仍在推进。** 本分支已关闭线程首次启动回滚与媒体失败清理两条本地 P2 路径，
-   12 个有界检查通过；这不能证明其他候选已实施，也不能覆盖原有上传 source TOCTOU 窗口。
-   Download 素材读取已分责；领域规则 Locality 与完整 CI 的后续工作见
+8. **架构重置仍在推进。** 线程启动回滚、媒体失败清理、Upload 源文件消费期保护、
+   Download 受管读取、CLI 分责和跨页纯规则已实施；最新故障修复保留上述所有权边界。
+   当前重点是完整 CI 与最终发行验收，后续工作见
    [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，处理上传源文件交接、跨页纯规则、CLI 支持与最终发行
-   文档。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标
-   不能缩成局部通过或文档审查。
-   临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。
+1. 继续当前架构重置目标，核对最新完整 CI、处理已定位的平台测试维护，并固定最终
+   source/wheel 构建、安装与 receipt。已批准补丁无需再次审批；超出原冻结差分的候选
+   按具体范围另行处理。临时故障注入仍放在已忽略的 `validation/local/`。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)
@@ -245,7 +241,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 - 继续工作前阅读 [`AGENTS.md`](AGENTS.md)、
   [`docs/FOLLOW_UP_EXECUTION_PLAN.md`](docs/FOLLOW_UP_EXECUTION_PLAN.md) 和改动范围对应的
   最新 evidence。
-- 后续提交不得新增或修改自动化测试文件。现有 `tests/` 只用于本地/CI 回归；临时探针、
+- 除 `AGENTS.md` 中明确批准的限定维护外，后续提交不得新增或修改自动化测试文件。现有 `tests/` 只用于本地/CI 回归；临时探针、
   日志、截图和结果放在已忽略的 `validation/local/`。提交前运行
   `scripts/verify_commit_scope.py --staged`；仓库 hook 与 hosted CI 共用该分类器。
 - 生产页面沿用编辑式玻璃 token、组件、焦点、减少动态、窄屏和文字缩放规则。轮询不得覆盖

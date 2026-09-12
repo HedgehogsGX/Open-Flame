@@ -189,3 +189,7 @@ $reportPath
 .\.venv\Scripts\python.exe scripts/verify_commit_scope.py --staged
 git diff --cached --check
 ```
+
+2026-09-13 维护者已按用户明确授权应用一次固定差分的测试维护；这不是外部测试者的通用例外。
+具体范围及后续 CI 见 [CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)，
+其他测试修改仍须单独获得对应授权。

@@ -53,3 +53,19 @@ NTFS 实际释放空间。详细清单和本轮探针保存在忽略目录 `vali
 继续依据新提交的完整 CI 日志处理剩余故障。Windows 专用 fixture、目录同步故障注入等
 候选维护必须保留安全断言，超出已批准差分时先准备具体可审查补丁。
 当前不宣称四格 CI 全绿，不宣称已形成最终 clean release receipt，也未合并 main。
+
+## 后续实际复验与短链接预算
+
+`3e482f0` 的 Windows / Python 3.13.14 最终也通过 `2442 passed, 16 skipped`，用时
+1277.48 秒。生产修复提交 `4b0cf3a8b38b236dcdb7fdee9781fec6cfffb6ae` 本地全量为
+`2442 passed, 16 skipped`，337.63 秒；其资产提交/Worker 补充回归 47 项通过。
+[该提交的 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34707909353)
+两组 Linux 均为 `21 failed, 2300 passed, 137 skipped`，源文件变化、上传备份锁与日志问题
+均已通过真实 Linux 执行。剩余错误集中在六个测试文件的平台假设与目录同步故障注入；
+候选修改只在 ignored 目录，Windows 相关 246 项通过，尚无该候选的真实 Linux 验收。
+
+另一个可独立复现的短链接边界：固定 monotonic 为 `144 / 97`，15 秒预算的浮点加减得到
+`15.000000000000002`，严格 resolver 因此拒绝请求，API 的 queued_count 为 0。
+调用前以配置预算做 min 上限后，同一探针得到 15 秒与 queued_count 1，现有 API/短链接
+69 项回归通过。旧 CI 中两项短链接失败没有记录实际 timeout，因此不能单凭同症状认定
+这就是它们的唯一原因。临时探针在 `validation/local/cleanup-20260913/`，未改 tracked 测试。

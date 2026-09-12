@@ -151,9 +151,9 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 | CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 直接调用公开 Worker builder/锁/logger；LocalApp/LocalWorker 的绝对路径解析及 Worker 结果输出共用既有 CLI support |
 
 本分支已修复下文第 9 节的前两条失败路径，并收敛两类 adapter 控制记录的 JSONL 解码。
-其他职责收敛和完整 CI 恢复仍在继续。Worker 内部接口变化的旧测试迁移草案只在 ignored 目录；
-当前测试禁改策略尚未得到用户例外授权，因此不能把局部检查通过写成 CI 完成。详见
-[Worker 边界记录](../validation/iteration-0.28.0-worker-entry-boundary.md)。
+其他职责收敛和完整 CI 恢复仍在继续。已批准的测试维护提交 `3e482f0` 恢复标准收集；
+`4b0cf3a` 本地完整回归通过，但 Linux 平台 fixture 仍有 21 项失败。原批准差分之外的
+候选仍保存在 ignored 目录，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
 
 ## 4. 数据所有权与存储布局
 
@@ -373,14 +373,14 @@ stateDiagram-v2
    备份锁与普通 reader 现共用公开 raw descriptor 交接；SQLite 每个连接取得后立即进入
    关闭范围，保留主异常并回收另一个连接，见[资源回收记录](../validation/iteration-0.28.0-backup-resource-handoff.md)。
    公共备份迁移删除 55 处跨域私有调用及 3 个浅结构，39 项故障反馈通过；旧 helper import
-   仍阻断标准测试收集，见[公共备份文件记录](../validation/iteration-0.28.0-public-backup-files.md)。
+   已由批准的维护修复，历史迁移证据见[公共备份文件记录](../validation/iteration-0.28.0-public-backup-files.md)。
    Editing render retry forest 现也由公开解析与发现式取消共用，Workflow 删除两个重复
    定义；33 组真实 SQLite 对照和取消专项合同通过，speech checkpoint 的更强缓存/授权
    合同保留。见[render 图所有权](../validation/iteration-0.28.0-editing-render-retry-ownership.md)。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
-   尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
-   receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake
-   receipt 合同漂移，不能把这些局部分类直接当成远端全部失败原因。发行清单已补齐受检的必读
+   尚未在该实根迁移/审计。`c07b0af` 已完成独立 source/wheel 安装，但对应 CI 未闭合；
+   后续修复必须与最终提交的制品、检查和包外 receipt 重新绑定。当前 Linux CI 的剩余失败
+   已取得实际日志并定位到平台 fixture，不能用 Windows 通过替代。发行清单已补齐受检的必读
    文档和相应链接；新发行在构建前执行文档完整性检查，通用 archive 校验保留制品自身合同，
    见[发行文档分责](../validation/iteration-0.28.0-release-documentation-boundary.md)。这不是新发行已构建的证据。
 
