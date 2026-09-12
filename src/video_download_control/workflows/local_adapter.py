@@ -18,6 +18,7 @@ from ..domain import ErrorCode
 from ..editing.contracts import EditingError, recipe_from_mapping
 from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
+from ..uploads.metadata import cover_slot
 from ..uploads.identity import (
     bind_current_upload_target,
     normalize_account_bindings,
@@ -456,7 +457,7 @@ class LocalWorkflowAdapter:
             platform = target.get("platform")
             if (
                 not isinstance(platform, str)
-                or self._cover_slot(platform, *dimensions) is None
+                or cover_slot(platform, *dimensions) is None
             ):
                 raise WorkflowError("workflow_cover_incompatible")
         return bindings
@@ -3817,7 +3818,7 @@ class LocalWorkflowAdapter:
             ):
                 raise WorkflowError("workflow_domain_data_invalid")
             for account_id in account_ids:
-                slot = LocalWorkflowAdapter._cover_slot(
+                slot = cover_slot(
                     platforms[account_id], width, height
                 )
                 if slot is None:
@@ -3839,23 +3840,6 @@ class LocalWorkflowAdapter:
             if account_id in by_account
         ]
 
-    @staticmethod
-    def _cover_slot(platform: str, width: int, height: int) -> str | None:
-        if platform == "bilibili":
-            return "cover_landscape_asset_id" if width >= height else None
-        if platform == "douyin":
-            return (
-                "cover_landscape_asset_id"
-                if width >= height
-                else "cover_portrait_asset_id"
-            )
-        if platform == "tencent":
-            ratio = width / height
-            if abs(ratio - 4 / 3) <= 0.04:
-                return "cover_landscape_asset_id"
-            if abs(ratio - 3 / 4) <= 0.04:
-                return "cover_portrait_asset_id"
-        return None
 
 
 __all__ = ["LocalWorkflowAdapter"]

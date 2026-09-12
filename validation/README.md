@@ -13,6 +13,9 @@ results belong outside Git or under ignored `validation/local/`.
 - Current architecture-reset supplements: [caption cleanup](iteration-0.28.0-caption-cleanup-errors.md)
   and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
+- Upload cover ownership: [shared format/platform rules and backup audit](iteration-0.28.0-upload-cover-ownership.md).
+  The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
+  the three added failures still patch the former service decoder location.
 - Development version: `0.28.0`; the current post-release source has no new
   clean release receipt.
 - The `0592b6f` receipt applies only to that frozen build.
@@ -40,10 +43,11 @@ results belong outside Git or under ignored `validation/local/`.
 - Explicit dubbing render retries can reuse individually verified cue WAV
   checkpoints from the same immutable retry lineage; see the scoped
   [validation record](iteration-0.28.0-speech-checkpoint-retry.md).
-- Hosted CI now reaches the full Windows/Linux and CPython 3.12/3.13 pytest
-  stage, but the matrix remains red because frozen historical tests conflict
-  with current HTTP security, Schema and version contracts. See the CI record;
-  do not infer a green build.
+- Hosted branch run `34680878428` at clean `36cfb56` reached offline pytest on
+  Windows/Linux and CPython 3.12/3.13; all four jobs failed. Local failures
+  include old internal interfaces, HTTP, Schema and fixture contracts, but
+  their causes are not a complete classification of hosted logs. This run
+  does not validate the later cover slice or imply a green build.
 - External testing starts with [`TESTING.md`](../TESTING.md). Use the
   [`Debug guide`](../docs/DEBUG_GUIDE.md) and return findings with the
   [`external tester handoff template`](../docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md).

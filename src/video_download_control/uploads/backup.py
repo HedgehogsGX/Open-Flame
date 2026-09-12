@@ -47,12 +47,11 @@ from .metadata import (
     DOUYIN_DECLARATIONS,
     TENCENT_CONTENT_LABELS,
     TITLE_LIMITS,
+    cover_slot_error,
+    cover_dimensions_error,
 )
 from .receipts import validate_upload_attempt_state
-from .service import (
-    MAX_COVER_BYTES,
-    _cover_metadata,
-)
+from .covers import COVER_MIME_TYPES, MAX_COVER_BYTES, cover_metadata
 
 UPLOAD_BACKUP_FORMAT_VERSION = 3
 _UPLOAD_BACKUP_FORMAT_V2 = 2
@@ -86,12 +85,6 @@ _WORKFLOW_UPLOAD_REQUEST = re.compile(
     r"^wf-[0-9a-f]{32}-upload-jobs(?:-[0-9]{3})?$"
 )
 _SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"})
-_COVER_MIME_TYPES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-}
 _EXCLUDED_PATHS = [
     ".open-flame-setup.lock",
     ".worker.lock",
@@ -884,9 +877,9 @@ def _validate_asset_row(row: sqlite3.Row) -> str:
         or any(character in original_name for character in "/\\:\x00")
         or original_name in {".", ".."}
         or not isinstance(suffix, str)
-        or suffix not in _COVER_MIME_TYPES
+        or suffix not in COVER_MIME_TYPES
         or Path(original_name).suffix.lower() != suffix
-        or mime_type != _COVER_MIME_TYPES[suffix]
+        or mime_type != COVER_MIME_TYPES[suffix]
         or isinstance(size, bool)
         or not isinstance(size, int)
         or not 0 < size <= MAX_COVER_BYTES
@@ -910,7 +903,7 @@ def _validate_asset_row(row: sqlite3.Row) -> str:
 def _verify_cover_asset_file(path: Path, row: sqlite3.Row) -> None:
     try:
         payload = _common._read_bounded_regular_file(path, MAX_COVER_BYTES + 1)
-        mime_type, width, height = _cover_metadata(payload, row["suffix"])
+        mime_type, width, height = cover_metadata(payload, row["suffix"])
     except (UploadError, OSError) as exc:
         raise UploadBackupError("upload cover asset content is invalid") from exc
     if (
@@ -1495,8 +1488,9 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
                 or row["copyright"] == 2
                 and not row["source_credit"]
             )
-            or platform not in {"douyin", "tencent"} and portrait_id is not None
-            or platform == "douyin" and landscape_id is not None and portrait_id is not None
+            or cover_slot_error(
+                platform, landscape=landscape_id is not None, portrait=portrait_id is not None
+            ) is not None
             or schema_version >= _schema._SCHEMA_V3_VERSION
             and platform == "bilibili"
             and row["copyright"] == 1
@@ -1529,27 +1523,14 @@ def _audit_database_rows(db: sqlite3.Connection, *, schema_version: int) -> None
             or platform == "tencent" and (publish_at + publish_offset * 60) % 3600
         ):
             raise UploadBackupError("upload job schedule metadata is invalid")
-        if platform == "tencent":
-            for asset_id, expected_ratio in (
-                (landscape_id, 4 / 3),
-                (portrait_id, 3 / 4),
-            ):
-                asset = asset_rows.get(asset_id)
-                if (
-                    asset is not None
-                    and abs(asset["width"] / asset["height"] - expected_ratio) > 0.04
-                ):
-                    raise UploadBackupError("upload job cover metadata is invalid")
-        if platform == "douyin":
-            landscape = asset_rows.get(landscape_id)
-            portrait = asset_rows.get(portrait_id)
-            if (
-                landscape is not None
-                and landscape["width"] < landscape["height"]
-                or portrait is not None
-                and portrait["height"] <= portrait["width"]
-            ):
-                raise UploadBackupError("upload job cover metadata is invalid")
+        landscape = asset_rows.get(landscape_id)
+        portrait = asset_rows.get(portrait_id)
+        if cover_dimensions_error(
+            platform,
+            landscape=(landscape["width"], landscape["height"]) if landscape is not None else None,
+            portrait=(portrait["width"], portrait["height"]) if portrait is not None else None,
+        ) is not None:
+            raise UploadBackupError("upload job cover metadata is invalid")
         if (
             row["state"] in {"draft", "queued", "running"}
             and source_states.get(row["source_id"]) != "present"
@@ -2141,7 +2122,7 @@ def _validate_manifest_entry_path(relative: str, *, format_version: int) -> None
             raise UploadBackupError("upload backup asset path is invalid")
         name = asset_relative.name
         suffix = PurePosixPath(name).suffix
-        if suffix not in _COVER_MIME_TYPES or _ID.fullmatch(name.removesuffix(suffix)) is None:
+        if suffix not in COVER_MIME_TYPES or _ID.fullmatch(name.removesuffix(suffix)) is None:
             raise UploadBackupError("upload backup asset path is invalid")
         return
     if len(media_relative.parts) != 1:

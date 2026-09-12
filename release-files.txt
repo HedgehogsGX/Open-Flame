@@ -184,6 +184,7 @@ src/video_download_control/uploads/bilibili_login.py
 src/video_download_control/uploads/bridge.py
 src/video_download_control/uploads/browser_login.py
 src/video_download_control/uploads/contracts.py
+src/video_download_control/uploads/covers.py
 src/video_download_control/uploads/identity.py
 src/video_download_control/uploads/login_progress.py
 src/video_download_control/uploads/metadata.py
@@ -321,4 +322,5 @@ validation/iteration-0.28.0-workflow-source-cover-preference.md
 validation/iteration-0.28.0-workflow-upload-form-functions.md
 validation/iteration-0.28.0-workflow-upload-retry.md
 validation/iteration-0.28.0-release-documentation-boundary.md
+validation/iteration-0.28.0-upload-cover-ownership.md
 validation/iteration-0.28.0-workflow-request-construction.md

@@ -315,6 +315,7 @@ stateDiagram-v2
 | Workflow profile / Upload metadata | [`workflows/profile.py`](../src/video_download_control/workflows/profile.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 公开纯数据合同已被生产路径复用 |
 | Upload slot / retry identity | [`uploads/identity.py`](../src/video_download_control/uploads/identity.py) | inspect、retry、cancel 与 backup 复用 |
 | Upload receipt 状态 | [`uploads/receipts.py`](../src/video_download_control/uploads/receipts.py) | 执行与备份共用纯状态合同，各自保留身份/事务/恢复处理 |
+| Upload 封面 | [`uploads/covers.py`](../src/video_download_control/uploads/covers.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 格式/解码与轻量平台规则分别归属 Upload；Workflow 不加载 Pillow，备份不依赖 service |
 | Download 素材读取 | [`download_assets.py`](../src/video_download_control/download_assets.py) | 登记文件、安全读取、snapshot 和跨域素材引用脱离 HTTP；API 保留响应与错误映射 |
 | Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类已集中，部分结果应用仍重复 |
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
@@ -341,10 +342,13 @@ stateDiagram-v2
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
-4. **规则 Locality 仍不够集中。** 当前优先候选是：封面平台规则；Editing AI retry
+4. **规则 Locality 仍不够集中。** 当前优先候选是：Editing AI retry
    forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。Download 素材读取、
    两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
    Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](../validation/iteration-0.28.0-workflow-request-construction.md)。
+   封面格式与平台规则也已集中，关闭了 Bilibili 竖图在备份中漏检的已复现分歧，见
+   [封面所有权记录](../validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
+   可以被预设保存成不定时的分歧已用生产 HTML 和实际 PresetStore 复现，尚待修复。
    备份的公共文件操作与入口文档仍需收敛。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
