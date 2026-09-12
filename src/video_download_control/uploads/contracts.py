@@ -158,6 +158,7 @@ class UploadRequest:
     account_id: str
     platform: str
     file_path: Path
+    source_sha256: str
     title: str
     description: str
     tags: tuple[str, ...]

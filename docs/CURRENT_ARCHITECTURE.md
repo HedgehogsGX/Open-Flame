@@ -343,9 +343,11 @@ stateDiagram-v2
    的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
    辅助素材的校验/构造/读取/发送失败也已接入同一保护，见[辅助清理记录](../validation/iteration-0.28.0-auxiliary-cleanup-errors.md)。
    字幕消费端的后续读取同样保留主异常，正常关闭自身失败仍传播，见[字幕清理记录](../validation/iteration-0.28.0-caption-cleanup-errors.md)。
-3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
-   adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
-   source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
+3. **本分支已补齐 Windows 上传 source 消费期间的持有。** Upload 校验 reader 持有至 backend
+   返回，普通并发写入/替换/删除被拒绝；Biliup 对真实硬链接/复制暂存再次持有并复核冻结摘要。
+   Backend 统一区分执行前失败与执行后结果，清理不再降级可信结果或 unknown。见
+   [源交接记录](../validation/iteration-0.28.0-upload-source-handoff.md)。这不是任意同机变更或真实
+   平台接受的证明；非 Windows 保留原匹配读取，receipt 不是平台签名证据。
 4. **规则 Locality 仍需持续检查。** 上传 retry 前后结果应用与取消封面分流后的公共尾段
    已收敛，见[重试与取消记录](../validation/iteration-0.28.0-workflow-retry-cancel-tails.md)。
    Editing AI retry forest 已统一归 Editing 校验，见

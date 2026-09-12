@@ -34,6 +34,7 @@ from ..managed_files import (
     hash_open_binary,
     lstat_plain,
     open_matching_binary,
+    open_windows_shared_read_binary,
     require_matching_fstat,
     snapshot_open_binary,
 )
@@ -796,6 +797,13 @@ class UploadService:
 
     def _verified_source_media_path(self, row) -> Path:
         """Return a source path only after checking its recorded bytes."""
+        with self._verified_source_media(row) as path:
+            return path
+
+    @contextmanager
+    def _verified_source_media(self, row, *, for_upload: bool = False):
+        """Own the verified reader until the caller finishes consuming its path."""
+
         if "media_state" in row.keys() and row["media_state"] != "present":
             raise UploadError("source_reimport_required")
         if row["suffix"] not in (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"):
@@ -807,24 +815,39 @@ class UploadService:
             if before.st_size != row["size"]:
                 raise UploadError("source_changed")
             expected = file_signature(before)
-            opened = open_matching_binary(path, expected=expected)
-            with opened.handle as handle:
-                hashed = hash_open_binary(handle, maximum=MAX_SOURCE_BYTES)
-                require_matching_fstat(handle, expected=expected)
-            after = _plain(path)
-            valid = (
-                hashed.size == before.st_size
-                and hashed.hexdigest == row["sha256"]
-                and file_signature(after) == expected
+            opener = (
+                open_windows_shared_read_binary
+                if for_upload and os.name == "nt" else open_matching_binary
             )
-            self._source_integrity_cache[row["id"]] = (file_signature(after), valid)
-            if not valid:
-                raise UploadError("source_changed")
-        except (ManagedFileChanged, ManagedFileSizeExceeded):
+            opened = opener(path, expected=expected)
+        except ManagedFileChanged:
             raise UploadError("source_changed") from None
         except OSError:
             raise UploadError("source_unavailable") from None
-        return path
+        handle = opened.handle
+        with close_binary_on_error(handle):
+            try:
+                hashed = hash_open_binary(handle, maximum=MAX_SOURCE_BYTES)
+                require_matching_fstat(handle, expected=expected)
+                after = _plain(path)
+                valid = (
+                    hashed.size == before.st_size
+                    and hashed.hexdigest == row["sha256"]
+                    and file_signature(after) == expected
+                )
+                self._source_integrity_cache[row["id"]] = (file_signature(after), valid)
+                if not valid:
+                    raise UploadError("source_changed")
+            except (ManagedFileChanged, ManagedFileSizeExceeded):
+                raise UploadError("source_changed") from None
+            except OSError:
+                raise UploadError("source_unavailable") from None
+            # Consumer errors keep their own meaning; they are not source errors.
+            yield path
+        try:
+            handle.close()
+        except OSError:
+            raise UploadError("source_unavailable") from None
 
     def _source_public(self, row) -> dict:
         state, _actual_size = self._source_media_state(row)
@@ -4097,53 +4120,61 @@ class UploadService:
                     row["publish_timezone_offset_minutes"],
                     now=int(time.time()),
                 )
-                path = self._source_path(row["source_id"])
+                source_id = _identifier(row["source_id"])
                 with self._db() as db:
-                    landscape, portrait = self._verified_job_cover_rows(
-                        db,
-                        row["platform"],
-                        row["cover_landscape_asset_id"],
-                        row["cover_portrait_asset_id"],
-                    )
-                landscape_path = None
-                if landscape is not None:
-                    _managed_path, payload = self._verified_asset_media(landscape)
-                    landscape_path = self._stage_cover_payload(
-                        row["id"], "landscape", landscape, payload
-                    )
-                    staged_paths.append(landscape_path)
-                portrait_path = None
-                if portrait is not None:
-                    _managed_path, payload = self._verified_asset_media(portrait)
-                    portrait_path = self._stage_cover_payload(
-                        row["id"], "portrait", portrait, payload
-                    )
-                    staged_paths.append(portrait_path)
-                if self._operation_stop.is_set():
-                    result = BackendResult("canceled", "canceled_before_upload")
-                else:
-                    options = row["platform_options"]
-                    request = UploadRequest(job_id=row["id"], account_id=row["account_id"], platform=row["platform"], file_path=path,
-                                            title=row["title"], description=row["description"], tags=tuple(row["tags"]),
-                                            category_id=row["category_id"], mode=row["mode"], copyright=row["copyright"], source_credit=row["source_credit"],
-                                            cover_landscape_path=landscape_path,
-                                            cover_portrait_path=portrait_path,
-                                            publish_at_unix=row["publish_at_unix"],
-                                            publish_timezone_offset_minutes=row["publish_timezone_offset_minutes"],
-                                            dynamic=options.get("dynamic", ""),
-                                            no_reprint=options.get("no_reprint", False),
-                                            close_comments=options.get("close_comments", False),
-                                            close_danmu=options.get("close_danmu", False),
-                                            declaration=options.get("declaration"),
-                                            short_title=options.get("short_title"),
-                                            content_label=options.get("content_label"))
-                    if not self._mark_upload_dispatch_may_have_started(row["id"]):
-                        result = BackendResult(
-                            "canceled", "canceled_before_upload"
+                    source = db.execute(
+                        "SELECT * FROM sources WHERE id=?", (source_id,)
+                    ).fetchone()
+                if source is None:
+                    raise UploadError("source_not_found")
+                with self._verified_source_media(source, for_upload=True) as path:
+                    with self._db() as db:
+                        landscape, portrait = self._verified_job_cover_rows(
+                            db,
+                            row["platform"],
+                            row["cover_landscape_asset_id"],
+                            row["cover_portrait_asset_id"],
                         )
+                    landscape_path = None
+                    if landscape is not None:
+                        _managed_path, payload = self._verified_asset_media(landscape)
+                        landscape_path = self._stage_cover_payload(
+                            row["id"], "landscape", landscape, payload
+                        )
+                        staged_paths.append(landscape_path)
+                    portrait_path = None
+                    if portrait is not None:
+                        _managed_path, payload = self._verified_asset_media(portrait)
+                        portrait_path = self._stage_cover_payload(
+                            row["id"], "portrait", portrait, payload
+                        )
+                        staged_paths.append(portrait_path)
+                    if self._operation_stop.is_set():
+                        result = BackendResult("canceled", "canceled_before_upload")
                     else:
-                        invoked = True
-                        result = self.backend.upload(request, self._operation_stop)
+                        options = row["platform_options"]
+                        request = UploadRequest(job_id=row["id"], account_id=row["account_id"], platform=row["platform"], file_path=path,
+                                                source_sha256=source["sha256"],
+                                                title=row["title"], description=row["description"], tags=tuple(row["tags"]),
+                                                category_id=row["category_id"], mode=row["mode"], copyright=row["copyright"], source_credit=row["source_credit"],
+                                                cover_landscape_path=landscape_path,
+                                                cover_portrait_path=portrait_path,
+                                                publish_at_unix=row["publish_at_unix"],
+                                                publish_timezone_offset_minutes=row["publish_timezone_offset_minutes"],
+                                                dynamic=options.get("dynamic", ""),
+                                                no_reprint=options.get("no_reprint", False),
+                                                close_comments=options.get("close_comments", False),
+                                                close_danmu=options.get("close_danmu", False),
+                                                declaration=options.get("declaration"),
+                                                short_title=options.get("short_title"),
+                                                content_label=options.get("content_label"))
+                        if not self._mark_upload_dispatch_may_have_started(row["id"]):
+                            result = BackendResult(
+                                "canceled", "canceled_before_upload"
+                            )
+                        else:
+                            invoked = True
+                            result = self.backend.upload(request, self._operation_stop)
         except UploadError as exc:
             result = BackendResult("unknown" if invoked else "failed", exc.code)
         except Exception:

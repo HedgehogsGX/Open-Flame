@@ -152,6 +152,46 @@ def open_matching_binary(
     return OpenedManagedFile(handle=handle, info=info)
 
 
+def open_windows_shared_read_binary(
+    path: Path, *, expected: FileSignature
+) -> OpenedManagedFile:
+    """Hold a matching Windows file open while denying other write/delete opens."""
+
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
+    # FILE_FLAG_OPEN_REPARSE_POINT | FILE_ATTRIBUTE_NORMAL.
+    raw = create(str(path), 0x80000000, 0x1, None, 3, 0x00200080, None)
+    if raw == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(
+            raw, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT
+        )
+    except BaseException:
+        try:
+            close(raw)
+        except BaseException:
+            pass
+        raise
+    handle = fdopen_owned_binary(descriptor, "rb")
+    with close_binary_on_error(handle):
+        info = require_matching_fstat(handle, expected=expected)
+        return OpenedManagedFile(handle=handle, info=info)
+
+
 def _consume_open_binary(
     handle: BinaryIO,
     *,

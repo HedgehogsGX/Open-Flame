@@ -29,7 +29,9 @@ Editing 成品元数据校验已前移，复制后立即登记清理责任，见
 [公共备份文件记录](validation/iteration-0.28.0-public-backup-files.md)。render 重试树现也由
 Editing 公开解析，Workflow 删除两个重复定义；一致读、取消写事务、后继与 unknown
 保护见[render 图所有权记录](validation/iteration-0.28.0-editing-render-retry-ownership.md)。
-下一步补齐上传源文件交接，再完成跨页规则、CLI、当前文档和完整 CI 维护。
+Windows 上传源 reader 现持有至 backend 消费结束，Biliup 硬链接/复制暂存均核对冻结摘要；
+执行后清理保留可信结果或 unknown，见[源文件交接](validation/iteration-0.28.0-upload-source-handoff.md)。
+下一步完成跨页纯规则、CLI、当前文档和完整 CI 维护。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -180,15 +182,14 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
    2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **完整 CI 尚未恢复。** 公共备份文件迁移后，标准 pytest 被旧私有 helper import
-   阻断：1 collection error。仅供诊断的继续收集运行得到 2170 passed、250 failed、
-   16 skipped、1 error；render 收敛后的本轮复验与前轮失败 ID 相同。22 个 Download
-   backup 用例没有收集。前轮只迁移 import/patch 目标的 ignored 副本为 151 passed、
-   7 个旧 Schema 假设失败，不能替代 tracked tests。当前 `35b3924` hosted run
-   `34691113623` 四格均在 offline pytest 失败；它不含之后的 render 收敛。
-   用户尚未批准测试维护例外；完整失败仍须逐类关闭，不能删除断言、排除测试或放宽
-   生产合同来声称绿色。精确范围见[render 复验](validation/iteration-0.28.0-editing-render-retry-ownership.md)
-   与[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
+4. **完整 CI 尚未恢复。** 标准 pytest 仍被备份旧私有 helper import 阻断：1 collection error，
+   22 个 Download backup 用例未收集。源交接修复前的完整诊断为 2144 passed、276 failed、
+   16 skipped、1 error；新增 26 个 failure IDs 来自 SHA 请求 fixture/payload 未同步。
+   当前修复后的聚焦结果与 ignored fixture 副本见[源交接验证](validation/iteration-0.28.0-upload-source-handoff.md)，
+   不能替代完整标准测试。其余失败仍须逐类判定，不能全部视为旧测试。
+   abcbc40 hosted run 34692830186 四格均在 offline pytest 失败，不含本轮上传源交接切片。
+   用户尚未批准测试维护例外；不能删除断言、排除测试或放宽生产合同来声称绿色。
+   备份迁移验证入口见[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
