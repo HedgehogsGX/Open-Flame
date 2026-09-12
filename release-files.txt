@@ -293,3 +293,5 @@ src/video_download_control/worker_cli_support.py
 validation/iteration-0.28.0-worker-entry-boundary.md
 validation/iteration-0.28.0-upload-receipt-contract.md
 validation/iteration-0.28.0-auxiliary-cleanup-errors.md
+src/video_download_control/download_assets.py
+validation/iteration-0.28.0-download-asset-reader.md

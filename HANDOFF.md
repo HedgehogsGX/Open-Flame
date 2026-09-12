@@ -10,8 +10,9 @@
 
 当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
 重整架构并解决完整 CI；**尚未完成，未合并 main**。起点为远端 main `d481326`。已分别
-签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码和 Worker/CLI 分责。
-后续仍须完成领域规则与 HTTP 素材边界收敛、完整测试维护及四格 hosted CI 验证。
+签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
+Upload receipt 纯合同和 Download 素材读取分责。后续仍须完成封面/AI 重试图/Workflow
+重复规则收敛、完整测试维护及四格 hosted CI 验证。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -133,7 +134,7 @@
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
 | 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
 | 当前系统结构 | [当前架构](docs/CURRENT_ARCHITECTURE.md)、[继续开发提示词](docs/HANDOFF_PROMPT.md) |
-| 本轮架构重置 | [Worker/CLI 分责](validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](validation/iteration-0.28.0-media-cleanup-errors.md)、[adapter 解码](validation/iteration-0.28.0-adapter-control-decoding.md) |
+| 本轮架构重置 | [Worker/CLI 分责](validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](validation/iteration-0.28.0-media-cleanup-errors.md)、[辅助素材清理](validation/iteration-0.28.0-auxiliary-cleanup-errors.md)、[adapter 解码](validation/iteration-0.28.0-adapter-control-decoding.md)、[回执状态合同](validation/iteration-0.28.0-upload-receipt-contract.md)、[Download 素材读取](validation/iteration-0.28.0-download-asset-reader.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
@@ -158,7 +159,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    CPython 3.13.14 完整基线为 **229 failed、2213 passed、16 skipped，447.85 秒**，包括
    HTTP、旧 Schema/回执、版本及 UI fixture 漂移。Worker 分责后的旧 local CLI 文件还有
    13 个内部接口迁移失败；只改变引用位置的 ignored 草案为 24 passed。用户尚未批准 tracked
-   tests 维护例外，当前不能删除断言、排除测试或放宽生产安全合同来声称绿色。
+   tests 维护例外，当前不能删除断言、排除测试或放宽生产安全合同来声称绿色。Download 读取
+   分责后另有两项响应用例仍指向旧 `api.tempfile`；只迁移定位的 ignored 副本六项通过，
+   不能替代 tracked suite。最新远端和本地结果须按精确 HEAD 分开核对。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -178,8 +181,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，先处理 Download 素材读取与 HTTP 组装的职责分离，再收敛领域重复
-   规则。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标不能缩成局部通过或文档审查。
+1. 继续当前架构重置目标，收敛封面、Editing AI 重试图和 Workflow 重复规则，并处理发行
+   文档链接与公共备份基础边界。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标
+   不能缩成局部通过或文档审查。
    临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用

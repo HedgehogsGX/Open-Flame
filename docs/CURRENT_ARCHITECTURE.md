@@ -143,7 +143,7 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 | 职责 | 主要模块与依赖方向 |
 | --- | --- |
 | API / Web | `api.py`、各域 `api.py/web.py`、`schemas.py`：HTTP/DTO、展示和 composition；不作为可复用 Worker 的实现入口 |
-| 领域 / 数据 | `domain.py`、`database.py`、`repository.py`、`worker_repository.py` 和各域 service/schema：实体、事务与领域状态机 |
+| 领域 / 数据 | `domain.py`、`database.py`、`repository.py`、`worker_repository.py` 和各域 service/schema：实体、事务与领域状态机；`download_assets.py` 拥有 Download 登记素材读取 |
 | Worker / 调度 | `worker.py`、`worker_pool.py`、`graph.py`、`retry_policy.py`；新增 `local_worker.py`、`candidate_worker.py` 拥有配置、preflight 和组装 |
 | 适配器 | `adapters/base.py` 定义共享 Protocol 与请求/结果；fake 和真实适配器实现它；`yt_dlp_contract.py` 是生产命令/配置合同，并非测试基类 |
 | 工具链 / 校验 | `toolchain.py`、`verifiers/ffprobe.py`、capabilities/evidence：版本、产物与能力证据；本地 ready 不自动升级真实平台验收 |
@@ -314,6 +314,8 @@ stateDiagram-v2
 | HTTP 防护 | [`local_http_guard.py`](../src/video_download_control/local_http_guard.py) | 四域共享算法，各域声明策略 |
 | Workflow profile / Upload metadata | [`workflows/profile.py`](../src/video_download_control/workflows/profile.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 公开纯数据合同已被生产路径复用 |
 | Upload slot / retry identity | [`uploads/identity.py`](../src/video_download_control/uploads/identity.py) | inspect、retry、cancel 与 backup 复用 |
+| Upload receipt 状态 | [`uploads/receipts.py`](../src/video_download_control/uploads/receipts.py) | 执行与备份共用纯状态合同，各自保留身份/事务/恢复处理 |
+| Download 素材读取 | [`download_assets.py`](../src/video_download_control/download_assets.py) | 登记文件、安全读取、snapshot 和跨域素材引用脱离 HTTP；API 保留响应与错误映射 |
 | Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类已集中，部分结果应用仍重复 |
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
@@ -334,15 +336,19 @@ stateDiagram-v2
    Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径此前直接调用 `handle.close()`；
    close 的 `OSError` 曾覆盖更有意义的 `asset_changed` 或 manifest 错误。现在共用基础受管文件
    的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
+   辅助素材的校验/构造/读取/发送失败也已接入同一保护，见[辅助清理记录](../validation/iteration-0.28.0-auxiliary-cleanup-errors.md)。
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
 4. **规则 Locality 仍不够集中。** 当前优先候选是：封面/稳定 request 字段投影；Editing AI retry
-   forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。较低优先级是把辅助
-   素材读取归回 Download、只共享两类 JSONL control record 的传输解码，以及继续缩短入口文档。
+   forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。Download 素材读取、
+   两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
+   备份的公共文件操作与入口文档仍需收敛。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
-   receipt。Hosted CI 已真实执行，但完整 pytest 仍因冻结历史合同漂移而红色。
+   receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake
+   receipt 合同漂移，不能把这些局部分类直接当成远端全部失败原因。发行清单还需覆盖必读文档
+   及相应链接，当前 Git 文档存在不等于已随源码包交付。
 
 推荐顺序：本分支已完成第 1、2 项小修，继续处理已确定的职责和规则重复；收到外部测试反馈时优先
 复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有
