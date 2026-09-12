@@ -126,7 +126,7 @@ def test_pages_share_local_shell_navigation_and_theme_controls(
         for attrs in parser.matching("a")
         if "nav-link" in _classes(attrs)
     ]
-    assert {attrs.get("href") for attrs in nav_links} == {"/", "/edits", "/uploads"}
+    assert {attrs.get("href") for attrs in nav_links} == {"/", "/edits", "/uploads", "/workflows"}
     current = [attrs for attrs in nav_links if attrs.get("aria-current") == "page"]
     assert len(current) == 1
     assert current[0].get("href") == active_path

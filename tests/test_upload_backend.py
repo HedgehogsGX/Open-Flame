@@ -48,6 +48,7 @@ def request(tmp_path: Path, **overrides) -> UploadRequest:
     media = tmp_path / "video.mp4"
     media.write_bytes(b"local-test-media")
     data = dict(job_id="job1", account_id="account1", platform="douyin", file_path=media,
+                source_sha256=hashlib.sha256(media.read_bytes()).hexdigest(),
                 title="Test", description="Description", tags=("tag",))
     data.update(overrides)
     return UploadRequest(**data)
@@ -214,7 +215,7 @@ def test_bilibili_staging_cleans_only_its_operation_checkpoint(tmp_path, monkeyp
     unrelated = checkpoint_root / "unrelated.json"
     unrelated.write_text("untouched")
     monkeypatch.setattr(module, "_windows_local_data", lambda: checkpoint_root)
-    with module._biliup_media(operation, {"file_path": str(source)}) as staged:
+    with module._biliup_media(operation, {"file_path": str(source), "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}) as staged:
         media = Path(staged["file_path"])
         assert media.parent == operation
         assert media.read_bytes() == b"test"
@@ -1537,7 +1538,7 @@ def test_confirmed_result_is_bounded_and_no_raw_output_is_exposed(tmp_path, monk
     dummy_bridge(tmp_path, backend, monkeypatch,
         "print('SECRET-COOKIE-value',flush=True)\n"
         "print('SECRET-access-token',file=sys.stderr,flush=True)\n"
-        "(operation/'result.json').write_text(json.dumps({'status':'submitted','code':'upstream_submitted'}))\n")
+        "(operation/'result.json').write_text(json.dumps({'status':'submitted','code':'upstream_submitted','evidence_kind':'uploader_returned_after_final_action'}))\n")
     result = backend.upload(request(tmp_path), threading.Event())
     assert (result.status, result.code) == ("submitted", "upstream_submitted")
     assert "SECRET" not in capsys.readouterr().out

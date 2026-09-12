@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +47,7 @@ def test_api_lifecycle_records_exactly_one_start_and_stop(tmp_path: Path) -> Non
     logger = _logger(tmp_path)
     app = create_app(_settings(tmp_path), runtime_logger=logger)
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         assert client.get("/health").status_code == 200
 
     events = logger.recent_events(limit=500)
@@ -96,7 +98,7 @@ def test_startup_toolchain_inspection_is_cached_and_safely_logged(
     )
     app = create_app(settings, runtime_logger=logger)
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         first = client.get(
             "/api/v1/operations/tools",
             params={"source": f"https://secret.example.invalid/{query_marker}"},
@@ -149,7 +151,7 @@ def test_api_generates_its_own_request_id_and_logs_the_route_template(
 ) -> None:
     inbound_sentinel = "SENTINEL-INBOUND-REQUEST-ID-MUST-NOT-LEAK"
     logger = _logger(tmp_path)
-    with TestClient(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
+    with download_client(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
         response = client.get(
             "/api/v1/batches/missing-batch-marker",
             headers={"X-Request-ID": inbound_sentinel},
@@ -178,7 +180,7 @@ def test_explicit_retry_logs_only_template_and_bounded_control_fields(
     diagnostic_marker = "SENTINEL-PRIVATE-RETRY-DIAGNOSTIC"
     logger = _logger(tmp_path, run_id="api-retry-run")
     app = create_app(_settings(tmp_path), runtime_logger=logger)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": [f"https://youtu.be/{url_marker}"]},
@@ -233,7 +235,7 @@ def test_explicit_retry_omits_invalid_legacy_error_code_from_log(
 ) -> None:
     logger = _logger(tmp_path, run_id="api-retry-legacy-run")
     app = create_app(_settings(tmp_path), runtime_logger=logger)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/retry-legacy-error"]},
@@ -276,7 +278,7 @@ def test_api_logs_404_and_422_without_paths_or_request_bodies(
     path_sentinel = "SENTINEL-UNMATCHED-PATH"
     body_sentinel = "SENTINEL-BODY-NAME"
     logger = _logger(tmp_path)
-    with TestClient(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
+    with download_client(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
         missing = client.get(f"/{path_sentinel}")
         invalid = client.post(
             "/api/v1/batches",
@@ -322,7 +324,7 @@ def test_log_endpoint_does_not_expose_query_body_names_urls_or_log_paths(
     )
     app = create_app(settings, runtime_logger=logger)
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             f"/api/v1/batches?diagnostic_name={quote(query_sentinel)}",
             json={
@@ -377,7 +379,7 @@ def test_log_endpoint_is_bounded_and_reports_logging_failure_without_path_leak(
         run_id="api-log-failure-run",
     )
 
-    with TestClient(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
+    with download_client(create_app(_settings(tmp_path), runtime_logger=logger)) as client:
         response = client.get("/api/v1/operations/logs?limit=500")
         too_small = client.get("/api/v1/operations/logs?limit=0")
         too_large = client.get("/api/v1/operations/logs?limit=501")
@@ -401,7 +403,7 @@ def test_concurrent_api_requests_receive_unique_correlated_request_ids(
     logger = _logger(tmp_path, run_id="api-concurrent-run")
     app = create_app(_settings(tmp_path), runtime_logger=logger)
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
 
         def fetch(_: int) -> tuple[int, str]:
             response = client.get("/health")

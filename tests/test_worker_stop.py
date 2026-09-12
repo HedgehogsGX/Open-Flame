@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import video_download_control.local_worker_cli as local_worker_module
+import video_download_control.local_worker as local_worker_module
 from video_download_control.adapters import ScriptedFakeAdapter
 from video_download_control.assets import (
     AssetStore,

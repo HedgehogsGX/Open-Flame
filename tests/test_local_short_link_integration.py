@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import asyncio
 import os
 import ssl
@@ -153,7 +155,7 @@ def test_local_app_short_links_queue_and_reach_offline_ready(
     settings = config.control_settings()
     app = create_app(settings)
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         response = submit(client, entrypoint)
         assert response.status_code == 201
         payload = response.json()
@@ -209,7 +211,7 @@ def test_local_app_without_direct_network_does_not_resolve_short_links(
     config = LocalAppConfig(app_root=tmp_path.resolve(), allow_direct_network=False)
     settings = config.control_settings()
 
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         response = submit(client, "json")
 
     assert response.status_code == 201
@@ -231,7 +233,7 @@ def test_short_link_import_keeps_health_and_job_cancel_responsive(
     config = LocalAppConfig(app_root=tmp_path.resolve(), allow_direct_network=True)
     app = create_app(config.control_settings())
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         queued = submit(
             client, "json", links=("https://www.youtube.com/watch?v=cancel-during-import",),
         )

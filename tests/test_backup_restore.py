@@ -24,12 +24,14 @@ from video_download_control.backup import (
     BACKUP_MANIFEST_NAME,
     BACKUP_METADATA_NAME,
     BackupRestoreError,
-    _paths_overlap,
-    _require_existing_directory,
-    _require_existing_regular_file,
-    _require_new_target,
     create_backup,
     restore_backup,
+)
+from video_download_control.backup_files import (
+    paths_overlap as _paths_overlap,
+    require_existing_directory as _require_existing_directory,
+    require_existing_regular_file as _require_existing_regular_file,
+    require_new_target as _require_new_target,
 )
 from video_download_control.build_identity import current_product_identity
 from video_download_control.backup_cli import main as backup_cli_main

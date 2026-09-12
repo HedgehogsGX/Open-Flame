@@ -93,15 +93,15 @@ def _create_v2(path: Path) -> None:
         _insert_v1_rows(db)
 
 
-def test_schema3_fresh_database_has_exact_assets_jobs_requests_and_indexes(tmp_path):
+def test_schema4_fresh_database_has_exact_assets_jobs_requests_and_indexes(tmp_path):
     path = tmp_path / "uploads.sqlite3"
 
     ensure_upload_schema(path)
     validate_upload_schema(path)
 
     with sqlite3.connect(path) as db:
-        assert SCHEMA_VERSION == 3
-        assert db.execute("SELECT version FROM metadata").fetchone() == (3,)
+        assert SCHEMA_VERSION == 4
+        assert db.execute("SELECT version FROM metadata").fetchone() == (4,)
         assert {
             row[0]
             for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")
@@ -112,7 +112,7 @@ def test_schema3_fresh_database_has_exact_assets_jobs_requests_and_indexes(tmp_p
             "upload_assets",
             "jobs",
             "operations",
-            "requests",
+            "requests", "upload_attempts",
         }
         assert [row[1] for row in db.execute("PRAGMA table_xinfo(upload_assets)")] == [
             "id",
@@ -149,7 +149,7 @@ def test_schema3_fresh_database_has_exact_assets_jobs_requests_and_indexes(tmp_p
             "jobs_source_state",
             "operations_account_state",
             "jobs_cover_landscape_state",
-            "jobs_cover_portrait_state",
+            "jobs_cover_portrait_state", "upload_attempts_request_state",
         }
 
 
@@ -158,7 +158,7 @@ def test_v1_to_v2_step_keeps_its_frozen_version_marker():
 
 
 @pytest.mark.parametrize("starting_version", [1, 2])
-def test_exact_old_schema_migrates_to_schema3_with_safe_defaults(tmp_path, starting_version):
+def test_exact_old_schema_migrates_to_schema4_with_safe_defaults(tmp_path, starting_version):
     path = tmp_path / "uploads.sqlite3"
     (_create_v1 if starting_version == 1 else _create_v2)(path)
 
@@ -166,7 +166,7 @@ def test_exact_old_schema_migrates_to_schema3_with_safe_defaults(tmp_path, start
     validate_upload_schema(path)
 
     with sqlite3.connect(path) as db:
-        assert db.execute("SELECT version FROM metadata").fetchone() == (3,)
+        assert db.execute("SELECT version FROM metadata").fetchone() == (4,)
         assert db.execute("SELECT COUNT(*) FROM upload_assets").fetchone() == (0,)
         assert db.execute(
             "SELECT cover_landscape_asset_id,cover_portrait_asset_id,publish_at_unix,"

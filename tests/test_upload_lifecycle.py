@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from upload_contract_fixtures import (
+    synthetic_receipt_identity, synthetic_upload_result,
+    fail_confirmed_upload, reconcile_synthetic_not_accepted,
+)
+
 import sqlite3
 import threading
 import time
@@ -14,6 +19,8 @@ from video_download_control.uploads.service import UploadService
 
 
 class LifecycleBackend:
+    receipt_identity = staticmethod(synthetic_receipt_identity)
+
     def __init__(self) -> None:
         self.login_entered = threading.Event()
         self.login_release = threading.Event()
@@ -216,7 +223,7 @@ def test_media_delete_is_guarded_and_missing_source_must_be_reimported(tmp_path)
     with pytest.raises(UploadError, match="source_in_use"):
         service.delete_source_media(source["id"])
 
-    service.cancel(job["id"])
+    fail_confirmed_upload(service, job["id"])
     deleted = service.delete_source_media(source["id"])
     assert deleted["media_present"] is False
     assert deleted["media_state"] == "deleted"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,7 +23,7 @@ def test_metrics_are_aggregate_only_and_include_disk_and_queue(tmp_path: Path) -
             database_path=data_root / "control.sqlite3",
         )
     )
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={
@@ -50,7 +52,7 @@ def test_metrics_are_aggregate_only_and_include_disk_and_queue(tmp_path: Path) -
 
 def test_empty_metrics_have_null_percentiles(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
-    with TestClient(
+    with download_client(
         create_app(
             Settings(
                 data_root=data_root,
@@ -76,7 +78,7 @@ def test_graph_metrics_count_discover_as_work_but_only_children_as_outcomes(
             x_graph_v2_enabled=True,
         )
     )
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://x.com/example/status/950001"]},

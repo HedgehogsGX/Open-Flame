@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -75,7 +77,7 @@ def test_signed_final_location_never_crosses_api_database_or_backup_boundary(
         short_link_resolver=_ResolverReturningSignedLocation(),
     )
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": [USER_SUBMITTED_SHORT_URL]},

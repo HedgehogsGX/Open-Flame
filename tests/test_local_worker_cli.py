@@ -25,6 +25,7 @@ from video_download_control.local_worker_cli import (
     main,
 )
 import video_download_control.local_worker_cli as local_worker_module
+import video_download_control.local_worker as worker_assembly
 from video_download_control.runtime_logging import read_recent_runtime_events
 from video_download_control.subprocess_runner import CommandResult
 
@@ -77,7 +78,7 @@ def test_local_direct_guard_rejects_non_windows_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(FEATURE_GATE, "1")
-    monkeypatch.setattr(local_worker_module.sys, "platform", "linux")
+    monkeypatch.setattr(worker_assembly.sys, "platform", "linux")
 
     with pytest.raises(RuntimeError, match="Windows"):
         LocalDirectNetworkGuard(acknowledged=True).assert_ready(
@@ -97,7 +98,7 @@ def test_imported_builder_rechecks_gate_before_paths_or_tools(
         tool_called = True
         raise AssertionError("tool verification must not run while disabled")
 
-    monkeypatch.setattr(local_worker_module, "verify_toolchain", unexpected_tool_call)
+    monkeypatch.setattr(worker_assembly, "verify_toolchain", unexpected_tool_call)
     config = LocalWorkerConfig(
         data_root=(tmp_path / "missing-data").resolve(),
         database_path=(tmp_path / "missing-data" / "control.sqlite3").resolve(),
@@ -116,7 +117,7 @@ def test_imported_builder_rechecks_gate_before_paths_or_tools(
 def test_config_defaults_database_below_explicit_data_root(tmp_path: Path) -> None:
     arguments = build_parser().parse_args(cli_arguments(tmp_path))
 
-    config = LocalWorkerConfig.from_args(arguments)
+    config = local_worker_module.config_from_args(arguments)
 
     assert config.data_root == (tmp_path / "data").resolve()
     assert config.database_path == config.data_root / "control.sqlite3"
@@ -142,7 +143,7 @@ def test_config_accepts_repeatable_platform_cookie_sources_and_check_mode(
         ]
     )
 
-    config = LocalWorkerConfig.from_args(arguments)
+    config = local_worker_module.config_from_args(arguments)
 
     assert arguments.check is True
     assert config.max_cookie_bytes == 4096
@@ -181,7 +182,7 @@ def test_config_loads_cookie_sources_from_one_read_only_json_file(
         cli_arguments(tmp_path) + ["--cookie-config", str(config_path), "--check"]
     )
 
-    config = LocalWorkerConfig.from_args(arguments)
+    config = local_worker_module.config_from_args(arguments)
 
     assert config.cookie_config_path == config_path
     assert len(config.cookie_sources) == 1
@@ -247,7 +248,7 @@ def test_config_rejects_duplicate_cookie_platforms(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="cookie source configuration"):
-        LocalWorkerConfig.from_args(arguments)
+        local_worker_module.config_from_args(arguments)
 
 
 def test_config_rejects_cookie_source_inside_data_or_tool_root(tmp_path: Path) -> None:
@@ -327,9 +328,9 @@ def test_build_local_worker_uses_shared_database_and_explicit_direct_route(
         def validate_runtime(self) -> None:
             return None
 
-    monkeypatch.setattr(local_worker_module, "verify_toolchain", lambda *_a, **_k: Verified())
-    monkeypatch.setattr(local_worker_module, "load_toolchain_lock", lambda: Lock())
-    monkeypatch.setattr(local_worker_module, "FfprobeVerifier", Verifier)
+    monkeypatch.setattr(worker_assembly, "verify_toolchain", lambda *_a, **_k: Verified())
+    monkeypatch.setattr(worker_assembly, "load_toolchain_lock", lambda: Lock())
+    monkeypatch.setattr(worker_assembly, "FfprobeVerifier", Verifier)
     config = LocalWorkerConfig(
         data_root=data_root,
         database_path=database_path,
@@ -343,7 +344,7 @@ def test_build_local_worker_uses_shared_database_and_explicit_direct_route(
     )
 
     try:
-        runtime_logger = local_worker_module._runtime_logger(config)
+        runtime_logger = local_worker_module.local_worker_logger(config)
         worker = build_local_worker(  # type: ignore[arg-type]
             config,
             runner=Runner(),
@@ -475,12 +476,11 @@ def test_local_worker_cookie_profile_reaches_yt_dlp_attempt_copy_and_ready_asset
             return CommandResult(0, b"", b"", 0.01)
 
     monkeypatch.setattr(
-        local_worker_module,
-        "verify_toolchain",
+        worker_assembly, "verify_toolchain",
         lambda *_args, **_kwargs: Verified(),
     )
-    monkeypatch.setattr(local_worker_module, "load_toolchain_lock", lambda: Lock())
-    monkeypatch.setattr(local_worker_module, "FfprobeVerifier", Verifier)
+    monkeypatch.setattr(worker_assembly, "load_toolchain_lock", lambda: Lock())
+    monkeypatch.setattr(worker_assembly, "FfprobeVerifier", Verifier)
     config = LocalWorkerConfig(
         data_root=settings.data_root.resolve(),
         database_path=settings.database_path.resolve(),
@@ -495,7 +495,7 @@ def test_local_worker_cookie_profile_reaches_yt_dlp_attempt_copy_and_ready_asset
     )
 
     try:
-        runtime_logger = local_worker_module._runtime_logger(config)
+        runtime_logger = local_worker_module.local_worker_logger(config)
         worker = build_local_worker(
             config,
             runner=CookieAwareRunner(),  # type: ignore[arg-type]
@@ -676,12 +676,11 @@ def test_main_check_real_builder_preserves_queue_and_attempt_state(
             }
 
     monkeypatch.setattr(
-        local_worker_module,
-        "verify_toolchain",
+        worker_assembly, "verify_toolchain",
         lambda *_args, **_kwargs: Verified(),
     )
-    monkeypatch.setattr(local_worker_module, "load_toolchain_lock", lambda: Lock())
-    monkeypatch.setattr(local_worker_module, "FfprobeVerifier", Verifier)
+    monkeypatch.setattr(worker_assembly, "load_toolchain_lock", lambda: Lock())
+    monkeypatch.setattr(worker_assembly, "FfprobeVerifier", Verifier)
     before_database = database_snapshot()
     before_cookie = cookie_source.stat()
 
@@ -763,14 +762,14 @@ def test_singleton_lock_rejects_second_process_scope_and_allows_stale_reuse(
     data_root = (tmp_path / "data").resolve()
     data_root.mkdir()
 
-    with local_worker_module._exclusive_local_worker(data_root):
+    with local_worker_module.exclusive_local_worker(data_root):
         with pytest.raises(RuntimeError, match="already using"):
-            with local_worker_module._exclusive_local_worker(data_root):
+            with local_worker_module.exclusive_local_worker(data_root):
                 raise AssertionError("a second lock must never be acquired")
 
     lock_path = data_root / "logs" / ".local-worker.lock"
     assert lock_path.is_file()
-    with local_worker_module._exclusive_local_worker(data_root):
+    with local_worker_module.exclusive_local_worker(data_root):
         pass
 
 
@@ -789,7 +788,7 @@ def test_control_database_hardlink_is_rejected(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="plain file"):
-        local_worker_module._validate_control_paths(config)
+        local_worker_module.validate_local_worker_paths(config)
 
 
 def test_unavailable_initial_log_prevents_builder_and_queue_claim(
@@ -810,7 +809,7 @@ def test_unavailable_initial_log_prevents_builder_and_queue_claim(
         builder_called = True
         raise AssertionError("builder must not run without the initial log")
 
-    monkeypatch.setattr(local_worker_module, "_runtime_logger", lambda _config: UnavailableLogger())
+    monkeypatch.setattr(local_worker_module, "local_worker_logger", lambda _config: UnavailableLogger())
     monkeypatch.setattr(local_worker_module, "build_local_worker", unexpected_build)
 
     with pytest.raises(SystemExit, match="log is unavailable.*no job was claimed"):
@@ -867,7 +866,7 @@ def test_builder_revalidates_js_runtime_before_tool_inspection(
         tool_called = True
         raise AssertionError("tool inspection must not run after runtime replacement")
 
-    monkeypatch.setattr(local_worker_module, "load_toolchain_lock", unexpected_tool_call)
+    monkeypatch.setattr(worker_assembly, "load_toolchain_lock", unexpected_tool_call)
     config = LocalWorkerConfig(
         data_root=data_root,
         database_path=database_path,
@@ -880,7 +879,7 @@ def test_builder_revalidates_js_runtime_before_tool_inspection(
     with pytest.raises(RuntimeError, match="JavaScript runtime is unavailable"):
         build_local_worker(
             config,
-            runtime_logger=local_worker_module._runtime_logger(config),
+            runtime_logger=local_worker_module.local_worker_logger(config),
         )
 
     assert tool_called is False

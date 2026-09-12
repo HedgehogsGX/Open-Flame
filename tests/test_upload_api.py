@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from upload_contract_fixtures import (
+    synthetic_receipt_identity, synthetic_upload_result,
+    fail_confirmed_upload, reconcile_synthetic_not_accepted,
+)
+
 import hashlib
 import json
 import sqlite3
@@ -19,6 +24,8 @@ from video_download_control.uploads.service import UploadService, default_upload
 
 
 class FakeBackend:
+    receipt_identity = staticmethod(synthetic_receipt_identity)
+
     def __init__(self):
         self.calls = []
         self.outcome = "submitted"
@@ -36,7 +43,7 @@ class FakeBackend:
     def upload(self, request, stop):
         self.calls.append(("upload", request))
         state = "draft_saved" if request.mode == "draft" else self.outcome
-        return BackendResult(state, "synthetic_result")
+        return synthetic_upload_result(request, state)
 
 
 @pytest.fixture
@@ -212,14 +219,24 @@ def test_mixed_publish_and_platform_draft_are_created_atomically(upload_client):
     assert not any(call[0] == "upload" for call in backend.calls)
 
 
-def test_unknown_requires_acknowledgement_and_creates_new_unconfirmed_draft(upload_client):
+def test_unknown_requires_exact_receipt_reconciliation_before_new_draft(upload_client):
     client, _, backend = upload_client
     backend.outcome = "unknown"
     job, _ = _draft(client, _account(client, "douyin"), _source(client))
     client.post(f"/api/v1/uploads/jobs/{job['id']}/confirm")
     _wait(client, "/api/v1/uploads/jobs", lambda rows: rows[0]["state"] == "unknown")
     assert client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={}).status_code == 409
-    retry = client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={"acknowledge_unknown": True})
+    legacy = client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={"acknowledge_unknown": True})
+    assert legacy.status_code == 422
+    attempt_response = client.get(f"/api/v1/uploads/jobs/{job['id']}/attempt")
+    assert attempt_response.status_code == 200
+    attempt = attempt_response.json()
+    conclusion = {"attempt_id": attempt["id"], "expected_revision": attempt["revision"], "conclusion": "not_accepted", "acknowledge_platform_check": True}
+    reconciled = client.post(f"/api/v1/uploads/jobs/{job['id']}/reconcile", json=conclusion)
+    assert reconciled.status_code == 200
+    assert reconciled.json()["attempt"]["reconciliation"] == "not_accepted"
+    assert len([call for call in backend.calls if call[0] == "upload"]) == 1
+    retry = client.post(f"/api/v1/uploads/jobs/{job['id']}/retry", json={})
     assert retry.status_code == 201
     assert retry.json()["state"] == "draft" and retry.json()["id"] != job["id"]
     assert len([call for call in backend.calls if call[0] == "upload"]) == 1

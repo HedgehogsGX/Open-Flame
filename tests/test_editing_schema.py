@@ -12,7 +12,7 @@ from video_download_control.editing.schema import (
 )
 
 
-def test_fresh_schema1_is_exact_and_idempotent(tmp_path):
+def test_fresh_schema4_is_exact_and_idempotent(tmp_path):
     path = tmp_path / "editing.sqlite3"
 
     ensure_editing_schema(path)
@@ -22,16 +22,17 @@ def test_fresh_schema1_is_exact_and_idempotent(tmp_path):
 
     assert path.read_bytes() == before
     with sqlite3.connect(path) as db:
-        assert SCHEMA_VERSION == 1
-        assert db.execute("SELECT version FROM metadata").fetchall() == [(1,)]
+        assert SCHEMA_VERSION == 4
+        assert db.execute("SELECT version FROM metadata").fetchall() == [(4,)]
         assert db.execute("PRAGMA application_id").fetchone() == (0x4F464544,)
-        assert db.execute("PRAGMA user_version").fetchone() == (1,)
+        assert db.execute("PRAGMA user_version").fetchone() == (4,)
         assert {
             row[0] for row in db.execute(
                 "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         } == {
-            "metadata", "sources", "projects", "drafts", "render_plans", "assets", "requests"
+            "metadata", "sources", "projects", "drafts", "render_plans", "assets", "requests",
+            "timeline_revisions", "ai_tasks", "plan_timeline_bindings", "ai_invocations"
         }
         assert [row[1] for row in db.execute("PRAGMA table_xinfo(assets)")] == [
             "id", "plan_id", "kind", "name", "suffix", "mime_type", "size", "sha256",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from dataclasses import replace
 
 import pytest
@@ -128,7 +130,7 @@ def test_douyin_share_link_reaches_a_ready_asset_through_the_api(
     )
     media = b"douyin share-link payload\n"
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created_response = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://v.douyin.com/DouyinShare01/?share=1"]},
@@ -218,7 +220,7 @@ def test_file_import_reaches_a_ready_downloadable_asset(
     app = create_app(settings)
     media = f"{filename}:{source_type.value}\n".encode()
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created_response = client.post(
             "/api/v1/batches/import",
             params={"filename": filename, "name": "import route e2e"},

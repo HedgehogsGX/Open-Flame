@@ -411,7 +411,7 @@ def test_backend_delivers_inline_progress_and_cleans_owned_process(tmp_path, mon
         "temporary.write_text(json.dumps(update))\n"
         "temporary.replace(operation/'login-update.json')\n"
         "while not (operation/'seen').exists(): time.sleep(.01)\n"
-        "(operation/'result.json').write_text(json.dumps({'status':'ready','code':'account_ready'}))\n",
+        "(operation/'result.json').write_text(json.dumps({'status':'ready','code':'account_ready','evidence_kind':None}))\n",
         encoding="utf-8",
     )
     operations = []

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from upload_contract_fixtures import (
+    synthetic_receipt_identity, synthetic_upload_result,
+    fail_confirmed_upload, reconcile_synthetic_not_accepted,
+)
+
 import asyncio
 import base64
 import hashlib
@@ -16,6 +21,7 @@ from PIL import Image
 
 from video_download_control.api import create_app
 from video_download_control.uploads import service as upload_service_module
+from video_download_control.uploads import covers as upload_covers_module
 from video_download_control.uploads.bridge import install_statement_policy
 from video_download_control.uploads.contracts import BackendResult, UploadError
 from video_download_control.uploads.service import (
@@ -25,6 +31,8 @@ from video_download_control.uploads.service import (
 
 
 class RecordingBackend:
+    receipt_identity = staticmethod(synthetic_receipt_identity)
+
     def __init__(self) -> None:
         self.uploads = []
         self.cover_payloads = []
@@ -45,10 +53,7 @@ class RecordingBackend:
             if request.cover_portrait_path is not None else None,
         ))
         self.uploads.append(request)
-        return BackendResult(
-            "draft_saved" if request.mode == "draft" else "submitted",
-            "synthetic_result",
-        )
+        return synthetic_upload_result(request)
 
 
 @pytest.fixture
@@ -590,7 +595,7 @@ def test_png_size_cap_never_calls_unbounded_decompressor_flush(
             pytest.fail("unbounded zlib flush must not be called")
 
     monkeypatch.setattr(
-        upload_service_module.zlib, "decompressobj", lambda: CappedDecompressor()
+        upload_covers_module.zlib, "decompressobj", lambda: CappedDecompressor()
     )
     path = tmp_path / "bounded.png"
     path.write_bytes(_png(1, 1))
@@ -623,12 +628,12 @@ def test_jpeg_and_webp_decoded_budget_is_checked_before_pixel_load(
             raise AssertionError("pixel load must not run after the decoded budget fails")
 
     monkeypatch.setattr(
-        upload_service_module.Image,
+        upload_covers_module.Image,
         "open",
         lambda *_args, **_kwargs: OversizedDecodedImage(),
     )
 
-    assert upload_service_module._decoded_image_dimensions(
+    assert upload_covers_module._decoded_image_dimensions(
         b"synthetic image bytes", expected_format
     ) is None
 
@@ -887,15 +892,13 @@ def test_persisted_douyin_cover_in_the_wrong_slot_fails_before_backend(
 
     with sqlite3.connect(service.database_path) as database:
         database.execute("UPDATE jobs SET state='queued' WHERE id=?", (job["id"],))
-    kind, claimed = service._claim()
-    assert kind == "upload"
-    service._execute_operation(kind, claimed)
-
-    current = service.job(job["id"])
-    assert (current["state"], current["code"]) == (
-        "failed",
-        "douyin_cover_orientation_invalid",
-    )
+    # Direct SQL bypassed confirm; frozen request identity must reject the
+    # altered slot before reservation or backend dispatch, atomically.
+    with pytest.raises(UploadError, match="^upload_attempt_identity_changed$"):
+        service._claim()
+    assert service.job(job["id"])["state"] == "queued"
+    with pytest.raises(UploadError, match="^upload_attempt_not_found$"):
+        service.attempt(job["id"])
     assert backend.uploads == []
 
 
@@ -1071,7 +1074,7 @@ def test_retry_copies_every_platform_parameter(upload_service, tmp_path):
             },
         }],
     )[0]
-    upload_service.cancel(original["id"])
+    fail_confirmed_upload(upload_service, original["id"])
     retry = upload_service.retry(original["id"])
 
     copied_fields = (
@@ -1112,7 +1115,7 @@ def test_generated_tencent_short_title_is_stable_through_retry_and_confirm(
     )[0]
     assert original["platform_options"]["short_title"] == "batch，精"
 
-    upload_service.cancel(original["id"])
+    fail_confirmed_upload(upload_service, original["id"])
     retry = upload_service.retry(original["id"])
     assert retry["platform_options"]["short_title"] == "batch，精"
 
@@ -1139,7 +1142,7 @@ def test_retry_rejects_a_new_expired_schedule_but_replays_existing_successor(
             "publish_timezone_offset_minutes": 570,
         }],
     )[0]
-    upload_service.cancel(expired["id"])
+    fail_confirmed_upload(upload_service, expired["id"])
     monkeypatch.setattr(
         upload_service_module.time,
         "time",
@@ -1161,7 +1164,7 @@ def test_retry_rejects_a_new_expired_schedule_but_replays_existing_successor(
             "publish_timezone_offset_minutes": 570,
         }],
     )[0]
-    upload_service.cancel(replayable["id"])
+    fail_confirmed_upload(upload_service, replayable["id"])
     successor = upload_service.retry(replayable["id"])
     monkeypatch.setattr(
         upload_service_module.time,

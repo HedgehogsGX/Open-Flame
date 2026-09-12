@@ -6,6 +6,8 @@ is required for creating local drafts.
 """
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import hashlib
 import json
 import os
@@ -134,7 +136,7 @@ def handoff_app(settings):
     app = create_app(settings)
     backend = _NoRemoteBackend()
     app.state.upload_service_factory = lambda root: UploadService(root, backend)
-    with TestClient(app, base_url="http://127.0.0.1") as client:
+    with download_client(app, base_url="http://127.0.0.1") as client:
         client.headers["X-Upload-CSRF"] = client.get("/api/v1/uploads/session").json()["csrf_token"]
         yield client, app, backend
 

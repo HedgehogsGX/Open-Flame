@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -232,7 +234,7 @@ def test_platform_circuit_reset_api_rejects_automatic_cooldown_and_missing(
             """
         )
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         automatic = client.post("/api/v1/platform-circuits/youtube/reset")
         missing = client.post("/api/v1/platform-circuits/instagram/reset")
 
@@ -312,7 +314,7 @@ def test_operations_api_reports_pause_and_refuses_unsafe_resume(
         now=NOW,
     )
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         assert client.get("/health").json()["worker"] == "paused"
         assert client.get("/health/ready").status_code == 503
         assert client.get("/api/v1/operations/queue").json()["paused"] is True
@@ -352,7 +354,7 @@ def test_platform_circuit_api_exposes_and_resets_manual_state(settings) -> None:
             """
         )
 
-    with TestClient(app) as client:
+    with download_client(app) as client:
         listed = client.get("/api/v1/platform-circuits")
         reset = client.post("/api/v1/platform-circuits/x/reset")
 
