@@ -232,6 +232,7 @@ _EXECUTABLES = frozenset(
         "python",
         "python3",
         "python3.12",
+        "python3.13",
         "python.exe",
         "yt-dlp",
         "yt-dlp.exe",

@@ -589,6 +589,9 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
         raise UploadBackupError("upload worker lock is unavailable") from exc
     locked = False
     try:
+        # POSIX flock does not need a lock byte. UploadService creates an empty
+        # file there; imported Windows roots retain their one-byte marker.
+        markers = (b"0",) if os.name == "nt" else (b"", b"0")
         opened = os.fstat(handle.fileno())
         current = backup_files.safe_lstat(path)
         if (
@@ -596,7 +599,7 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
             or opened.st_nlink != 1
             or backup_files.is_link_or_reparse(path, current)
             or not _same_identity(opened, current)
-            or opened.st_size != 1
+            or opened.st_size not in {len(marker) for marker in markers}
         ):
             raise UploadBackupError("upload worker lock is unsafe")
         handle.seek(0)
@@ -613,7 +616,7 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
             raise UploadBackupError("upload worker is active") from exc
         locked = True
         handle.seek(0)
-        if handle.read(1) != b"0":
+        if handle.read(2) not in markers:
             raise UploadBackupError("upload worker lock is invalid")
         yield
     finally:

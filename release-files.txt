@@ -341,3 +341,4 @@ validation/iteration-0.28.0-upload-source-handoff.md
 validation/iteration-0.28.0-cli-shared-parsing-output.md
 validation/iteration-0.28.0-cross-page-upload-rules.md
 validation/iteration-0.28.0-upload-reconciliation-node-retention.md
+validation/iteration-0.28.0-ci-contract-maintenance.md

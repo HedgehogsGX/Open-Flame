@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 from uuid import UUID, uuid4
 
+from .managed_files import file_signature, is_plain_entry
+
 
 SOURCE_JSON_KEYS = {
     "platform",
@@ -284,6 +286,7 @@ class AssetStore:
                 expected_device=source_info.st_dev,
                 expected_inode=source_info.st_ino,
             )
+            self._require_unchanged_source(source_path, source_info)
             if target.stat().st_size != source_size:
                 raise AssetValidationError("staging size mismatch")
             try:
@@ -324,6 +327,7 @@ class AssetStore:
                     expected_device=auxiliary_info.st_dev,
                     expected_inode=auxiliary_info.st_ino,
                 )
+                self._require_unchanged_source(auxiliary_source, auxiliary_info)
                 auxiliary_sha = self.sha256(auxiliary_target)
                 staged_artifacts.append(
                     AssetArtifact(
@@ -412,9 +416,12 @@ class AssetStore:
             ):
                 self._sync_directory(directory)
 
-        except Exception as exc:
-            if stage.exists():
-                shutil.rmtree(stage)
+        except BaseException as exc:
+            try:
+                if stage.exists():
+                    shutil.rmtree(stage)
+            except BaseException:
+                exc.add_note("asset staging cleanup failed")
             if isinstance(exc, OSError) and not isinstance(exc, AssetStorageError):
                 raise AssetStorageError("asset staging storage operation failed") from exc
             raise
@@ -845,6 +852,20 @@ class AssetStore:
             ) from exc
 
     @staticmethod
+    def _require_unchanged_source(path: Path, expected: os.stat_result) -> None:
+        try:
+            current = path.lstat()
+        except OSError as exc:
+            raise AssetValidationError("produced file is missing or unreadable") from exc
+        if (
+            not is_plain_entry(current)
+            or file_signature(current) != file_signature(expected)
+            or current.st_ctime_ns != expected.st_ctime_ns
+        ):
+            # Size and inode alone can match after a replacement or inode reuse.
+            raise AssetValidationError("produced file changed before staging")
+
+    @staticmethod
     def _copy_and_sync(
         source: Path,
         target: Path,
@@ -911,6 +932,8 @@ class AssetStore:
                             final_source_info.st_size != expected_size
                             or final_source_info.st_dev != expected_device
                             or final_source_info.st_ino != expected_inode
+                            or final_source_info.st_mtime_ns != opened_info.st_mtime_ns
+                            or final_source_info.st_ctime_ns != opened_info.st_ctime_ns
                         ):
                             raise AssetValidationError(
                                 "produced file changed during staging"

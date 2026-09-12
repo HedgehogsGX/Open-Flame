@@ -37,9 +37,11 @@ Upload / Workflow 的跨页文本、标签与排程规则已共用，strict dire
 已补齐，见[跨页纯规则记录](validation/iteration-0.28.0-cross-page-upload-rules.md)。
 Upload 人工核对控件已移除冗余渲染缓存字段，勾选/取消勾选后的轮询保留原节点，见
 [控件保留与完整隔离回归](validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
-下一步完成已准备的测试维护补丁审批与四格 hosted CI。
-当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
-把隔离候选通过当成当前 tracked tests 或 hosted CI 通过。源码与验证入口见下方独立记录。
+用户已明确批准限定测试维护例外，审查过的补丁已签名提交为 `3e482f0`。
+四格 CI 已恢复收集，Windows / Python 3.12 通过；其余结果与新发现的响应等待环、
+资产复制身份、清理主异常及 Linux 锁/日志修复见
+[CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
+继续核对修复后的完整本地与 hosted CI；其他测试改动仍受原门禁限制。
 
 ## 当前源码身份
 

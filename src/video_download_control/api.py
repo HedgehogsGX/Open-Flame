@@ -374,7 +374,8 @@ class _VerifiedOriginalSnapshotResponse(Response):
                 snapshot_claimed = True
             except (DownloadReadCancelled, OSError, ValueError):
                 snapshot_claimed = True
-                await _cancel_and_join(disconnect_task)
+                # Middleware receive can wait for the response to finish even
+                # after cancellation. Send the error before joining it below.
                 await JSONResponse(
                     status_code=409,
                     content={"detail": self._error_detail},
