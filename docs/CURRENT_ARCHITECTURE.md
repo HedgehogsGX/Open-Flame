@@ -362,8 +362,9 @@ stateDiagram-v2
    碰撞验证保留既有媒体，见[Editing 复制记录](../validation/iteration-0.28.0-editing-copy-ownership.md)。
    Upload 生命周期已移出 HTTP，由公开 UploadManager 接收 factory；未启动线程、启动后中断、
    recover/stop 竞争和系统锁交接均已验证，见[生命周期记录](../validation/iteration-0.28.0-upload-manager-ownership.md)。
-   Editing 复制后、登记清单建立前的元数据失败仍会留下孤儿；备份锁 descriptor 包装与第二个
-   SQLite 连接失败的回收同样待补齐，再迁移公共备份文件操作。
+   Editing 成品的纯元数据校验已前移到复制前，复制后立即加入共同清理清单，关闭登记前
+   孤儿路径，见[登记清理记录](../validation/iteration-0.28.0-editing-registration-cleanup.md)。
+   备份锁 descriptor 包装与第二个 SQLite 连接失败的回收仍待补齐，再迁移公共备份文件操作。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake

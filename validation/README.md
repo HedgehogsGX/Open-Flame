@@ -19,6 +19,7 @@ results belong outside Git or under ignored `validation/local/`.
 - Backup file ownership: [protect foreign targets and close owned descriptors](iteration-0.28.0-backup-file-ownership.md).
 - Editing copy ownership: [shared owned-file cleanup and collision protection](iteration-0.28.0-editing-copy-ownership.md).
 - Upload lifecycle ownership: [shared manager, startup recovery and native lock handoff](iteration-0.28.0-upload-manager-ownership.md).
+- Editing output registration: [validate metadata before copying and retain cleanup ownership](iteration-0.28.0-editing-registration-cleanup.md).
 - Upload cover ownership: [shared format/platform rules and backup audit](iteration-0.28.0-upload-cover-ownership.md).
   The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
   the three added failures still patch the former service decoder location.

@@ -3272,15 +3272,6 @@ class EditingService:
                 mime_type = _text(asset.mime_type, 120, required=True)
                 if "/" not in mime_type or any(character.isspace() for character in mime_type):
                     raise EditingError("invalid_render_asset")
-                asset_id = uuid4().hex
-                destination = self.asset_root / f"{asset_id}{suffix}"
-                size, digest = self._copy_and_hash(source_path, destination, MAX_OUTPUT_BYTES)
-                if asset.size_bytes not in {0, size}:
-                    self._discard_unregistered_file(destination)
-                    raise EditingError("render_asset_size_mismatch")
-                if asset.sha256 and asset.sha256 != digest:
-                    self._discard_unregistered_file(destination)
-                    raise EditingError("render_asset_hash_mismatch")
                 ordinal = self._optional_integer(asset.ordinal, minimum=0, required=True)
                 duration_ms = self._optional_integer(asset.duration_ms, minimum=0)
                 width = self._optional_integer(asset.width, minimum=1)
@@ -3288,6 +3279,11 @@ class EditingService:
                 container = _text(asset.container, 40)
                 video_codec = None if asset.video_codec is None else _text(asset.video_codec, 80)
                 audio_codec = None if asset.audio_codec is None else _text(asset.audio_codec, 80)
+                asset_id = uuid4().hex
+                destination = self.asset_root / f"{asset_id}{suffix}"
+                size, digest = self._copy_and_hash(source_path, destination, MAX_OUTPUT_BYTES)
+                # A copied target belongs to failure cleanup before any result
+                # comparisons or database work can reject it.
                 records.append({
                     "id": asset_id, "plan_id": plan_id, "kind": asset.kind,
                     "name": name, "suffix": suffix, "mime_type": mime_type,
@@ -3296,6 +3292,10 @@ class EditingService:
                     "container": container, "video_codec": video_codec,
                     "audio_codec": audio_codec, "path": destination,
                 })
+                if asset.size_bytes not in {0, size}:
+                    raise EditingError("render_asset_size_mismatch")
+                if asset.sha256 and asset.sha256 != digest:
+                    raise EditingError("render_asset_hash_mismatch")
             now = _now()
             with self._db() as db:
                 db.execute("BEGIN IMMEDIATE")

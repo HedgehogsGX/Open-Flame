@@ -22,7 +22,9 @@ Editing 复制也已补齐目标创建权与失败清理，并与备份共用受
 [复制所有权记录](validation/iteration-0.28.0-editing-copy-ownership.md)。Upload 生命周期已移到
 公开 UploadManager，由 HTTP、Workflow 与退出清理共用；启动回滚、恢复/关闭竞争及系统锁
 交接均已补齐，见[生命周期记录](validation/iteration-0.28.0-upload-manager-ownership.md)。
-接下来修复 Editing 登记前孤儿、备份锁 descriptor 与 SQLite 连接回收，并迁移公共备份职责。
+Editing 成品元数据校验已前移，复制后立即登记清理责任，见
+[成品登记清理](validation/iteration-0.28.0-editing-registration-cleanup.md)。接下来补齐备份锁
+descriptor 与 SQLite 连接回收，并迁移公共备份职责。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
