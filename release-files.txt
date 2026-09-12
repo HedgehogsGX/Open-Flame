@@ -285,3 +285,4 @@ validation/sample_manifest.template.csv
 validation/iteration-0.28.0-chinese-caption-style.md
 validation/iteration-0.28.0-workflow-start-rollback.md
 validation/iteration-0.28.0-media-cleanup-errors.md
+validation/iteration-0.28.0-adapter-control-decoding.md

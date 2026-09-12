@@ -1323,6 +1323,38 @@ def _read_mapping_payload(
     return payload
 
 
+def _mapping_lines(payload: bytes, *, kind: str) -> list[bytes]:
+    """Validate the shared bounded JSONL framing before inspecting output paths."""
+
+    lines = payload.splitlines()
+    if not lines or len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping has an invalid record count",
+        )
+    return lines
+
+
+def _mapping_record(
+    line: bytes, *, kind: str, fields: set[str]
+) -> dict[str, object]:
+    """Decode one record; ownership and scalar validation stay with its parser."""
+
+    try:
+        record = json.loads(line.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping contains invalid JSONL",
+        ) from exc
+    if not isinstance(record, dict) or set(record) != fields:
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping contains an invalid record shape",
+        )
+    return record
+
+
 def _read_download_mapping(
     control_file: _ControlFile,
     *,
@@ -1331,12 +1363,7 @@ def _read_download_mapping(
     max_bytes: int,
 ) -> tuple[_MappedOriginal, ...]:
     payload = _read_mapping_payload(control_file, max_bytes=max_bytes)
-    lines = payload.splitlines()
-    if not lines or len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
-        raise AdapterFailure(
-            ErrorCode.EXTRACTOR_BROKEN,
-            "yt-dlp output mapping has an invalid record count",
-        )
+    lines = _mapping_lines(payload, kind="output")
 
     try:
         resolved_output = output_dir.resolve(strict=True)
@@ -1348,18 +1375,7 @@ def _read_download_mapping(
     by_media_key: dict[str, _MappedOriginal] = {}
     mapped_paths: set[Path] = set()
     for line in lines:
-        try:
-            record = json.loads(line.decode("utf-8", errors="strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping contains invalid JSONL",
-            ) from exc
-        if not isinstance(record, dict) or set(record) != {"id", "filepath"}:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping contains an invalid record shape",
-            )
+        record = _mapping_record(line, kind="output", fields={"id", "filepath"})
         media_key = record["id"]
         filepath = record["filepath"]
         if (
@@ -1433,12 +1449,7 @@ def _read_thumbnail_mapping(
         # original two-field control record.  This path carries no thumbnail
         # identity proof; the production command writes one record per item.
         return None
-    lines = payload.splitlines()
-    if len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
-        raise AdapterFailure(
-            ErrorCode.EXTRACTOR_BROKEN,
-            "yt-dlp thumbnail mapping has an invalid record count",
-        )
+    lines = _mapping_lines(payload, kind="thumbnail")
 
     try:
         resolved_output = output_dir.resolve(strict=True)
@@ -1452,23 +1463,11 @@ def _read_thumbnail_mapping(
     thumbnail_paths: set[Path] = set()
     original_paths = {mapping.path for mapping in mappings}
     for line in lines:
-        try:
-            record = json.loads(line.decode("utf-8", errors="strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp thumbnail mapping contains invalid JSONL",
-            ) from exc
-        if not isinstance(record, dict) or set(record) != {
-            "id",
-            "filepath",
-            "thumbnail_id",
-            "thumbnail_filepath",
-        }:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp thumbnail mapping contains an invalid record shape",
-            )
+        record = _mapping_record(
+            line,
+            kind="thumbnail",
+            fields={"id", "filepath", "thumbnail_id", "thumbnail_filepath"},
+        )
         media_key = record["id"]
         filepath = record["filepath"]
         thumbnail_id = record["thumbnail_id"]
