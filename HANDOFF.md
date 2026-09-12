@@ -13,7 +13,8 @@
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；后续仍须完成 AI 重试图、
-Workflow 重试结果/前端纯校验、完整测试维护及四格 hosted CI 验证。
+Workflow 重试结果/取消尾段、公共备份文件操作、完整测试维护及四格 hosted CI 验证。
+Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -130,6 +131,7 @@ Workflow 重试结果/前端纯校验、完整测试维护及四格 hosted CI �
 | --- | --- |
 | 当前状态与 CI 策略 | [文档状态收敛](validation/iteration-0.28.0-document-status-consolidation.md) |
 | 封面规则与当前回归 | [Upload 封面所有权及备份审计](validation/iteration-0.28.0-upload-cover-ownership.md) |
+| 表单校验与日期意图 | [Workflow 共享校验](validation/iteration-0.28.0-workflow-shared-validation.md) |
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
 | Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
@@ -168,7 +170,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    不能替代 tracked suite。2026-09-12 的 clean `36cfb56` 完整回归为 2197 passed、245 failed、
    16 skipped；封面切片工作区为 2194 passed、248 failed、16 skipped，新增三项旧封面内部
    patch 位置失败。`36cfb56` hosted run `34680878428` 四格均失败于 offline pytest。完整失败
-   原因仍须逐类诊断；最新远端和本地结果按精确源码分别核对。
+   原因仍须逐类诊断；后续 clean `e4e84fd` hosted run `34683683053` 也已失败。
+   前端校验切片的 193 项现有局部回归与生产页面验证见独立记录；最新远端和本地结果按
+   精确源码分别核对，不能合并成完整通过。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、

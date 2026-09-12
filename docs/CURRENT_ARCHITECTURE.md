@@ -321,7 +321,7 @@ stateDiagram-v2
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
-| Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 已拆分，仍有规则重复 |
+| Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 分责；日期/DST、时限、标签、分区与短标题共享纯判定，调用者保留 DOM 与冻结时间上下文 |
 | 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；禁止新增/修改 tracked tests |
 
 ## 9. 当前缺陷、复杂度集中点与下一切片
@@ -343,12 +343,13 @@ stateDiagram-v2
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
 4. **规则 Locality 仍不够集中。** 当前优先候选是：Editing AI retry
-   forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。Download 素材读取、
+   forest 所有权；上传 retry 前后结果应用；取消封面分流后的公共尾段。Download 素材读取、
    两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
    Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](../validation/iteration-0.28.0-workflow-request-construction.md)。
    封面格式与平台规则也已集中，关闭了 Bilibili 竖图在备份中漏检的已复现分歧，见
    [封面所有权记录](../validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
-   可以被预设保存成不定时的分歧已用生产 HTML 和实际 PresetStore 复现，尚待修复。
+   可以被预设保存成不定时的分歧也已修复，日期与文本/数值规则改为共同维护，见
+   [共享校验记录](../validation/iteration-0.28.0-workflow-shared-validation.md)。
    备份的公共文件操作与入口文档仍需收敛。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release

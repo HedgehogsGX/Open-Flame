@@ -13,6 +13,7 @@ results belong outside Git or under ignored `validation/local/`.
 - Current architecture-reset supplements: [caption cleanup](iteration-0.28.0-caption-cleanup-errors.md)
   and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
+- Workflow form rules: [shared validation and incomplete absolute schedules](iteration-0.28.0-workflow-shared-validation.md).
 - Upload cover ownership: [shared format/platform rules and backup audit](iteration-0.28.0-upload-cover-ownership.md).
   The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
   the three added failures still patch the former service decoder location.
@@ -47,7 +48,9 @@ results belong outside Git or under ignored `validation/local/`.
   Windows/Linux and CPython 3.12/3.13; all four jobs failed. Local failures
   include old internal interfaces, HTTP, Schema and fixture contracts, but
   their causes are not a complete classification of hosted logs. This run
-  does not validate the later cover slice or imply a green build.
+  does not validate the later cover slice or imply a green build. Cover commit
+  `e4e84fd` run `34683683053` also completed with failure; the subsequent
+  frontend record reports scoped checks, not full CI success.
 - External testing starts with [`TESTING.md`](../TESTING.md). Use the
   [`Debug guide`](../docs/DEBUG_GUIDE.md) and return findings with the
   [`external tester handoff template`](../docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md).

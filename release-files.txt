@@ -323,4 +323,5 @@ validation/iteration-0.28.0-workflow-upload-form-functions.md
 validation/iteration-0.28.0-workflow-upload-retry.md
 validation/iteration-0.28.0-release-documentation-boundary.md
 validation/iteration-0.28.0-upload-cover-ownership.md
+validation/iteration-0.28.0-workflow-shared-validation.md
 validation/iteration-0.28.0-workflow-request-construction.md
