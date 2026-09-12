@@ -31,7 +31,9 @@ Editing 公开解析，Workflow 删除两个重复定义；一致读、取消写
 保护见[render 图所有权记录](validation/iteration-0.28.0-editing-render-retry-ownership.md)。
 Windows 上传源 reader 现持有至 backend 消费结束，Biliup 硬链接/复制暂存均核对冻结摘要；
 执行后清理保留可信结果或 unknown，见[源文件交接](validation/iteration-0.28.0-upload-source-handoff.md)。
-下一步完成跨页纯规则、CLI、当前文档和完整 CI 维护。
+LocalApp/LocalWorker 路径 parser 与 Worker JSON 输出也已共用既有 CLI support，见
+[CLI 小重复收敛](validation/iteration-0.28.0-cli-shared-parsing-output.md)。
+下一步完成跨页纯规则、当前文档和完整 CI 维护。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 

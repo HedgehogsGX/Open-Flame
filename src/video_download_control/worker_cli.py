@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from pathlib import Path
@@ -13,6 +12,7 @@ from .config import Settings
 from .database import Database
 from .runtime_logging import RuntimeLogConfig, RuntimeLogger, safe_exception_type
 from .worker import Worker
+from .worker_cli_support import print_worker_result
 from .worker_repository import WorkerRepository
 
 _WORKER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -129,21 +129,10 @@ def main() -> None:
     try:
         while True:
             result = worker.run_once()
+            print_worker_result(result)
             if result is None:
-                print(json.dumps({"status": "idle"}, ensure_ascii=False))
                 stop_reason = "drain_complete" if args.drain else "idle"
                 return
-            print(
-                json.dumps(
-                    {
-                        "job_id": result.job_id,
-                        "attempt_id": result.attempt_id,
-                        "status": result.status,
-                        "error_code": result.error_code,
-                    },
-                    ensure_ascii=False,
-                )
-            )
             if not args.drain:
                 stop_reason = "single_run_complete"
                 return

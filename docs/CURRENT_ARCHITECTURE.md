@@ -148,7 +148,7 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 | 适配器 | `adapters/base.py` 定义共享 Protocol 与请求/结果；fake 和真实适配器实现它；`yt_dlp_contract.py` 是生产命令/配置合同，并非测试基类 |
 | 工具链 / 校验 | `toolchain.py`、`verifiers/ffprobe.py`、capabilities/evidence：版本、产物与能力证据；本地 ready 不自动升级真实平台验收 |
 | 安全 / 网络 | `security/`、受管文件与网络执行 guard：身份、出站约束和执行前复验；Windows 显式 direct 模式与 Linux relay 模式保持各自合同 |
-| CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 已直接调用公开 Worker builder/锁/logger，不再从 CLI 私有函数取实现 |
+| CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 直接调用公开 Worker builder/锁/logger；LocalApp/LocalWorker 的绝对路径解析及 Worker 结果输出共用既有 CLI support |
 
 本分支已修复下文第 9 节的前两条失败路径，并收敛两类 adapter 控制记录的 JSONL 解码。
 其他职责收敛和完整 CI 恢复仍在继续。Worker 内部接口变化的旧测试迁移草案只在 ignored 目录；

@@ -337,3 +337,4 @@ validation/iteration-0.28.0-public-backup-files.md
 validation/iteration-0.28.0-workflow-request-construction.md
 validation/iteration-0.28.0-editing-render-retry-ownership.md
 validation/iteration-0.28.0-upload-source-handoff.md
+validation/iteration-0.28.0-cli-shared-parsing-output.md

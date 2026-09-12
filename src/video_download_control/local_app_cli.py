@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import math
 import multiprocessing
-import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -29,6 +28,7 @@ from .runtime_logging import (
     DEFAULT_RUNTIME_LOG_MAX_BYTES,
 )
 from .startup_diagnostics import DiagnosticCode, emit_failure
+from .worker_cli_support import absolute_path as _absolute_path
 
 _MAX_COOKIE_BYTES = 64 * 1024 * 1024
 _MAX_STARTUP_TIMEOUT_SECONDS = 10 * 60.0
@@ -42,15 +42,6 @@ class _PrivateArgumentParser(argparse.ArgumentParser):
         del message
         emit_failure(DiagnosticCode.INVALID_ARGUMENTS)
         self.exit(2)
-
-
-def _absolute_path(raw: str) -> Path:
-    path = Path(raw)
-    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
-        raise argparse.ArgumentTypeError(
-            "an explicit normalized absolute path is required"
-        )
-    return path
 
 
 def _bounded_integer(

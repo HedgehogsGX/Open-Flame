@@ -35,17 +35,11 @@ from .local_worker import (
     validate_local_worker_paths,
 )
 from .worker_cli_support import (
+    absolute_path as _absolute_path,
     js_runtime as _js_runtime,
     poll_interval as _poll_interval,
     print_worker_result as _print_result,
 )
-
-
-def _absolute_path(raw: str) -> Path:
-    path = Path(raw)
-    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
-        raise argparse.ArgumentTypeError("an explicit normalized absolute path is required")
-    return path
 
 
 def _cookie_source(raw: str) -> CookieSource:

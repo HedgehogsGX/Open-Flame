@@ -5,9 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 
 from .adapters import YtDlpJsRuntime, YtDlpJsRuntimeName
+
+
+def absolute_path(raw: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
+        raise argparse.ArgumentTypeError("an explicit normalized absolute path is required")
+    return path
 
 
 def poll_interval(raw: str) -> float:
