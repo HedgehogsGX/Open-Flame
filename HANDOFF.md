@@ -1,6 +1,6 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-12（Australia/Adelaide）
+> 最后更新：2026-09-13（Australia/Adelaide）
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
@@ -35,9 +35,11 @@ LocalApp/LocalWorker 路径 parser 与 Worker JSON 输出也已共用既有 CLI 
 [CLI 小重复收敛](validation/iteration-0.28.0-cli-shared-parsing-output.md)。
 Upload / Workflow 的跨页文本、标签与排程规则已共用，strict directive 和发行登记
 已补齐，见[跨页纯规则记录](validation/iteration-0.28.0-cross-page-upload-rules.md)。
-下一步完成当前文档和完整 CI 维护。
+Upload 人工核对控件已移除冗余渲染缓存字段，勾选/取消勾选后的轮询保留原节点，见
+[控件保留与完整隔离回归](validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
+下一步完成已准备的测试维护补丁审批与四格 hosted CI。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
-把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
+把隔离候选通过当成当前 tracked tests 或 hosted CI 通过。源码与验证入口见下方独立记录。
 
 ## 当前源码身份
 
@@ -186,14 +188,13 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
    2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **完整 CI 尚未恢复。** 标准 pytest 仍被备份旧私有 helper import 阻断：1 collection error，
-   22 个 Download backup 用例未收集。源交接修复前的完整诊断为 2144 passed、276 failed、
-   16 skipped、1 error；新增 26 个 failure IDs 来自 SHA 请求 fixture/payload 未同步。
-   当前修复后的聚焦结果与 ignored fixture 副本见[源交接验证](validation/iteration-0.28.0-upload-source-handoff.md)，
-   不能替代完整标准测试。其余失败仍须逐类判定，不能全部视为旧测试。
-   abcbc40 hosted run 34692830186 四格均在 offline pytest 失败，不含本轮上传源交接切片。
-   用户尚未批准测试维护例外；不能删除断言、排除测试或放宽生产合同来声称绿色。
-   备份迁移验证入口见[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
+4. **完整 CI 尚未恢复。** tracked tests 的标准入口仍受备份旧私有 helper import 阻断。
+   原 `773dc5d` 完整诊断为 2,091 passed / 329 failed / 16 skipped / 1 collection error。
+   2026-09-13 的隔离副本包含控件保留源码修复与测试维护草案，完整结果为
+   **2,442 passed / 16 skipped**，没有增加 skip；它不能替代当前 tracked tests 或 hosted CI。
+   44 个历史测试文件、2 个显式 fixture helper、限定完整差分的门禁例外均已准备为具体补丁，
+   尚未获得用户批准，尚未应用或提交。基线 `773dc5d` hosted run 34697513834 四格仍失败。
+   具体证据、补丁身份及保留的安全边界见[控件保留与 CI 维护记录](validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
