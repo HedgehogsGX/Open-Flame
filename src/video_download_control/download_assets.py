@@ -426,7 +426,6 @@ class DownloadAssetReader:
             or registered.get("kind") != "caption"
         ):
             raise ValueError("download caption is not registered and ready")
-        handle: BinaryIO | None = None
         try:
             handle, size_bytes, mime_type, _suffix = read_registered_auxiliary(
                 self._data_root,
@@ -438,14 +437,13 @@ class DownloadAssetReader:
                 expected_sha256=registered["sha256"],
                 maximum_bytes=maximum_bytes,
             )
-            payload = handle.read(size_bytes + 1)
-            if len(payload) != size_bytes or handle.read(1):
-                raise ValueError("verified download caption size changed")
+            with close_binary_on_error(handle):
+                payload = handle.read(size_bytes + 1)
+                if len(payload) != size_bytes or handle.read(1):
+                    raise ValueError("verified download caption size changed")
         except (KeyError, OSError, ValueError):
             raise ValueError("download caption is unavailable") from None
-        finally:
-            if handle is not None:
-                handle.close()
+        handle.close()
         return {
             "artifact_id": canonical_id,
             "asset_id": canonical_download_asset_id(registered["asset_id"]),
