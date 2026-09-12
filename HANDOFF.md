@@ -1,12 +1,19 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-11（Australia/Adelaide）
+> 最后更新：2026-09-12（Australia/Adelaide）
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
 新开发任务可直接复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、
 数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
+
+当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
+重整架构并解决完整 CI；**尚未完成，未合并 main**。起点为远端 main `d481326`。已分别
+签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码和 Worker/CLI 分责。
+后续仍须完成领域规则与 HTTP 素材边界收敛、完整测试维护及四格 hosted CI 验证。
+当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
+把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
 ## 当前源码身份
 
@@ -18,7 +25,7 @@
 | 上传备份格式 | 3 |
 | 首批上传平台 | Bilibili、抖音、视频号（内部 ID `tencent`） |
 | 前端方向 | 方向 C“编辑式玻璃”，遵循 [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) |
-| Git 交付 | 关键步骤后签名提交并直接推送 `origin/main`；禁止 force push |
+| Git 交付 | 当前任务签名提交到 `codex/architecture-reset-ci`，通过分支/PR 交付；不直接推送 main，禁止 force push |
 | Git 身份 | `Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>` |
 | Upload Schema 4 源码提交 | `496fb63f9d0010c22fa1abc660e6450cd403b6be`；已签名直推 `origin/main`，GitHub author/committer 均归属 `novahanser` |
 
@@ -126,6 +133,7 @@
 | 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
 | 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
 | 当前系统结构 | [当前架构](docs/CURRENT_ARCHITECTURE.md)、[继续开发提示词](docs/HANDOFF_PROMPT.md) |
+| 本轮架构重置 | [Worker/CLI 分责](validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](validation/iteration-0.28.0-media-cleanup-errors.md)、[adapter 解码](validation/iteration-0.28.0-adapter-control-decoding.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
 | CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
@@ -145,11 +153,12 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
    2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **托管 CI 仍为红色。** CI 已在 Windows/Linux 与 CPython 3.12/3.13 真实执行；环境和
-   提交范围门禁通过后，完整 pytest 因冻结历史测试与当前安全/Schema/版本合同不一致而失败。
-   本轮受影响的上传回归为 483 passed、56 failed；精确命令、分组原因与当前 validator 结果见
-   [Upload Schema 4 attempt receipt 记录](validation/iteration-0.28.0-upload-attempt-receipts.md)。
-   按仓库策略不得通过修改这些测试或弱化生产合同来伪造绿色结果。
+4. **完整 CI 尚未恢复。** 2026-09-12 查询的 main run `34616910953` 四格失败于提交范围
+   门禁；不要沿用旧记录“最新 main 已进入 pytest”的说法。本分支起点 `d481326` 的本地
+   CPython 3.13.14 完整基线为 **229 failed、2213 passed、16 skipped，447.85 秒**，包括
+   HTTP、旧 Schema/回执、版本及 UI fixture 漂移。Worker 分责后的旧 local CLI 文件还有
+   13 个内部接口迁移失败；只改变引用位置的 ignored 草案为 24 passed。用户尚未批准 tracked
+   tests 维护例外，当前不能删除断言、排除测试或放宽生产安全合同来声称绿色。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -162,24 +171,23 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
-8. **两个本地 P2 失败路径仍待修复。** `WorkflowManager.get()` 在首次 `Thread.start()` 抛错时
-   尚未回滚已发布的 service/owner 状态；Editing 与 verified response 的部分构造失败清理仍可能
-   由 `handle.close()` 异常覆盖原始校验错误。未跟踪评审中的隔离探针曾复现两项，当前源码复核
-   仍能确认相应路径存在；没有真实环境事故或数据丢失证据。当前源码的完整说明与保持条件见
+8. **架构重置仍在推进。** 本分支已关闭线程首次启动回滚与媒体失败清理两条本地 P2 路径，
+   12 个有界检查通过；这不能证明其他候选已实施，也不能覆盖原有上传 source TOCTOU 窗口。
+   领域规则 Locality、HTTP 与 Download 素材读取职责，以及完整 CI 的后续工作见
    [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)。
 
 ## 下一入口
 
-1. 若没有新的外部测试反馈，先把上述两个 P2 失败路径分别做成小修提交：先处理 Workflow
-   首次线程启动回滚，再处理 close 清理不覆盖原异常。复用现有回归；新的故障注入只能放在
-   已忽略的 `validation/local/`，不能修改 tracked tests。
+1. 继续当前架构重置目标，先处理 Download 素材读取与 HTTP 组装的职责分离，再收敛领域重复
+   规则。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标不能缩成局部通过或文档审查。
+   临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)
    返回环境、精确 commit、步骤、脱敏日志与结果。不要提交 Cookie、token、URL 样本、媒体、
    本机路径或 `validation/local/` 内容。
-3. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交并直推
-   `origin/main`。首批上传范围保持 Bilibili、抖音、视频号。
+3. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交到当前开发
+   分支，通过分支/PR 交付。首批上传范围保持 Bilibili、抖音、视频号。
    对 `unknown` 上传先保存数据库与日志、读取本次 receipt 并在对应平台后台核对；只有固定
    `not_accepted` 结论落库后才能建立 retry 草稿，不得使用旧请求体或手工改库直接重传。
 4. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已

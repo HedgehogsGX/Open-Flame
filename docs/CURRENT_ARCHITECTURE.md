@@ -331,7 +331,7 @@ stateDiagram-v2
    组合，后续 `stop()` 还可能 join 未启动线程。现在未成功启动时回滚；已真实启动后的中断
    保留 owner。保留 lazy single-owner 与永久 stop 语义，见[独立记录](../validation/iteration-0.28.0-workflow-start-rollback.md)。
 2. **本分支已修复：媒体构造失败清理保留原始错误。**
-   Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径仍直接调用 `handle.close()`；
+   Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径此前直接调用 `handle.close()`；
    close 的 `OSError` 曾覆盖更有意义的 `asset_changed` 或 manifest 错误。现在共用基础受管文件
    的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，

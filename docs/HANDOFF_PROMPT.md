@@ -6,7 +6,9 @@
 ---
 
 你正在继续开发 Open-Flame。不要停留在计划或建议；在用户已授权范围内持续完成一个可独立验证、
-可回退的工作切片。关键步骤完成后使用指定身份签名提交，并直接推送到 `origin/main`。
+可回退的工作切片。当前任务是整体职责重整和完整 CI 恢复，不能缩减成只完成一个切片。
+关键步骤完成后使用指定身份签名提交到 `codex/architecture-reset-ci`，通过分支/PR 交付，
+不要直接推送 main。读取 HANDOFF 中的本分支进展，优先服从用户最新指令。
 
 ## 1. 开始前必读
 
@@ -132,19 +134,19 @@ git diff --cached --stat
 Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>
 ```
 
-使用签名提交并直推 main：
+当前任务使用签名提交并推送开发分支：
 
 ```powershell
 git commit -S -m "<准确描述本切片>"
 git show --show-signature --format=fuller HEAD
-git push origin HEAD:main
+git push origin HEAD:refs/heads/codex/architecture-reset-ci
 ```
 
 禁止 force push。推送后核对：
 
 ```powershell
 git rev-parse HEAD
-git ls-remote origin refs/heads/main
+git ls-remote origin refs/heads/codex/architecture-reset-ci
 git status --short --branch
 ```
 
@@ -153,7 +155,7 @@ git status --short --branch
 - author 与 committer name 都是 `Cyaegha_Xu`；
 - author 与 committer login 都是 `novahanser`；
 - 签名为 `verified=true`、`reason=valid`；
-- 远端 `main` 等于本地交付 commit。
+- 远端开发分支等于本地交付 commit，main 未被本任务修改。
 
 ## 7. 完成回报格式
 

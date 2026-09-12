@@ -51,6 +51,16 @@ The concise current development state, risks and next actions live in
 
 ## Current 0.28.0 evidence
 
+### Architecture reset branch in progress (2026-09-12)
+
+`codex/architecture-reset-ci` is not merged into main and the full CI recovery is
+unfinished. These scoped records cover the implemented slices, not the entire goal:
+
+- [Workflow startup rollback](iteration-0.28.0-workflow-start-rollback.md)
+- [Primary media errors and cleanup](iteration-0.28.0-media-cleanup-errors.md)
+- [Adapter control-record decoding](iteration-0.28.0-adapter-control-decoding.md)
+- [Worker assembly and CLI ownership](iteration-0.28.0-worker-entry-boundary.md)
+
 ### Architecture and boundaries
 
 - [Current document status and CI policy](iteration-0.28.0-document-status-consolidation.md)
