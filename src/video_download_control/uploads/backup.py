@@ -32,6 +32,7 @@ from .activity_lock import UploadActivityBusy, UploadActivityLease, activity_loc
 from .contracts import (
     PLATFORMS,
     UPLOAD_ATTEMPT_STATES,
+    UPLOAD_CODE_PATTERN as _SAFE_CODE,
     UPLOAD_EVIDENCE_KINDS,
     UPLOAD_RECONCILIATIONS,
     UPLOAD_RESULT_STATUSES,
@@ -40,7 +41,6 @@ from .contracts import (
     legacy_migrated_platform_options,
     normalize_tencent_short_title,
     upload_adapter_identity_matches,
-    upload_evidence_is_valid,
 )
 from .identity import upload_job_definition_digest, upload_retry_payload_matches
 from .metadata import (
@@ -48,9 +48,9 @@ from .metadata import (
     TENCENT_CONTENT_LABELS,
     TITLE_LIMITS,
 )
+from .receipts import validate_upload_attempt_state
 from .service import (
     MAX_COVER_BYTES,
-    _SAFE_CODE,
     _cover_metadata,
 )
 
@@ -1938,118 +1938,10 @@ def _audit_upload_attempts(
         ):
             raise UploadBackupError("upload attempt timestamp is invalid")
 
-        terminal_code = isinstance(code, str) and bool(code) and _is_safe_code(code)
-        raw_unknown_result = (
-            status in {"unknown", "canceled"}
-            or status == "submitted" and job["mode"] != "publish"
-            or status == "draft_saved" and job["mode"] != "draft"
-        )
-        if state == "reserved":
-            valid_state = (
-                status is None
-                and code is None
-                and evidence_kind is None
-                and dispatch_at is None
-                and responded_at is None
-                and revision == 0
-                and job["state"] == "running"
-            )
-        elif state == "dispatch_may_have_started":
-            valid_state = (
-                status is None
-                and code is None
-                and evidence_kind is None
-                and dispatch_at is not None
-                and responded_at is None
-                and revision == 1
-                and job["state"] == "running"
-            )
-        elif state == "responded":
-            valid_state = (
-                terminal_code
-                and responded_at is not None
-                and (
-                    dispatch_at is None
-                    and revision == 1
-                    and status in {"failed", "canceled"}
-                    and evidence_kind is None
-                    or dispatch_at is not None
-                    and revision == 2
-                    and (
-                        status == "failed"
-                        or status == "submitted" and job["mode"] == "publish"
-                        or status == "draft_saved" and job["mode"] == "draft"
-                    )
-                )
-            )
-        elif state == "unknown":
-            valid_state = (
-                terminal_code
-                and raw_unknown_result
-                and dispatch_at is not None
-                and revision == 2
-                and (
-                    responded_at is not None
-                    or status == "unknown"
-                    and code == "interrupted_result_unknown"
-                    and evidence_kind is None
-                )
-            )
-        else:
-            valid_state = (
-                terminal_code
-                and raw_unknown_result
-                and dispatch_at is not None
-                and conclusion is not None
-                and reconciliation_evidence == "operator_platform_check"
-                and reconciled_at is not None
-                and revision == 3
-                and (
-                    responded_at is not None
-                    or status == "unknown"
-                    and code == "interrupted_result_unknown"
-                    and evidence_kind is None
-                )
-            )
-        if state != "reconciled" and any(
-            value is not None
-            for value in (conclusion, reconciliation_evidence, reconciled_at)
-        ):
-            valid_state = False
-        if not upload_evidence_is_valid(
-            platform,
-            job["mode"],
-            status,
-            evidence_kind,
-        ):
-            valid_state = False
-        if conclusion == "submission_acknowledged" and job["mode"] != "publish":
-            valid_state = False
-        if conclusion == "draft_saved" and (
-            platform != "tencent" or job["mode"] != "draft"
-        ):
-            valid_state = False
-        if state == "responded" and (
-            job["state"] != status or job["code"] != code
-        ):
-            valid_state = False
-        if state == "unknown" and (
-            job["state"] != "unknown" or job["code"] != code
-        ):
-            valid_state = False
-        if state == "reconciled":
-            expected_job_result = {
-                "not_accepted": ("failed", "manual_remote_not_accepted"),
-                "submission_acknowledged": (
-                    "submitted",
-                    "manual_submission_acknowledged",
-                ),
-                "draft_saved": ("draft_saved", "manual_platform_draft_saved"),
-            }.get(conclusion)
-            if expected_job_result != (job["state"], job["code"]):
-                valid_state = False
-        if not valid_state:
-            raise UploadBackupError("upload attempt state is invalid")
+        try:
+            validate_upload_attempt_state(job_payload, attempt)
+        except UploadError:
+            raise UploadBackupError("upload attempt state is invalid") from None
 
 
 def _valid_optional_identifier(value: object) -> bool:

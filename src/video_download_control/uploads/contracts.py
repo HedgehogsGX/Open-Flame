@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -7,6 +8,7 @@ from typing import Protocol
 
 
 PLATFORMS = {"bilibili": "Bilibili", "douyin": "抖音", "tencent": "视频号"}
+UPLOAD_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 UPLOAD_ATTEMPT_STATES = frozenset(
     {"reserved", "dispatch_may_have_started", "responded", "unknown", "reconciled"}
 )

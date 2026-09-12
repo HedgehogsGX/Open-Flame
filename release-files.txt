@@ -188,6 +188,7 @@ src/video_download_control/uploads/identity.py
 src/video_download_control/uploads/login_progress.py
 src/video_download_control/uploads/metadata.py
 src/video_download_control/uploads/runtime-lock.json
+src/video_download_control/uploads/receipts.py
 src/video_download_control/uploads/runtime_setup.py
 src/video_download_control/uploads/schema.py
 src/video_download_control/uploads/service.py
@@ -290,3 +291,4 @@ src/video_download_control/local_worker.py
 src/video_download_control/candidate_worker.py
 src/video_download_control/worker_cli_support.py
 validation/iteration-0.28.0-worker-entry-boundary.md
+validation/iteration-0.28.0-upload-receipt-contract.md
