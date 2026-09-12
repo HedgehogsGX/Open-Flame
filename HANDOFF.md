@@ -33,7 +33,9 @@ Windows 上传源 reader 现持有至 backend 消费结束，Biliup 硬链接/�
 执行后清理保留可信结果或 unknown，见[源文件交接](validation/iteration-0.28.0-upload-source-handoff.md)。
 LocalApp/LocalWorker 路径 parser 与 Worker JSON 输出也已共用既有 CLI support，见
 [CLI 小重复收敛](validation/iteration-0.28.0-cli-shared-parsing-output.md)。
-下一步完成跨页纯规则、当前文档和完整 CI 维护。
+Upload / Workflow 的跨页文本、标签与排程规则已共用，strict directive 和发行登记
+已补齐，见[跨页纯规则记录](validation/iteration-0.28.0-cross-page-upload-rules.md)。
+下一步完成当前文档和完整 CI 维护。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 

@@ -15,6 +15,7 @@ results belong outside Git or under ignored `validation/local/`.
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
 - Workflow form rules: [shared validation and incomplete absolute schedules](iteration-0.28.0-workflow-shared-validation.md).
 - Editing AI retry graph: [one owner for resolution and project cancellation](iteration-0.28.0-editing-ai-retry-ownership.md).
+- Cross-page upload rules: [shared text, tags and schedules with retained page ownership](iteration-0.28.0-cross-page-upload-rules.md).
 - CLI shared rules: [normalized paths and existing worker output](iteration-0.28.0-cli-shared-parsing-output.md).
 - Upload source handoff: [protected consumption, staged bytes and post-execution results](iteration-0.28.0-upload-source-handoff.md).
 - Editing render retry graph: [shared resolution, snapshot and cancellation fences](iteration-0.28.0-editing-render-retry-ownership.md).

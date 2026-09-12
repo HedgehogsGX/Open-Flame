@@ -357,7 +357,9 @@ stateDiagram-v2
    封面格式与平台规则也已集中，关闭了 Bilibili 竖图在备份中漏检的已复现分歧，见
    [封面所有权记录](../validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
    可以被预设保存成不定时的分歧也已修复，日期与文本/数值规则改为共同维护，见
-   [共享校验记录](../validation/iteration-0.28.0-workflow-shared-validation.md)。
+   [共享校验记录](../validation/iteration-0.28.0-workflow-shared-validation.md)。两页现在共同引用
+   `uploads.web_rules` 的纯文本、标签和排程函数；DOM、能力输入、确认与冻结锚点仍归页面。
+   strict/CSP、发行依赖与当前验证边界见[跨页纯规则记录](../validation/iteration-0.28.0-cross-page-upload-rules.md)。
    备份的公共文件操作已迁入独立 Module；测试入口与当前交接继续收尾。
    抽取前已修复复制失败删除非本次目标、descriptor 包装失败泄漏和关闭覆盖主异常的路径，见
    [备份文件所有权记录](../validation/iteration-0.28.0-backup-file-ownership.md)；两域现在共用公开
