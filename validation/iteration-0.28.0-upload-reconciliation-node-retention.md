@@ -41,6 +41,16 @@ CLI 为 14 个。
 候选 Upload HTML SHA-256：
 `6e7015c0fdd182243f963666a41d501ef4a64e8c4e4253359a74ea09567eb7c2`。
 
+## 发行清单补充复验（2026-09-13）
+
+`f51416d` 的源码发行预检失败为 `unlisted_documentation_link`：HANDOFF 和验证索引已引用
+本记录，但 `release-files.txt` 漏记它。已补齐这一项；预检通过，明确源码清单共 341 个文件，
+没有修改生产代码、测试文件或发行校验规则。现有 `test_release.py`、`test_release_wheel_smoke.py`
+与 `test_release_windows_smoke.py` 合计 **153 passed**。
+
+该增量的前后预检和原有回归记录位于 ignored `validation/local/release-f51416d/`。它证明当前
+发行清单的闭合与对应回归，不替代后续实际制品构建、独立安装或完整 hosted CI。
+
 ## CI 维护仍待批准
 
 原 `773dc5d` 完整诊断是 2,091 passed / 329 failed / 16 skipped / 1 collection error。
