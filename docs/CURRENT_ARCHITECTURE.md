@@ -323,6 +323,7 @@ stateDiagram-v2
 | Editing AI 重试图 | [`editing/service.py`](../src/video_download_control/editing/service.py) | 完整图校验由查询和项目取消共用；Workflow 只复核返回合同与独立冻结身份 |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
+| 备份文件操作 | [`backup_files.py`](../src/video_download_control/backup_files.py) | Download/Upload 使用公开路径、复制与 snapshot；各自保留事务、锁、格式、审计和恢复 |
 | Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 分责；日期/DST、时限、标签、分区与短标题共享纯判定，调用者保留 DOM 与冻结时间上下文 |
 | 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；禁止新增/修改 tracked tests |
 
@@ -354,10 +355,10 @@ stateDiagram-v2
    [封面所有权记录](../validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
    可以被预设保存成不定时的分歧也已修复，日期与文本/数值规则改为共同维护，见
    [共享校验记录](../validation/iteration-0.28.0-workflow-shared-validation.md)。
-   备份的公共文件操作与入口文档仍需收敛。
+   备份的公共文件操作已迁入独立 Module；测试入口与当前交接继续收尾。
    抽取前已修复复制失败删除非本次目标、descriptor 包装失败泄漏和关闭覆盖主异常的路径，见
-   [备份文件所有权记录](../validation/iteration-0.28.0-backup-file-ownership.md)；两个备份仍暂时共用
-   Download 备份文件里的实现，后续迁移保留各自事务、锁与格式。
+   [备份文件所有权记录](../validation/iteration-0.28.0-backup-file-ownership.md)；两域现在共用公开
+   `backup_files`，继续保留各自事务、锁与格式。
    Editing 复制现与备份共用 `managed_files` 的目标所有权清理，来源导入和成品登记的强制
    碰撞验证保留既有媒体，见[Editing 复制记录](../validation/iteration-0.28.0-editing-copy-ownership.md)。
    Upload 生命周期已移出 HTTP，由公开 UploadManager 接收 factory；未启动线程、启动后中断、
@@ -366,7 +367,9 @@ stateDiagram-v2
    孤儿路径，见[登记清理记录](../validation/iteration-0.28.0-editing-registration-cleanup.md)。
    备份锁与普通 reader 现共用公开 raw descriptor 交接；SQLite 每个连接取得后立即进入
    关闭范围，保留主异常并回收另一个连接，见[资源回收记录](../validation/iteration-0.28.0-backup-resource-handoff.md)。
-   公共备份文件操作的独立 Module 迁移仍待完成。
+   公共备份迁移删除 55 处跨域私有调用及 3 个浅结构，39 项故障反馈通过；旧 helper import
+   仍阻断标准测试收集，见[公共备份文件记录](../validation/iteration-0.28.0-public-backup-files.md)。
+   下一步集中 Editing render retry forest；保留 speech checkpoint 的更强缓存/授权合同。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake

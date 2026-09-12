@@ -26,7 +26,7 @@ from typing import Iterator, Mapping
 from uuid import uuid4
 
 from .. import __version__
-from .. import backup as _common
+from .. import backup_files
 from ..managed_files import fdopen_owned_binary
 from . import schema as _schema
 from .activity_lock import UploadActivityBusy, UploadActivityLease, activity_lock_path
@@ -74,7 +74,7 @@ _CONSISTENCY = (
     "exclusive_upload_activity_and_worker_plus_stable_sqlite_snapshot"
 )
 
-UploadBackupError = _common.BackupRestoreError
+UploadBackupError = backup_files.BackupRestoreError
 
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -179,13 +179,6 @@ class UploadRestoreResult:
     manifest_sha256: str
 
 
-@dataclass(frozen=True, slots=True)
-class _Entry:
-    path: str
-    size_bytes: int
-    sha256: str
-
-
 @contextmanager
 def _exclusive_upload_activity(root: Path) -> Iterator[None]:
     """Map a nonblocking exclusive activity conflict to the backup API."""
@@ -207,11 +200,11 @@ def create_upload_backup(
 ) -> UploadBackupResult:
     """Create one atomic backup while all upload mutation is quiescent."""
 
-    root_candidate = _common._require_existing_directory(
+    root_candidate = backup_files.require_existing_directory(
         source_root,
         label="upload source root",
     )
-    target_candidate = _common._require_new_target(
+    target_candidate = backup_files.require_new_target(
         backup_target,
         label="upload backup target",
     )
@@ -219,11 +212,11 @@ def create_upload_backup(
         raise UploadBackupError("upload backup target conflicts with activity lock")
     try:
         with _exclusive_upload_activity(root_candidate):
-            root = _common._require_existing_directory(
+            root = backup_files.require_existing_directory(
                 root_candidate,
                 label="upload source root",
             )
-            target = _common._require_new_target(
+            target = backup_files.require_new_target(
                 target_candidate,
                 label="upload backup target",
             )
@@ -231,7 +224,7 @@ def create_upload_backup(
                 raise UploadBackupError(
                     "upload backup target conflicts with activity lock"
                 )
-            if _common._paths_overlap(root, target):
+            if backup_files.paths_overlap(root, target):
                 raise UploadBackupError("upload backup target overlaps its source")
             with _exclusive_upload_worker(root):
                 return _create_upload_backup_locked(
@@ -253,24 +246,24 @@ def _create_upload_backup_locked(
 ) -> UploadBackupResult:
     """Create after the activity and worker leases have both been acquired."""
 
-    root = _common._require_existing_directory(source_root, label="upload source root")
-    database = _common._require_existing_regular_file(
+    root = backup_files.require_existing_directory(source_root, label="upload source root")
+    database = backup_files.require_existing_regular_file(
         root / UPLOAD_DATABASE_NAME,
         label="upload source database",
     )
-    media_root = _common._require_existing_directory(
+    media_root = backup_files.require_existing_directory(
         root / "media",
         label="upload media root",
     )
-    asset_root = _common._require_existing_directory(
+    asset_root = backup_files.require_existing_directory(
         root / "assets",
         label="upload asset root",
     )
-    target = _common._require_new_target(backup_target, label="upload backup target")
+    target = backup_files.require_new_target(backup_target, label="upload backup target")
     source_activity_path = activity_lock_path(root)
     if target == source_activity_path:
         raise UploadBackupError("upload backup target conflicts with activity lock")
-    if _common._paths_overlap(root, target):
+    if backup_files.paths_overlap(root, target):
         raise UploadBackupError("upload backup target overlaps its source")
 
     stage = target.parent / f".{target.name}.partial-{uuid4().hex}"
@@ -291,7 +284,7 @@ def _create_upload_backup_locked(
 
         _snapshot_upload_database(database, payload_database)
         payload_entries = [
-            _entry_for_file(
+            backup_files.entry_for_file(
                 payload_database,
                 relative_path=UPLOAD_DATABASE_PAYLOAD_PATH,
             )
@@ -338,9 +331,9 @@ def _create_upload_backup_locked(
             "restore_policy": _RESTORE_POLICY,
         }
         metadata_path = stage / UPLOAD_BACKUP_METADATA_NAME
-        _common._write_json_exclusive(metadata_path, metadata)
+        backup_files.write_json_exclusive(metadata_path, metadata)
         entries = [
-            _entry_for_file(
+            backup_files.entry_for_file(
                 metadata_path,
                 relative_path=UPLOAD_BACKUP_METADATA_NAME,
             ),
@@ -361,17 +354,17 @@ def _create_upload_backup_locked(
             ],
         }
         manifest_path = stage / UPLOAD_BACKUP_MANIFEST_NAME
-        _common._write_json_exclusive(manifest_path, manifest)
-        manifest_sha256 = _common._sha256_regular_file(manifest_path)
-        _common._write_text_exclusive(
+        backup_files.write_json_exclusive(manifest_path, manifest)
+        manifest_sha256 = backup_files.sha256_regular_file(manifest_path)
+        backup_files.write_text_exclusive(
             stage / UPLOAD_BACKUP_MANIFEST_HASH_NAME,
             manifest_sha256 + "\n",
         )
         _assert_no_windows_named_streams(stage)
-        _common._sync_tree(stage)
+        backup_files.sync_tree(stage)
         if os.path.lexists(target):
             raise UploadBackupError("upload backup target already exists")
-        _common._publish_directory(stage, target)
+        backup_files.publish_directory(stage, target)
         return UploadBackupResult(
             backup_root=target,
             schema_version=_schema.SCHEMA_VERSION,
@@ -386,7 +379,7 @@ def _create_upload_backup_locked(
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         raise UploadBackupError("upload backup operation failed") from exc
     finally:
-        _common._cleanup_stage(stage)
+        backup_files.cleanup_stage(stage)
 
 
 def restore_upload_backup(
@@ -396,17 +389,17 @@ def restore_upload_backup(
 ) -> UploadRestoreResult:
     """Verify and restore while exclusively reserving the new upload root."""
 
-    source_candidate = _common._require_existing_directory(
+    source_candidate = backup_files.require_existing_directory(
         backup_root,
         label="upload backup root",
     )
-    target_candidate = _common._require_new_target(
+    target_candidate = backup_files.require_new_target(
         restore_root,
         label="upload restore target",
     )
     source_activity_path = activity_lock_path(source_candidate)
     target_activity_path = activity_lock_path(target_candidate)
-    if _common._paths_overlap(source_candidate, target_candidate):
+    if backup_files.paths_overlap(source_candidate, target_candidate):
         raise UploadBackupError("upload restore target overlaps its backup")
     if (
         source_candidate == target_activity_path
@@ -415,11 +408,11 @@ def restore_upload_backup(
         raise UploadBackupError("upload restore path conflicts with activity lock")
     try:
         with _exclusive_upload_activity(target_candidate):
-            source = _common._require_existing_directory(
+            source = backup_files.require_existing_directory(
                 source_candidate,
                 label="upload backup root",
             )
-            target = _common._require_new_target(
+            target = backup_files.require_new_target(
                 target_candidate,
                 label="upload restore target",
             )
@@ -430,7 +423,7 @@ def restore_upload_backup(
                 raise UploadBackupError(
                     "upload restore path conflicts with activity lock"
                 )
-            if _common._paths_overlap(source, target):
+            if backup_files.paths_overlap(source, target):
                 raise UploadBackupError("upload restore target overlaps its backup")
             return _restore_upload_backup_locked(
                 backup_root=source,
@@ -451,13 +444,13 @@ def _restore_upload_backup_locked(
 ) -> UploadRestoreResult:
     """Restore after the destination activity lease has been acquired."""
 
-    source = _common._require_existing_directory(backup_root, label="upload backup root")
-    target = _common._require_new_target(restore_root, label="upload restore target")
+    source = backup_files.require_existing_directory(backup_root, label="upload backup root")
+    target = backup_files.require_new_target(restore_root, label="upload restore target")
     source_activity_path = activity_lock_path(source)
     target_activity_path = activity_lock_path(target)
     if source == target_activity_path or target == source_activity_path:
         raise UploadBackupError("upload restore path conflicts with activity lock")
-    if _common._paths_overlap(source, target):
+    if backup_files.paths_overlap(source, target):
         raise UploadBackupError("upload restore target overlaps its backup")
 
     stage = target.parent / f".{target.name}.partial-{uuid4().hex}"
@@ -510,7 +503,7 @@ def _restore_upload_backup_locked(
                 raise UploadBackupError("upload restore destination path collision")
             restored_paths.add(key)
             destination = stage / relative
-            digest, size = _copy_regular_file(
+            digest, size = backup_files.copy_regular_file(
                 source_file,
                 destination,
                 expected_size=entry.size_bytes,
@@ -553,10 +546,10 @@ def _restore_upload_backup_locked(
             asset_root=stage / "assets",
         )
         _assert_no_windows_named_streams(stage)
-        _common._sync_tree(stage)
+        backup_files.sync_tree(stage)
         if os.path.lexists(target):
             raise UploadBackupError("upload restore target already exists")
-        _common._publish_directory(stage, target)
+        backup_files.publish_directory(stage, target)
         return UploadRestoreResult(
             restore_root=target,
             database_path=target / UPLOAD_DATABASE_NAME,
@@ -572,7 +565,7 @@ def _restore_upload_backup_locked(
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         raise UploadBackupError("upload restore operation failed") from exc
     finally:
-        _common._cleanup_stage(stage)
+        backup_files.cleanup_stage(stage)
 
 
 @contextmanager
@@ -580,9 +573,9 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
     """Take the same lock byte/flock used by ``UploadService.start``."""
 
     path = root / UPLOAD_WORKER_LOCK_NAME
-    _common._assert_existing_ancestors_no_links(path.parent)
+    backup_files.assert_existing_ancestors_no_links(path.parent)
     try:
-        path = _common._require_existing_regular_file(
+        path = backup_files.require_existing_regular_file(
             path,
             label="upload worker lock",
         )
@@ -597,11 +590,11 @@ def _exclusive_upload_worker(root: Path) -> Iterator[None]:
     locked = False
     try:
         opened = os.fstat(handle.fileno())
-        current = _common._safe_lstat(path)
+        current = backup_files.safe_lstat(path)
         if (
             not stat.S_ISREG(opened.st_mode)
             or opened.st_nlink != 1
-            or _common._is_link_or_reparse(path, current)
+            or backup_files.is_link_or_reparse(path, current)
             or not _same_identity(opened, current)
             or opened.st_size != 1
         ):
@@ -655,7 +648,7 @@ def _snapshot_upload_database(source: Path, destination: Path) -> None:
                     time.sleep(_schema._SNAPSHOT_RETRY_SECONDS)
             _schema._validate_snapshot_wal(snapshot)
             _schema.validate_upload_schema(snapshot)
-            _common._sqlite_online_backup(snapshot, destination)
+            backup_files.sqlite_online_backup(snapshot, destination)
         _schema.validate_upload_schema(destination)
     except (_schema.UploadSchemaError, sqlite3.Error) as exc:
         raise UploadBackupError("upload database schema or snapshot is invalid") from exc
@@ -666,8 +659,8 @@ def _copy_registered_media(
     database_path: Path,
     source_media_root: Path,
     destination_media_root: Path,
-) -> list[_Entry]:
-    entries: list[_Entry] = []
+) -> list[backup_files.BackupFileEntry]:
+    entries: list[backup_files.BackupFileEntry] = []
     with _database(database_path) as db:
         rows = list(db.execute(
             "SELECT id,name,suffix,size,sha256,created_at,media_state,deleted_at "
@@ -686,13 +679,13 @@ def _copy_registered_media(
                 raise UploadBackupError("non-present upload media still exists")
             continue
         destination = destination_media_root / name
-        digest, size = _copy_regular_file(
+        digest, size = backup_files.copy_regular_file(
             source,
             destination,
             expected_size=row["size"],
             expected_sha256=row["sha256"],
         )
-        entries.append(_Entry(
+        entries.append(backup_files.BackupFileEntry(
             path=(UPLOAD_MEDIA_PAYLOAD_PREFIX / name).as_posix(),
             size_bytes=size,
             sha256=digest,
@@ -705,8 +698,8 @@ def _copy_registered_assets(
     database_path: Path,
     source_asset_root: Path,
     destination_asset_root: Path,
-) -> list[_Entry]:
-    entries: list[_Entry] = []
+) -> list[backup_files.BackupFileEntry]:
+    entries: list[backup_files.BackupFileEntry] = []
     with _database(database_path) as db:
         rows = list(db.execute(
             "SELECT id,kind,name,suffix,mime_type,size,sha256,width,height,created_at,"
@@ -725,14 +718,14 @@ def _copy_registered_assets(
                 raise UploadBackupError("non-present upload cover asset still exists")
             continue
         destination = destination_asset_root / name
-        digest, size = _copy_regular_file(
+        digest, size = backup_files.copy_regular_file(
             source,
             destination,
             expected_size=row["size"],
             expected_sha256=row["sha256"],
         )
         _verify_cover_asset_file(destination, row)
-        entries.append(_Entry(
+        entries.append(backup_files.BackupFileEntry(
             path=(UPLOAD_ASSET_PAYLOAD_PREFIX / name).as_posix(),
             size_bytes=size,
             sha256=digest,
@@ -754,11 +747,11 @@ def _audit_database_and_media(
         _schema._validated_schema_version(database_path, frozenset({version}))
     else:
         raise UploadBackupError("upload backup database schema is invalid")
-    _common._require_existing_directory(media_root, label="upload backup media root")
+    backup_files.require_existing_directory(media_root, label="upload backup media root")
     if version >= _schema._SCHEMA_V3_VERSION:
         if asset_root is None:
             raise UploadBackupError("upload backup asset root is missing")
-        _common._require_existing_directory(asset_root, label="upload backup asset root")
+        backup_files.require_existing_directory(asset_root, label="upload backup asset root")
     with _database(database_path) as db:
         rows = list(db.execute(
             "SELECT id,name,suffix,size,sha256,created_at,media_state,deleted_at "
@@ -778,7 +771,7 @@ def _audit_database_and_media(
         name = _validate_source_row(row)
         path = media_root / name
         if row["media_state"] == "present":
-            _common._verify_regular_file(
+            backup_files.verify_regular_file(
                 path,
                 expected_size=row["size"],
                 expected_sha256=row["sha256"],
@@ -789,8 +782,8 @@ def _audit_database_and_media(
     actual: set[str] = set()
     for entry in os.scandir(media_root):
         path = Path(entry.path)
-        info = _common._safe_lstat(path)
-        if _common._is_link_or_reparse(path, info) or not stat.S_ISREG(info.st_mode):
+        info = backup_files.safe_lstat(path)
+        if backup_files.is_link_or_reparse(path, info) or not stat.S_ISREG(info.st_mode):
             raise UploadBackupError("upload backup media contains an unsafe entry")
         key = entry.name.casefold()
         if key in actual:
@@ -805,7 +798,7 @@ def _audit_database_and_media(
         name = _validate_asset_row(row)
         path = asset_root / name
         if row["media_state"] == "present":
-            _common._verify_regular_file(
+            backup_files.verify_regular_file(
                 path,
                 expected_size=row["size"],
                 expected_sha256=row["sha256"],
@@ -817,8 +810,8 @@ def _audit_database_and_media(
     actual_assets: set[str] = set()
     for entry in os.scandir(asset_root):
         path = Path(entry.path)
-        info = _common._safe_lstat(path)
-        if _common._is_link_or_reparse(path, info) or not stat.S_ISREG(info.st_mode):
+        info = backup_files.safe_lstat(path)
+        if backup_files.is_link_or_reparse(path, info) or not stat.S_ISREG(info.st_mode):
             raise UploadBackupError("upload backup assets contain an unsafe entry")
         key = entry.name.casefold()
         if key in actual_assets:
@@ -903,7 +896,7 @@ def _validate_asset_row(row: sqlite3.Row) -> str:
 
 def _verify_cover_asset_file(path: Path, row: sqlite3.Row) -> None:
     try:
-        payload = _common._read_bounded_regular_file(path, MAX_COVER_BYTES + 1)
+        payload = backup_files.read_bounded_regular_file(path, MAX_COVER_BYTES + 1)
         mime_type, width, height = cover_metadata(payload, row["suffix"])
     except (UploadError, OSError) as exc:
         raise UploadBackupError("upload cover asset content is invalid") from exc
@@ -1086,12 +1079,12 @@ def _mark_current_missing_receipts(
 
 def _load_and_verify_backup(
     root: Path,
-) -> tuple[str, tuple[_Entry, ...], Mapping[str, object]]:
+) -> tuple[str, tuple[backup_files.BackupFileEntry, ...], Mapping[str, object]]:
     _assert_no_windows_named_streams(root)
     hash_path = root / UPLOAD_BACKUP_MANIFEST_HASH_NAME
     manifest_path = root / UPLOAD_BACKUP_MANIFEST_NAME
     try:
-        hash_text = _common._read_bounded_regular_file(hash_path, 128).decode(
+        hash_text = backup_files.read_bounded_regular_file(hash_path, 128).decode(
             "ascii", errors="strict"
         )
     except UnicodeDecodeError as exc:
@@ -1099,9 +1092,9 @@ def _load_and_verify_backup(
     if re.fullmatch(r"[0-9a-f]{64}\n", hash_text) is None:
         raise UploadBackupError("upload manifest hash record is invalid")
     expected_hash = hash_text.strip()
-    if _common._sha256_regular_file(manifest_path) != expected_hash:
+    if backup_files.sha256_regular_file(manifest_path) != expected_hash:
         raise UploadBackupError("upload manifest hash mismatch")
-    manifest = _common._read_json_mapping(manifest_path, MAX_MANIFEST_BYTES)
+    manifest = backup_files.read_json_mapping(manifest_path, MAX_MANIFEST_BYTES)
     format_version = manifest.get("format_version")
     if (
         set(manifest) != _MANIFEST_KEYS
@@ -1115,12 +1108,12 @@ def _load_and_verify_backup(
     raw_entries = manifest["entries"]
     if not isinstance(raw_entries, list) or not 1 <= len(raw_entries) <= MAX_BACKUP_ENTRIES:
         raise UploadBackupError("upload manifest entry count is invalid")
-    entries: list[_Entry] = []
+    entries: list[backup_files.BackupFileEntry] = []
     seen: set[str] = set()
     for raw in raw_entries:
         if not isinstance(raw, dict) or set(raw) != {"path", "sha256", "size_bytes"}:
             raise UploadBackupError("upload manifest entry is invalid")
-        relative = _common._validated_relative_path(raw["path"])
+        relative = backup_files.validated_relative_path(raw["path"])
         _validate_manifest_entry_path(relative, format_version=format_version)
         size = raw["size_bytes"]
         digest = raw["sha256"]
@@ -1137,12 +1130,12 @@ def _load_and_verify_backup(
             raise UploadBackupError("upload manifest paths collide")
         seen.add(key)
         candidate = root.joinpath(*PurePosixPath(relative).parts)
-        _common._verify_regular_file(
+        backup_files.verify_regular_file(
             candidate,
             expected_size=size,
             expected_sha256=digest,
         )
-        entries.append(_Entry(relative, size, digest))
+        entries.append(backup_files.BackupFileEntry(relative, size, digest))
     if entries != sorted(entries, key=lambda entry: entry.path.casefold()):
         raise UploadBackupError("upload manifest entries are not canonical")
     expected_files = {
@@ -1150,7 +1143,7 @@ def _load_and_verify_backup(
         UPLOAD_BACKUP_MANIFEST_NAME.casefold(),
         UPLOAD_BACKUP_MANIFEST_HASH_NAME.casefold(),
     }
-    actual_paths = _common._scan_backup_files(root)
+    actual_paths = backup_files.scan_backup_files(root)
     actual_files = {path.casefold() for path in actual_paths}
     if len(actual_files) != len(actual_paths):
         raise UploadBackupError("upload backup paths collide")
@@ -1162,7 +1155,7 @@ def _load_and_verify_backup(
     )
     if metadata_entry is None:
         raise UploadBackupError("upload backup metadata is not covered by its manifest")
-    metadata = _common._read_json_mapping(
+    metadata = backup_files.read_json_mapping(
         root / UPLOAD_BACKUP_METADATA_NAME,
         MAX_METADATA_BYTES,
     )
@@ -1180,8 +1173,8 @@ def _assert_no_windows_named_streams(root: Path) -> None:
         _assert_windows_path_has_only_default_stream(directory)
         for entry in os.scandir(directory):
             path = Path(entry.path)
-            info = _common._safe_lstat(path)
-            if _common._is_link_or_reparse(path, info):
+            info = backup_files.safe_lstat(path)
+            if backup_files.is_link_or_reparse(path, info):
                 raise UploadBackupError("upload backup contains a link or reparse point")
             _assert_windows_path_has_only_default_stream(path)
             if stat.S_ISDIR(info.st_mode):
@@ -1245,7 +1238,7 @@ def _assert_windows_path_has_only_default_stream(path: Path) -> None:
 
 def _validate_metadata(
     metadata: Mapping[str, object],
-    entries: list[_Entry],
+    entries: list[backup_files.BackupFileEntry],
     *,
     format_version: int,
 ) -> None:
@@ -2097,11 +2090,6 @@ def _request_digest_v2(payload: Mapping[str, object]) -> str:
     ).hexdigest()
 
 
-def _entry_for_file(path: Path, *, relative_path: str) -> _Entry:
-    entry = _common._entry_for_file(path, relative_path=relative_path)
-    return _Entry(entry.path, entry.size_bytes, entry.sha256)
-
-
 def _validate_manifest_entry_path(relative: str, *, format_version: int) -> None:
     if relative in {UPLOAD_BACKUP_METADATA_NAME, UPLOAD_DATABASE_PAYLOAD_PATH}:
         return
@@ -2132,21 +2120,6 @@ def _validate_manifest_entry_path(relative: str, *, format_version: int) -> None
     suffix = PurePosixPath(name).suffix
     if suffix not in _SUFFIXES or _ID.fullmatch(name.removesuffix(suffix)) is None:
         raise UploadBackupError("upload backup media path is invalid")
-
-
-def _copy_regular_file(
-    source: Path,
-    destination: Path,
-    *,
-    expected_size: int | None = None,
-    expected_sha256: str | None = None,
-) -> tuple[str, int]:
-    return _common._copy_regular_file(
-        source,
-        destination,
-        expected_size=expected_size,
-        expected_sha256=expected_sha256,
-    )
 
 
 def _same_identity(first: os.stat_result, second: os.stat_result) -> bool:

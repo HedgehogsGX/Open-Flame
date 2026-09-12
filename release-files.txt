@@ -98,6 +98,7 @@ src/video_download_control/adapters/yt_dlp_contract.py
 src/video_download_control/api.py
 src/video_download_control/assets.py
 src/video_download_control/backup.py
+src/video_download_control/backup_files.py
 src/video_download_control/backup_cli.py
 src/video_download_control/build_identity.py
 src/video_download_control/candidate_cookies.py
@@ -332,4 +333,5 @@ validation/iteration-0.28.0-editing-copy-ownership.md
 validation/iteration-0.28.0-upload-manager-ownership.md
 validation/iteration-0.28.0-editing-registration-cleanup.md
 validation/iteration-0.28.0-backup-resource-handoff.md
+validation/iteration-0.28.0-public-backup-files.md
 validation/iteration-0.28.0-workflow-request-construction.md

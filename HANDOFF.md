@@ -13,11 +13,11 @@
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
-统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续仍须完成公共备份文件操作、
+统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续仍须完成剩余规则收敛、
 完整测试维护及四格 hosted CI 验证。
 Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
 备份复制的目标所有权、三个读取入口的 descriptor 交接及关闭失败保留主异常已修复，
-公共备份文件操作的迁移仍待完成。
+公共备份文件操作现由两域共同使用独立 `backup_files` Module。
 Editing 复制也已补齐目标创建权与失败清理，并与备份共用受管文件清理规则，见
 [复制所有权记录](validation/iteration-0.28.0-editing-copy-ownership.md)。Upload 生命周期已移到
 公开 UploadManager，由 HTTP、Workflow 与退出清理共用；启动回滚、恢复/关闭竞争及系统锁
@@ -25,7 +25,9 @@ Editing 复制也已补齐目标创建权与失败清理，并与备份共用受
 Editing 成品元数据校验已前移，复制后立即登记清理责任，见
 [成品登记清理](validation/iteration-0.28.0-editing-registration-cleanup.md)。备份锁 descriptor
 与 SQLite 连接交接也已补齐，见[资源回收记录](validation/iteration-0.28.0-backup-resource-handoff.md)。
-接下来迁移公共备份文件职责，再完成剩余规则、文档和完整 CI 维护。
+公共备份迁移、39 项故障反馈及当前测试入口阻断见
+[公共备份文件记录](validation/iteration-0.28.0-public-backup-files.md)。下一步收敛 Editing
+render 重试树，再完成跨页规则、CLI、当前文档和完整 CI 维护。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -145,6 +147,7 @@ Editing 成品元数据校验已前移，复制后立即登记清理责任，见
 | AI 重试图所有权 | [Editing 统一校验与取消事务](validation/iteration-0.28.0-editing-ai-retry-ownership.md) |
 | Workflow 重试与取消 | [共用结果应用和取消尾段](validation/iteration-0.28.0-workflow-retry-cancel-tails.md) |
 | 备份文件所有权 | [复制目标与 descriptor 失败清理](validation/iteration-0.28.0-backup-file-ownership.md) |
+| 公共备份文件操作 | [公开 Module、领域策略与测试迁移缺口](validation/iteration-0.28.0-public-backup-files.md) |
 | 表单校验与日期意图 | [Workflow 共享校验](validation/iteration-0.28.0-workflow-shared-validation.md) |
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
@@ -174,19 +177,14 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
    2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **完整 CI 尚未恢复。** 2026-09-12 查询的 main run `34616910953` 四格失败于提交范围
-   门禁；不要沿用旧记录“最新 main 已进入 pytest”的说法。本分支起点 `d481326` 的本地
-   CPython 3.13.14 完整基线为 **229 failed、2213 passed、16 skipped，447.85 秒**，包括
-   HTTP、旧 Schema/回执、版本及 UI fixture 漂移。Worker 分责后的旧 local CLI 文件还有
-   13 个内部接口迁移失败；只改变引用位置的 ignored 草案为 24 passed。用户尚未批准 tracked
-   tests 维护例外，当前不能删除断言、排除测试或放宽生产安全合同来声称绿色。Download 读取
-   分责后另有两项响应用例仍指向旧 `api.tempfile`；只迁移定位的 ignored 副本六项通过，
-   不能替代 tracked suite。2026-09-12 的 clean `36cfb56` 完整回归为 2197 passed、245 failed、
-   16 skipped；封面切片工作区为 2194 passed、248 failed、16 skipped，新增三项旧封面内部
-   patch 位置失败。`36cfb56` hosted run `34680878428` 四格均失败于 offline pytest。完整失败
-   原因仍须逐类诊断；后续 clean `e4e84fd` hosted run `34683683053` 也已失败。
-   前端校验切片的 193 项现有局部回归与生产页面验证见独立记录；最新远端和本地结果按
-   精确源码分别核对，不能合并成完整通过。
+4. **完整 CI 尚未恢复。** 公共备份文件迁移后，标准 pytest 被旧私有 helper import
+   阻断：1 collection error。仅供诊断的继续收集运行得到 2170 passed、250 failed、
+   16 skipped、1 error；原 248 个失败 ID 全保留，新增两项仍注入已删除的私有入口。
+   22 个 Download backup 用例没有收集。只迁移 import/patch 目标的 ignored 副本为
+   151 passed、7 个旧 Schema 假设失败，不能替代 tracked tests。当前 `936d8ab` hosted
+   run `34689817723` 四格均在 offline pytest 失败；它不含之后的未提交迁移。
+   用户尚未批准测试维护例外；完整失败仍须逐类关闭，不能删除断言、排除测试或放宽
+   生产合同来声称绿色。精确范围见[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -206,7 +204,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，处理公共备份文件操作与最终发行
+1. 继续当前架构重置目标，处理 Editing render 重试树、跨页纯规则、CLI 支持与最终发行
    文档。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标
    不能缩成局部通过或文档审查。
    临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。
