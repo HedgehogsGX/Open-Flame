@@ -106,7 +106,8 @@ from .toolchain import inspect_toolchain
 from .ui_assets import page_content_security_policy, ui_asset
 from .uploads.activity_lock import UploadActivityLease
 from .uploads.api import install_upload_routes
-from .uploads.service import default_upload_root
+from .uploads.manager import UploadManager
+from .uploads.service import UploadService, default_upload_root
 from .web import INDEX_HTML
 from .workflows.api import install_workflow_routes
 from .workflows.contracts import WorkflowError
@@ -687,8 +688,14 @@ def create_app(
             status_code = 404 if exc.code in {"asset_not_found", "asset_not_ready"} else 409
             raise HTTPException(status_code=status_code, detail=exc.code) from None
 
+    app.state.upload_service_factory = UploadService
+    upload_manager = UploadManager(
+        default_upload_root(resolved_settings.data_root),
+        service_factory=lambda root: app.state.upload_service_factory(root),
+    )
+    app.state.upload_manager = upload_manager
     install_upload_routes(
-        app, data_root=resolved_settings.data_root,
+        app, manager=upload_manager,
         original_asset_resolver=upload_original_asset,
         edited_output_resolver=upload_edited_output,
         edited_cover_resolver=upload_edited_cover,
@@ -697,7 +704,7 @@ def create_app(
     workflow_adapter = LocalWorkflowAdapter(
         batch_service=service,
         editing_manager=editing_manager,
-        upload_manager=app.state.upload_manager,
+        upload_manager=upload_manager,
         download_asset_resolver=upload_original_asset,
         download_caption_resolver=workflow_download_caption,
         download_cover_resolver=workflow_download_cover,

@@ -8,7 +8,6 @@ import re
 import sqlite3
 import tempfile
 from pathlib import Path
-from threading import RLock
 from typing import Annotated, Callable, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
@@ -19,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
 from .contracts import UploadError
+from .manager import UploadManager
 from .web import UPLOAD_HTML
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
@@ -391,68 +391,17 @@ def _safe_error(exc: UploadError) -> HTTPException:
     return HTTPException(status_code=404 if code.endswith("not_found") else 409, detail=code)
 
 
-def _default_factory(root: Path):
-    from .service import UploadService
-    return UploadService(root)
-
-
-class _LazyUploads:
-    def __init__(self, app: FastAPI, root: Path):
-        self.app, self.root = app, root
-        self.lock = RLock()
-        self.service = None
-        self.closed = False
-
-    def get(self):
-        with self.lock:
-            if self.closed:
-                raise UploadError("uploader_stopped")
-            if self.service is None:
-                candidate = self.app.state.upload_service_factory(self.root)
-                try:
-                    candidate.start()
-                except BaseException:
-                    candidate.stop()
-                    raise
-                self.service = candidate
-            return self.service
-
-    def stop(self):
-        with self.lock:
-            self.closed = True
-            current = self.service
-        if current is not None:
-            current.stop()
-
-    def recover(self):
-        with self.lock:
-            if self.closed:
-                raise UploadError("uploader_stopped")
-            current = self.service
-        if current is None:
-            current = self.get()
-        else:
-            try:
-                current.start()
-            except UploadError:
-                raise
-            except Exception:
-                raise UploadError("scheduler_recovery_failed") from None
-        return current.status()
-
-
 def install_upload_routes(
     app: FastAPI,
     *,
-    data_root: Path,
+    manager: UploadManager,
     original_asset_resolver: Callable[[str], tuple[Path, str]] | None = None,
     edited_output_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
     edited_cover_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
     downloaded_cover_resolver: Callable[[str], tuple[Path, str, str]] | None = None,
 ) -> None:
     """Install routes without touching upload directories, workers or accounts."""
-    root = data_root.with_name(data_root.name + "-uploads")
-    manager = _LazyUploads(app, root)
+    root = manager.root
     nonce = install_local_http_guard(
         app,
         protects_path=lambda path: path == "/uploads"
@@ -462,9 +411,6 @@ def install_upload_routes(
         requires_csrf=lambda method, path: method not in {"GET", "HEAD"}
         or path.endswith("/qr"),
     )
-    app.state.upload_service_factory = _default_factory
-    app.state.upload_manager = manager
-
     async def run_guarded(work):
         try:
             return await run_in_threadpool(work)

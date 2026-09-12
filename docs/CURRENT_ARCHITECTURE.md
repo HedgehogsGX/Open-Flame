@@ -34,7 +34,7 @@ flowchart TB
         API["FastAPI control plane<br/>共享静态资源与域独立 API"]
         DownloadService["Download<br/>BatchService + Repository"]
         Editing["EditingManager<br/>render / AI worker thread"]
-        Upload["Upload service manager<br/>serial scheduler thread"]
+        Upload["UploadManager<br/>serial scheduler thread"]
         Workflow["WorkflowManager<br/>bounded reconciler thread"]
         Adapter["LocalWorkflowAdapter<br/>窄跨域适配"]
         API --> DownloadService
@@ -97,7 +97,7 @@ LocalApp 下载在操作者显式启用网络后使用 direct mode。架构图�
 | --- | --- | --- | --- |
 | `/` 与 `/api/v1/*` | [`api.py`](../src/video_download_control/api.py)、[`web.py`](../src/video_download_control/web.py) | control process + 独立 download worker | URL/批次、队列、来源发现、下载任务、ready assets、能力证据 |
 | `/edits` 与 `/api/v1/edits/*` | [`editing/api.py`](../src/video_download_control/editing/api.py)、[`editing/web.py`](../src/video_download_control/editing/web.py) | [`EditingManager`](../src/video_download_control/editing/manager.py) | 非破坏草稿、timeline 审核、AI task、render plan、成品与封面 |
-| `/uploads` 与 `/api/v1/uploads/*` | [`uploads/api.py`](../src/video_download_control/uploads/api.py)、[`uploads/web.py`](../src/video_download_control/uploads/web.py) | Upload service manager / [`UploadService`](../src/video_download_control/uploads/service.py) | 账号 session、受管视频/封面、投稿参数、确认、串行上传、attempt receipt |
+| `/uploads` 与 `/api/v1/uploads/*` | [`uploads/api.py`](../src/video_download_control/uploads/api.py)、[`uploads/web.py`](../src/video_download_control/uploads/web.py) | [`UploadManager`](../src/video_download_control/uploads/manager.py) / [`UploadService`](../src/video_download_control/uploads/service.py) | 账号 session、受管视频/封面、投稿参数、确认、串行上传、attempt receipt |
 | `/workflows` 与 `/api/v1/workflows/*` | [`workflows/api.py`](../src/video_download_control/workflows/api.py)、[`workflows/web.py`](../src/video_download_control/workflows/web.py) | [`WorkflowManager`](../src/video_download_control/workflows/manager.py) | 跨域编排、预设、checkpoint、恢复、取消和 attention |
 
 四页使用 [`open-flame.css`](../src/video_download_control/static/open-flame.css) 与
@@ -114,7 +114,7 @@ LocalApp 下载在操作者显式启用网络后使用 direct mode。架构图�
 | FastAPI control | 独立 child process | Uvicorn 在继承的 loopback listener 上先进入 ready；supervisor 随后核对 child 身份并汇总整体 ready，再向操作者报告可用 |
 | Download Worker | 独立 child process | preflight/recovery 可先读取 Download DB；持久 claim gate 只原子允许或阻止新的 `claim_next`；两个执行 slot 负责 probe/download/verify/commit，DB 同时限制全局最多 2 个、每平台最多 1 个 active job |
 | EditingManager | control 内 lazy worker thread | 单 owner；串行取得任务并协调本地 FFmpeg 与 AI child，持有 Editing activity lease |
-| UploadService | control 内 scheduler thread | 全局串行领取 login/upload operation；另用有界 cancellation monitor，worker lock 阻止第二 owner |
+| UploadManager / UploadService | control 内 lazy scheduler thread | 应用组装唯一 manager，HTTP/Workflow/退出共用；恢复与关闭串行化，全局串行领取 login/upload operation，有界 cancellation monitor 与 worker lock 保持执行所有权 |
 | WorkflowManager | control 内 reconciler thread | 分页扫描 active workflow，有界退避；通过 LocalWorkflowAdapter 逐域观察和推进 |
 | AI / Upload bridge | 受各 manager 启动的 child process/runtime | 使用固定 manifest、最小环境与超时；不成为独立常驻业务服务 |
 
@@ -319,6 +319,7 @@ stateDiagram-v2
 | Download 素材读取 | [`download_assets.py`](../src/video_download_control/download_assets.py) | 登记文件、安全读取、snapshot 和跨域素材引用脱离 HTTP；API 保留响应与错误映射 |
 | Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类集中；service 内上传重试前后的成功/等待结果共用一处应用，重试权限保持显式 |
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
+| Upload 生命周期 | [`uploads/manager.py`](../src/video_download_control/uploads/manager.py) | 应用统一注入 owner，HTTP/Workflow/退出共用；启动、恢复、关闭及锁交接有当前验证 |
 | Editing AI 重试图 | [`editing/service.py`](../src/video_download_control/editing/service.py) | 完整图校验由查询和项目取消共用；Workflow 只复核返回合同与独立冻结身份 |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
@@ -359,7 +360,10 @@ stateDiagram-v2
    Download 备份文件里的实现，后续迁移保留各自事务、锁与格式。
    Editing 复制现与备份共用 `managed_files` 的目标所有权清理，来源导入和成品登记的强制
    碰撞验证保留既有媒体，见[Editing 复制记录](../validation/iteration-0.28.0-editing-copy-ownership.md)。
-   Upload 首次线程启动失败后清理遮盖主异常的问题仍待修复；生命周期 owner 还在 HTTP 文件中。
+   Upload 生命周期已移出 HTTP，由公开 UploadManager 接收 factory；未启动线程、启动后中断、
+   recover/stop 竞争和系统锁交接均已验证，见[生命周期记录](../validation/iteration-0.28.0-upload-manager-ownership.md)。
+   Editing 复制后、登记清单建立前的元数据失败仍会留下孤儿；备份锁 descriptor 包装与第二个
+   SQLite 连接失败的回收同样待补齐，再迁移公共备份文件操作。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake

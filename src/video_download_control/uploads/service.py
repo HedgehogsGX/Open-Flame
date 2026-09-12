@@ -29,6 +29,7 @@ from ..managed_files import (
     ManagedFileChanged,
     ManagedFileSizeExceeded,
     UnsafeManagedPath,
+    close_binary_on_error,
     file_signature,
     hash_open_binary,
     lstat_plain,
@@ -159,20 +160,20 @@ class _SchedulerLock:
             _plain(self.path)
         handle = self.path.open("a+b")
         try:
-            if os.name == "nt":
-                import msvcrt
-                if handle.seek(0, os.SEEK_END) == 0:
-                    handle.write(b"0")
-                    handle.flush()
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with close_binary_on_error(handle):
+                if os.name == "nt":
+                    import msvcrt
+                    if handle.seek(0, os.SEEK_END) == 0:
+                        handle.write(b"0")
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.handle = handle
         except OSError:
-            handle.close()
             return False
-        self.handle = handle
         return True
 
     def release(self) -> None:
@@ -375,6 +376,7 @@ class UploadService:
                     self._scheduler_state = "standby"
                     self._scheduler_code = "scheduler_owned_by_other_instance"
                     return  # Another application owns execution; read/queue still work.
+                thread: threading.Thread | None = None
                 try:
                     was_faulted = self._scheduler_state == "faulted"
                     self._login_presentations.clear()
@@ -383,14 +385,22 @@ class UploadService:
                     self._shutdown.clear()
                     self._scheduler_state = "running"
                     self._scheduler_code = "scheduler_recovered" if was_faulted else ""
-                    self._thread = threading.Thread(target=self._run, name="open-flame-uploads", daemon=True)
-                    self._thread.start()
+                    thread = threading.Thread(target=self._run, name="open-flame-uploads", daemon=True)
+                    self._thread = thread
+                    thread.start()
                 except BaseException as exc:
                     self._scheduler_state = "faulted"
                     self._scheduler_code = ("scheduler_database_unavailable"
                                             if isinstance(exc, sqlite3.Error) else "scheduler_failed")
-                    self._lock.release()
-                    self._release_lifetime_activity()
+                    self._shutdown.set()
+                    self._operation_stop.set()
+                    self._wake.set()
+                    if thread is None or thread.ident is None:
+                        self._thread = None
+                        self._lock.release()
+                        self._release_lifetime_activity()
+                    # A launched worker owns its locks until _run exits. An
+                    # interrupt after start must not release them underneath it.
                     raise
         finally:
             if candidate is not None:
