@@ -35,14 +35,27 @@ class WorkflowManager:
             if self._stop.is_set():
                 raise WorkflowError("workflow_manager_stopped")
             if self._service is None:
-                self._service = WorkflowService(self.root, self.adapter)
-                self._worker_active = True
-                self._thread = Thread(
-                    target=self._worker,
-                    name="open-flame-workflow-worker",
-                    daemon=True,
-                )
-                self._thread.start()
+                service = WorkflowService(self.root, self.adapter)
+                try:
+                    thread = Thread(
+                        target=self._worker,
+                        name="open-flame-workflow-worker",
+                        daemon=True,
+                    )
+                    self._service = service
+                    self._thread = thread
+                    self._worker_active = True
+                    thread.start()
+                except BaseException:
+                    # A failed launch must not publish an owner with no worker.
+                    # Keep ownership if an interrupt arrived after the thread
+                    # actually started; clearing it could create a second owner.
+                    if self._thread is None or self._thread.ident is None:
+                        self._service = None
+                        self._thread = None
+                        self._worker_active = False
+                    self._changed.notify_all()
+                    raise
             return self._service
 
     def invoke(self, method: str, *args, **kwargs):
