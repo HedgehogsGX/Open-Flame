@@ -60,6 +60,7 @@ from .editing.timeline import MAX_SUBTITLE_BYTES
 from .importers import MAX_IMPORT_BYTES, BatchImportError, parse_batch_file
 from .local_http_guard import install_local_http_guard
 from .local_short_links import LocalDirectShortLinkTransport
+from .managed_files import close_binary_on_error
 from .observability import collect_metrics
 from .repository import BatchRepository
 from .runtime_logging import RuntimeLogConfig, RuntimeLogger, safe_exception_type
@@ -695,7 +696,7 @@ def _registered_auxiliary_payload(
         max_size=_AUXILIARY_SPOOL_MEMORY_BYTES,
         mode="w+b",
     )
-    try:
+    with close_binary_on_error(spool):
         digest = hashlib.sha256()
         total_bytes = 0
         with resolved.open("rb") as handle:
@@ -725,19 +726,15 @@ def _registered_auxiliary_payload(
             raise ValueError("registered artifact content is invalid")
         spool.seek(0)
         return spool, total_bytes, expected_mime, suffix
-    except BaseException:
-        spool.close()
-        raise
 
 
 def _stream_auxiliary_payload(handle: BinaryIO) -> Iterator[bytes]:
     """Stream verified bytes and always release a rolled temporary file."""
 
-    try:
+    with close_binary_on_error(handle):
         while chunk := handle.read(_VERIFIED_STREAM_CHUNK_BYTES):
             yield chunk
-    finally:
-        handle.close()
+    handle.close()
 
 
 class _VerifiedAuxiliaryStreamingResponse(StreamingResponse):
@@ -752,7 +749,7 @@ class _VerifiedAuxiliaryStreamingResponse(StreamingResponse):
         filename: str,
     ) -> None:
         self._verified_handle = handle
-        try:
+        with close_binary_on_error(handle):
             super().__init__(
                 _stream_auxiliary_payload(handle),
                 media_type=media_type,
@@ -763,15 +760,11 @@ class _VerifiedAuxiliaryStreamingResponse(StreamingResponse):
                     "Content-Disposition": f'attachment; filename="{filename}"',
                 },
             )
-        except BaseException:
-            handle.close()
-            raise
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        try:
+        with close_binary_on_error(self._verified_handle):
             await super().__call__(scope, receive, send)
-        finally:
-            self._verified_handle.close()
+        self._verified_handle.close()
 
 
 def _configured_short_link_resolver(

@@ -292,3 +292,4 @@ src/video_download_control/candidate_worker.py
 src/video_download_control/worker_cli_support.py
 validation/iteration-0.28.0-worker-entry-boundary.md
 validation/iteration-0.28.0-upload-receipt-contract.md
+validation/iteration-0.28.0-auxiliary-cleanup-errors.md
