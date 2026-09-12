@@ -29,7 +29,7 @@ from uuid import uuid4
 
 from . import __version__
 from .database import SCHEMA_VERSION, Database
-from .managed_files import close_binary_on_error
+from .managed_files import close_binary_on_error, discard_created_file
 from .graph import (
     GraphValidationError,
     XPostIdentity,
@@ -1273,22 +1273,6 @@ def _owned_binary_reader(descriptor: int) -> Iterator[BinaryIO]:
     handle.close()
 
 
-def _discard_created_copy(path: Path, created: os.stat_result | None) -> None:
-    """Best-effort failure cleanup, restricted to the file this copy created."""
-
-    if created is None:
-        return
-    with suppress(BaseException):
-        current = path.lstat()
-        if (
-            stat.S_ISREG(current.st_mode)
-            and current.st_nlink == 1
-            and not _is_link_or_reparse(path, current)
-            and _same_path_identity(created, current)
-        ):
-            path.unlink()
-
-
 def _copy_regular_file(
     source: Path,
     destination: Path,
@@ -1344,13 +1328,13 @@ def _copy_regular_file(
             raise BackupRestoreError("copy source hash mismatch")
         return value, copied
     except BackupRestoreError:
-        _discard_created_copy(destination, created)
+        discard_created_file(destination, created)
         raise
     except OSError as exc:
-        _discard_created_copy(destination, created)
+        discard_created_file(destination, created)
         raise BackupRestoreError("file copy failed") from exc
     except BaseException:
-        _discard_created_copy(destination, created)
+        discard_created_file(destination, created)
         raise
 
 

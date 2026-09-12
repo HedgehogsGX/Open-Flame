@@ -20,6 +20,7 @@ from ..managed_files import (
     ManagedFileSizeExceeded,
     UnsafeManagedPath,
     close_binary_on_error,
+    discard_created_file,
     file_signature,
     hash_open_binary,
     lstat_plain,
@@ -3507,28 +3508,36 @@ class EditingService:
         if usage.free < before.st_size + EDITING_RESERVE_BYTES:
             raise EditingError("editing_storage_full")
         digest = hashlib.sha256()
+        created: os.stat_result | None = None
         try:
-            with source.open("rb") as reader, destination.open("xb") as writer:
-                opened = os.fstat(reader.fileno())
-                if file_signature(opened) != file_signature(before):
-                    raise EditingError("editing_media_changed")
-                while chunk := reader.read(1024 * 1024):
-                    digest.update(chunk)
-                    writer.write(chunk)
-                writer.flush()
-                os.fsync(writer.fileno())
-                after_handle = os.fstat(reader.fileno())
+            reader = source.open("rb")
+            with close_binary_on_error(reader):
+                writer = destination.open("xb")
+                with close_binary_on_error(writer):
+                    created = os.fstat(writer.fileno())
+                    opened = os.fstat(reader.fileno())
+                    if file_signature(opened) != file_signature(before):
+                        raise EditingError("editing_media_changed")
+                    while chunk := reader.read(1024 * 1024):
+                        digest.update(chunk)
+                        writer.write(chunk)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                    after_handle = os.fstat(reader.fileno())
+                writer.close()
+            reader.close()
             after = _plain(source)
             copied = _plain(destination)
-        except Exception:
-            self._discard_unregistered_file(destination)
+            if (file_signature(after_handle) != file_signature(before)
+                    or file_signature(after) != file_signature(before)
+                    or copied.st_size != before.st_size
+                    or copied.st_dev != created.st_dev
+                    or copied.st_ino != created.st_ino):
+                raise EditingError("editing_media_changed")
+            return before.st_size, digest.hexdigest()
+        except BaseException:
+            discard_created_file(destination, created)
             raise
-        if (file_signature(after_handle) != file_signature(before)
-                or file_signature(after) != file_signature(before)
-                or copied.st_size != before.st_size):
-            self._discard_unregistered_file(destination)
-            raise EditingError("editing_media_changed")
-        return before.st_size, digest.hexdigest()
 
     @staticmethod
     def _discard_unregistered_file(path: Path) -> None:

@@ -1,8 +1,8 @@
 """Small identity and lstat checks for managed filesystem entries.
 
-Callers keep ownership of domain limits, error mapping, and transactional
-cleanup. Path I/O here is limited to non-following `lstat` and a binary open
-whose handle transfers only after its first identity check.
+Callers keep ownership of domain limits, error mapping, and transactions.
+File helpers preserve handle ownership and restrict failed-copy cleanup to
+the plain entry created by that operation.
 """
 from __future__ import annotations
 
@@ -85,6 +85,22 @@ def lstat_plain(path: Path, *, directory: bool = False) -> os.stat_result:
     if not is_plain_entry(info, directory=directory):
         raise UnsafeManagedPath
     return info
+
+
+def discard_created_file(path: Path, created: os.stat_result | None) -> None:
+    """Best-effort failure cleanup of an exclusively created, still-owned file."""
+
+    if created is None:
+        return
+    try:
+        current = path.lstat()
+        if (is_plain_entry(current)
+                and current.st_dev == created.st_dev
+                and current.st_ino == created.st_ino):
+            path.unlink()
+    except BaseException:
+        # Cleanup must not replace the operation's original failure.
+        pass
 
 
 def require_matching_fstat(

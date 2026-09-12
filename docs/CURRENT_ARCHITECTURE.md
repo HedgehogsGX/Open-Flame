@@ -357,6 +357,9 @@ stateDiagram-v2
    抽取前已修复复制失败删除非本次目标、descriptor 包装失败泄漏和关闭覆盖主异常的路径，见
    [备份文件所有权记录](../validation/iteration-0.28.0-backup-file-ownership.md)；两个备份仍暂时共用
    Download 备份文件里的实现，后续迁移保留各自事务、锁与格式。
+   Editing 复制现与备份共用 `managed_files` 的目标所有权清理，来源导入和成品登记的强制
+   碰撞验证保留既有媒体，见[Editing 复制记录](../validation/iteration-0.28.0-editing-copy-ownership.md)。
+   Upload 首次线程启动失败后清理遮盖主异常的问题仍待修复；生命周期 owner 还在 HTTP 文件中。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake
