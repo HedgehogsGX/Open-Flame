@@ -1,6 +1,6 @@
 # Open-Flame 当前架构
 
-> 状态日期：2026-09-11（Australia/Adelaide）
+> 状态日期：2026-09-12（Australia/Adelaide）
 > 文档起始源码基线：`30548f32e072ee549a322b840374d09486d63110`
 > 产品版本：`0.28.0` 发布后的持续开发源码
 
@@ -337,6 +337,7 @@ stateDiagram-v2
    close 的 `OSError` 曾覆盖更有意义的 `asset_changed` 或 manifest 错误。现在共用基础受管文件
    的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
    辅助素材的校验/构造/读取/发送失败也已接入同一保护，见[辅助清理记录](../validation/iteration-0.28.0-auxiliary-cleanup-errors.md)。
+   字幕消费端的后续读取同样保留主异常，正常关闭自身失败仍传播，见[字幕清理记录](../validation/iteration-0.28.0-caption-cleanup-errors.md)。
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
@@ -347,8 +348,9 @@ stateDiagram-v2
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍红；本地已识别旧接口、Schema 和 fake
-   receipt 合同漂移，不能把这些局部分类直接当成远端全部失败原因。发行清单还需覆盖必读文档
-   及相应链接，当前 Git 文档存在不等于已随源码包交付。
+   receipt 合同漂移，不能把这些局部分类直接当成远端全部失败原因。发行清单已补齐受检的必读
+   文档和相应链接；新发行在构建前执行文档完整性检查，通用 archive 校验保留制品自身合同，
+   见[发行文档分责](../validation/iteration-0.28.0-release-documentation-boundary.md)。这不是新发行已构建的证据。
 
 推荐顺序：本分支已完成第 1、2 项小修，继续处理已确定的职责和规则重复；收到外部测试反馈时优先
 复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有

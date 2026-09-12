@@ -10,6 +10,8 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Current architecture-reset supplements: [caption cleanup](iteration-0.28.0-caption-cleanup-errors.md)
+  and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Development version: `0.28.0`; the current post-release source has no new
   clean release receipt.
 - The `0592b6f` receipt applies only to that frozen build.

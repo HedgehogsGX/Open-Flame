@@ -15,11 +15,13 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import stat
 import sys
 import tarfile
 import tomllib
+from urllib.parse import unquote, urlsplit
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,6 +128,52 @@ def privacy_check(files: dict[str, bytes]) -> None:
         for match in re.finditer(rb"(?i)[A-Z]:[\\/]+Users[\\/]+([^\\/\s\"'`]+)", payload):
             require(match[1] in {b"PRIVATE-CANARY", b"PRIVATE-PATH-CANARY", b"PRIVATE-DRIFT-CANARY", b"PRIVATE-UNAVAILABLE-CANARY", b"PRIVATE-*-CANARY"}, "private_user_path")
         require(not re.search(rb"wxid_[A-Za-z0-9_]+|" + b"xwechat" + b"_files", payload), "private_identifier")
+
+
+def documentation_targets(files: dict[str, bytes]) -> set[str]:
+    """Collect literal local links into the shipped documentation trees.
+
+    This bounded inventory check covers inline Markdown file links, excluding
+    fenced examples and external URLs. Checkout-only tests and ignored local
+    evidence are outside the distribution's documentation contract.
+    """
+    targets = set()
+    for name, payload in files.items():
+        if not name.endswith(".md"):
+            continue
+        text = re.sub(
+            r"(?ms)^[ \t]*```[^\n]*\n.*?^[ \t]*```[ \t]*(?=\n|$)",
+            "",
+            payload.decode("utf-8"),
+        )
+        for match in re.finditer(
+            r"\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)\n]+))(?:[ \t]+[^\n)]*)?\)",
+            text,
+        ):
+            reference = urlsplit(match.group(1) or match.group(2))
+            if reference.scheme or reference.netloc or not reference.path:
+                continue
+            target = posixpath.normpath(posixpath.join(
+                posixpath.dirname(name), unquote(reference.path)
+            ))
+            if (
+                target.startswith(("docs/", "validation/"))
+                and not target.startswith("validation/local/")
+                and target != EXCLUDED_REPORT
+                and PurePosixPath(target).suffix
+            ):
+                targets.add(target)
+    return targets
+
+
+def validate_documentation_inventory(files: dict[str, bytes]) -> None:
+    """Require complete documentation when preparing a new source release.
+
+    Existing archives retain their declared inventory/identity contract. This
+    authoring check must not turn archive verification into a dependency on the
+    current checkout's documentation history.
+    """
+    require(documentation_targets(files) <= files.keys(), "unlisted_documentation_link")
 
 
 def source_contract(files: dict[str, bytes]) -> tuple[dict, str]:
@@ -319,6 +367,7 @@ def build_release(source_root: Path, output: Path, *, wheelhouse: Path | None, a
         require(wheelhouse.is_absolute(), "absolute_wheelhouse_required")
         plain(wheelhouse, directory=True)
     source = source_snapshot(source_root)
+    validate_documentation_inventory(source)
     project, identity = source_contract(source)
     version = project["version"]
     output.mkdir()  # Never reuse/delete a prior release or environment.
@@ -377,10 +426,18 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--allow-network", action="store_true")
     verify = sub.add_parser("verify", help="Read-only integrity and archive contract verification.")
     verify.add_argument("--release-dir", required=True, type=Path)
+    sub.add_parser("check-source", help="Read-only source inventory, identity and documentation preflight.")
     try:
         args = parser.parse_args(argv)
-        manifest = (build_release(ROOT, args.output, wheelhouse=args.wheelhouse, allow_network=args.allow_network)
-                    if args.action == "build" else verify_release(args.release_dir))
+        if args.action == "build":
+            manifest = build_release(ROOT, args.output, wheelhouse=args.wheelhouse, allow_network=args.allow_network)
+        elif args.action == "verify":
+            manifest = verify_release(args.release_dir)
+        else:
+            source = source_snapshot(ROOT)
+            validate_documentation_inventory(source)
+            project, identity = source_contract(source)
+            manifest = {"version": project["version"], "product_identity": identity, "source_files": source}
         print(json.dumps({"status": "passed", "action": args.action, "version": manifest["version"], "product_identity": manifest["product_identity"], "source_files": len(manifest["source_files"])}))
         return 0
     except KeyboardInterrupt:
