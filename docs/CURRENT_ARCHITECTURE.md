@@ -134,6 +134,27 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 
 这些入口共享源码包，但不等于 14 个独立部署服务；LocalApp 仍是 Windows 桌面运行的默认所有者。
 
+### 3.3 职责分层与当前重构分支
+
+2026-09-12 的 `codex/architecture-reset-ci` 按六类核心职责加 CLI 入口整理依赖。它们是模块化
+单体内部的职责，不是六个部署服务；四个业务域继续各自拥有状态。下载 Schema 11 不代表其他
+域也使用同一 Schema。
+
+| 职责 | 主要模块与依赖方向 |
+| --- | --- |
+| API / Web | `api.py`、各域 `api.py/web.py`、`schemas.py`：HTTP/DTO、展示和 composition；不作为可复用 Worker 的实现入口 |
+| 领域 / 数据 | `domain.py`、`database.py`、`repository.py`、`worker_repository.py` 和各域 service/schema：实体、事务与领域状态机 |
+| Worker / 调度 | `worker.py`、`worker_pool.py`、`graph.py`、`retry_policy.py`；新增 `local_worker.py`、`candidate_worker.py` 拥有配置、preflight 和组装 |
+| 适配器 | `adapters/base.py` 定义共享 Protocol 与请求/结果；fake 和真实适配器实现它；`yt_dlp_contract.py` 是生产命令/配置合同，并非测试基类 |
+| 工具链 / 校验 | `toolchain.py`、`verifiers/ffprobe.py`、capabilities/evidence：版本、产物与能力证据；本地 ready 不自动升级真实平台验收 |
+| 安全 / 网络 | `security/`、受管文件与网络执行 guard：身份、出站约束和执行前复验；Windows 显式 direct 模式与 Linux relay 模式保持各自合同 |
+| CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 已直接调用公开 Worker builder/锁/logger，不再从 CLI 私有函数取实现 |
+
+本分支已修复下文第 9 节的前两条失败路径，并收敛两类 adapter 控制记录的 JSONL 解码。
+其他职责收敛和完整 CI 恢复仍在继续。Worker 内部接口变化的旧测试迁移草案只在 ignored 目录；
+当前测试禁改策略尚未得到用户例外授权，因此不能把局部检查通过写成 CI 完成。详见
+[Worker 边界记录](../validation/iteration-0.28.0-worker-entry-boundary.md)。
+
 ## 4. 数据所有权与存储布局
 
 默认 `LocalAppConfig` 把 `<app-root>/data` 作为下载 data root，其余域使用同级目录。实际路径可由
@@ -304,15 +325,15 @@ stateDiagram-v2
 
 以下项目是当前源码可见的工程风险。它们不代表真实平台故障，也不能仅凭文档标记为已修复。
 
-1. **P2：Workflow 首次线程启动失败没有回滚 owner 状态。**
+1. **本分支已修复：Workflow 首次线程启动失败的 owner 回滚。**
    [`WorkflowManager.get()`](../src/video_download_control/workflows/manager.py) 在 `Thread.start()` 前发布
    `_service`、`_worker_active` 和 `_thread`；`start()` 抛错后可能留下“有 service、无 worker”的
-   组合，后续 `stop()` 还可能 join 未启动线程。下一切片应参考 EditingManager 的局部回滚模式，
-   保留 lazy single-owner 与永久 stop 语义，不引入通用 Scheduler。
-2. **P2：清理失败可能覆盖原始媒体校验错误。**
+   组合，后续 `stop()` 还可能 join 未启动线程。现在未成功启动时回滚；已真实启动后的中断
+   保留 owner。保留 lazy single-owner 与永久 stop 语义，见[独立记录](../validation/iteration-0.28.0-workflow-start-rollback.md)。
+2. **本分支已修复：媒体构造失败清理保留原始错误。**
    Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径仍直接调用 `handle.close()`；
-   close 的 `OSError` 可能覆盖更有意义的 `asset_changed` 或 manifest 错误。应统一为不覆盖主异常的
-   清理方式，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射。
+   close 的 `OSError` 曾覆盖更有意义的 `asset_changed` 或 manifest 错误。现在共用基础受管文件
+   的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
@@ -323,7 +344,7 @@ stateDiagram-v2
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
    receipt。Hosted CI 已真实执行，但完整 pytest 仍因冻结历史合同漂移而红色。
 
-推荐顺序：先把第 1、2 项分别做成小修提交，再处理已确定的规则重复；收到外部测试反馈时优先
+推荐顺序：本分支已完成第 1、2 项小修，继续处理已确定的职责和规则重复；收到外部测试反馈时优先
 复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有
 回归与 ignored validator 验证。完整路线见[后续执行计划](FOLLOW_UP_EXECUTION_PLAN.md)。
 

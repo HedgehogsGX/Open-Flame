@@ -52,11 +52,11 @@ from .cookie_source_config import (
 )
 from .database import SCHEMA_VERSION, Database
 from .domain import ErrorCode
-from .local_worker_cli import (
+from .local_worker import (
     FEATURE_GATE,
     LocalWorkerConfig,
-    _exclusive_local_worker,
-    _runtime_logger as _local_worker_runtime_logger,
+    exclusive_local_worker as _exclusive_local_worker,
+    local_worker_logger as _local_worker_runtime_logger,
     build_local_worker,
 )
 from .local_app_storage import (
