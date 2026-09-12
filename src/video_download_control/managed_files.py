@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -96,20 +98,28 @@ def require_matching_fstat(
     return info
 
 
-def open_matching_binary(
-    path: Path, *, expected: FileSignature
-) -> OpenedManagedFile:
-    """Open a binary file and transfer ownership only after an identity match."""
+@contextmanager
+def close_binary_on_error(handle: BinaryIO) -> Iterator[BinaryIO]:
+    """Keep ownership on success; close on failure without replacing its cause."""
 
-    handle = path.open("rb")
     try:
-        info = require_matching_fstat(handle, expected=expected)
+        yield handle
     except BaseException:
         try:
             handle.close()
         except BaseException:
             pass
         raise
+
+
+def open_matching_binary(
+    path: Path, *, expected: FileSignature
+) -> OpenedManagedFile:
+    """Open a binary file and transfer ownership only after an identity match."""
+
+    handle = path.open("rb")
+    with close_binary_on_error(handle):
+        info = require_matching_fstat(handle, expected=expected)
     return OpenedManagedFile(handle=handle, info=info)
 
 

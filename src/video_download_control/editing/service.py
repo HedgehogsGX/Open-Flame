@@ -19,6 +19,7 @@ from ..managed_files import (
     ManagedFileChanged,
     ManagedFileSizeExceeded,
     UnsafeManagedPath,
+    close_binary_on_error,
     file_signature,
     hash_open_binary,
     lstat_plain,
@@ -234,49 +235,35 @@ def _open_verified_file(
 ) -> tuple[BinaryIO, os.stat_result, tuple[bytes, ...]]:
     """Verify one managed file and retain that exact open handle for serving."""
 
-    handle: BinaryIO | None = None
     try:
         before = _plain(path)
         if not 0 < before.st_size <= maximum or before.st_size != expected_size:
             raise EditingError(error_code)
         expected = file_signature(before)
         opened = open_matching_binary(path, expected=expected)
-        handle = opened.handle
-        hashed = hash_open_binary(
-            handle,
-            maximum=expected_size,
-            chunk_size=VERIFIED_MEDIA_CHUNK_BYTES,
-            collect_chunk_digests=True,
-        )
-        require_matching_fstat(handle, expected=expected)
-        after = _plain(path)
-        if (
-            hashed.size != expected_size
-            or hashed.hexdigest != expected_sha256
-            or file_signature(after) != expected
-        ):
-            raise EditingError(error_code)
-        handle.seek(0)
-        return handle, opened.info, hashed.chunk_digests
+        with close_binary_on_error(opened.handle) as handle:
+            hashed = hash_open_binary(
+                handle,
+                maximum=expected_size,
+                chunk_size=VERIFIED_MEDIA_CHUNK_BYTES,
+                collect_chunk_digests=True,
+            )
+            require_matching_fstat(handle, expected=expected)
+            after = _plain(path)
+            if (
+                hashed.size != expected_size
+                or hashed.hexdigest != expected_sha256
+                or file_signature(after) != expected
+            ):
+                raise EditingError(error_code)
+            handle.seek(0)
+            return handle, opened.info, hashed.chunk_digests
     except EditingError:
-        if handle is not None:
-            handle.close()
         raise
     except (ManagedFileChanged, ManagedFileSizeExceeded):
-        if handle is not None:
-            handle.close()
         raise EditingError(error_code) from None
     except OSError as exc:
-        if handle is not None:
-            handle.close()
         raise EditingError(error_code) from exc
-    except BaseException:
-        if handle is not None:
-            try:
-                handle.close()
-            except BaseException:
-                pass
-        raise
 
 
 class EditingService:

@@ -13,6 +13,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.types import Receive, Scope, Send
 
+from .managed_files import close_binary_on_error
+
 VERIFIED_STREAM_CHUNK_BYTES = 64 * 1024
 
 
@@ -36,11 +38,11 @@ class VerifiedOpenFileResponse(FileResponse):
         verified_chunk_sha256: tuple[bytes, ...] | None = None,
         verification_chunk_size: int = VERIFIED_STREAM_CHUNK_BYTES,
     ) -> None:
-        self._verified_handle = handle
-        self._size_bytes = int(file_info.st_size)
-        self._verified_chunk_sha256 = verified_chunk_sha256
-        self._verification_chunk_size = verification_chunk_size
-        try:
+        with close_binary_on_error(handle):
+            self._verified_handle = handle
+            self._size_bytes = int(file_info.st_size)
+            self._verified_chunk_sha256 = verified_chunk_sha256
+            self._verification_chunk_size = verification_chunk_size
             if verified_chunk_sha256 is not None:
                 if verification_chunk_size < 1:
                     raise ValueError("verified chunk manifest is invalid")
@@ -64,9 +66,6 @@ class VerifiedOpenFileResponse(FileResponse):
                 stat_result=file_info,
                 content_disposition_type=content_disposition_type,
             )
-        except BaseException:
-            handle.close()
-            raise
 
     def _read_verified_chunk(self, index: int) -> bytes:
         assert self._verified_chunk_sha256 is not None
