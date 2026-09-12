@@ -211,26 +211,6 @@ def _ai_shape(ai: Mapping[str, Any]) -> tuple[frozenset[object], str]:
     return keys, mode
 
 
-def _validate_retry_successors(
-    record_ids: Sequence[str],
-    successors: Mapping[str, str],
-    *,
-    error_code: str,
-) -> None:
-    """Reject cycles in a retry forest without limiting legitimate history."""
-
-    resolved: set[str] = set()
-    for start in record_ids:
-        current = start
-        path: set[str] = set()
-        while current in successors and current not in resolved:
-            if current in path:
-                raise WorkflowError(error_code)
-            path.add(current)
-            current = successors[current]
-        resolved.update(path)
-
-
 @dataclass(slots=True)
 class LocalWorkflowAdapter:
     """Connect the workflow state machine without sharing media ownership."""
@@ -1971,62 +1951,6 @@ class LocalWorkflowAdapter:
         except EditingError as error:
             _domain_failure(error, "editing_failed")
 
-    def _latest_edit_plan(
-        self, plan_id: str, project_id: str
-    ) -> Mapping[str, Any]:
-        try:
-            plans = self.editing_manager.invoke("plans", project_id=project_id)
-        except EditingError as error:
-            _domain_failure(error, "editing_failed")
-        if not isinstance(plans, list):
-            raise WorkflowError("edit_plan_set_invalid")
-        records: dict[str, Mapping[str, Any]] = {}
-        successors: dict[str, str] = {}
-        for plan in plans:
-            if not isinstance(plan, Mapping) or plan.get("project_id") != project_id:
-                raise WorkflowError("edit_plan_set_invalid")
-            try:
-                current_id = _record_id(plan)
-            except WorkflowError:
-                raise WorkflowError("edit_plan_set_invalid") from None
-            if current_id in records:
-                raise WorkflowError("edit_plan_set_invalid")
-            records[current_id] = plan
-        if plan_id not in records:
-            raise WorkflowError("edit_plan_mismatch")
-        for current_id, plan in records.items():
-            retry_of = plan.get("retry_of")
-            if retry_of is None:
-                continue
-            try:
-                parent_id = _hex_identifier(retry_of)
-            except WorkflowError:
-                raise WorkflowError("edit_plan_set_invalid") from None
-            if (
-                parent_id not in records
-                or parent_id in successors
-                or parent_id == current_id
-            ):
-                raise WorkflowError("edit_plan_set_invalid")
-            parent = records[parent_id]
-            if any(
-                plan.get(field) != parent.get(field)
-                for field in (
-                    "draft_version",
-                    "recipe_sha256",
-                    "timeline_revision_id",
-                )
-            ):
-                raise WorkflowError("edit_plan_set_invalid")
-            successors[parent_id] = current_id
-        _validate_retry_successors(
-            tuple(records), successors, error_code="edit_plan_set_invalid"
-        )
-        current_id = plan_id
-        while current_id in successors:
-            current_id = successors[current_id]
-        return records[current_id]
-
     def cancel_edit(
         self,
         plan_id: str,
@@ -2045,10 +1969,23 @@ class LocalWorkflowAdapter:
                 expected_name=expected_name,
                 expected_source_asset_id=expected_source_asset_id,
             )
-            plan = self._latest_edit_plan(plan_id, expected_project_id)
+            try:
+                plan = self.editing_manager.invoke(
+                    "resolve_plan_retry", plan_id, project_id=expected_project_id
+                )
+            except EditingError as error:
+                _domain_failure(error, "editing_failed")
+            if (
+                not isinstance(plan, Mapping)
+                or plan.get("project_id") != expected_project_id
+            ):
+                raise WorkflowError("edit_plan_set_invalid")
+            try:
+                leaf_id = _record_id(plan)
+            except WorkflowError:
+                raise WorkflowError("edit_plan_set_invalid") from None
         except WorkflowError as error:
             return CancellationSnapshot("attention", code=error.code)
-        leaf_id = _record_id(plan)
         if plan.get("code") in _AI_UNCERTAIN_CODES:
             return CancellationSnapshot("attention", code=plan["code"])
         try:

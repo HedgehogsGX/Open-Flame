@@ -26,8 +26,10 @@ Editing 成品元数据校验已前移，复制后立即登记清理责任，见
 [成品登记清理](validation/iteration-0.28.0-editing-registration-cleanup.md)。备份锁 descriptor
 与 SQLite 连接交接也已补齐，见[资源回收记录](validation/iteration-0.28.0-backup-resource-handoff.md)。
 公共备份迁移、39 项故障反馈及当前测试入口阻断见
-[公共备份文件记录](validation/iteration-0.28.0-public-backup-files.md)。下一步收敛 Editing
-render 重试树，再完成跨页规则、CLI、当前文档和完整 CI 维护。
+[公共备份文件记录](validation/iteration-0.28.0-public-backup-files.md)。render 重试树现也由
+Editing 公开解析，Workflow 删除两个重复定义；一致读、取消写事务、后继与 unknown
+保护见[render 图所有权记录](validation/iteration-0.28.0-editing-render-retry-ownership.md)。
+下一步补齐上传源文件交接，再完成跨页规则、CLI、当前文档和完整 CI 维护。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -148,6 +150,7 @@ render 重试树，再完成跨页规则、CLI、当前文档和完整 CI 维护
 | Workflow 重试与取消 | [共用结果应用和取消尾段](validation/iteration-0.28.0-workflow-retry-cancel-tails.md) |
 | 备份文件所有权 | [复制目标与 descriptor 失败清理](validation/iteration-0.28.0-backup-file-ownership.md) |
 | 公共备份文件操作 | [公开 Module、领域策略与测试迁移缺口](validation/iteration-0.28.0-public-backup-files.md) |
+| Editing render 重试图 | [公开解析、一致读与取消保护](validation/iteration-0.28.0-editing-render-retry-ownership.md) |
 | 表单校验与日期意图 | [Workflow 共享校验](validation/iteration-0.28.0-workflow-shared-validation.md) |
 | Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
 | 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
@@ -179,12 +182,13 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
 4. **完整 CI 尚未恢复。** 公共备份文件迁移后，标准 pytest 被旧私有 helper import
    阻断：1 collection error。仅供诊断的继续收集运行得到 2170 passed、250 failed、
-   16 skipped、1 error；原 248 个失败 ID 全保留，新增两项仍注入已删除的私有入口。
-   22 个 Download backup 用例没有收集。只迁移 import/patch 目标的 ignored 副本为
-   151 passed、7 个旧 Schema 假设失败，不能替代 tracked tests。当前 `936d8ab` hosted
-   run `34689817723` 四格均在 offline pytest 失败；它不含之后的未提交迁移。
+   16 skipped、1 error；render 收敛后的本轮复验与前轮失败 ID 相同。22 个 Download
+   backup 用例没有收集。前轮只迁移 import/patch 目标的 ignored 副本为 151 passed、
+   7 个旧 Schema 假设失败，不能替代 tracked tests。当前 `35b3924` hosted run
+   `34691113623` 四格均在 offline pytest 失败；它不含之后的 render 收敛。
    用户尚未批准测试维护例外；完整失败仍须逐类关闭，不能删除断言、排除测试或放宽
-   生产合同来声称绿色。精确范围见[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
+   生产合同来声称绿色。精确范围见[render 复验](validation/iteration-0.28.0-editing-render-retry-ownership.md)
+   与[公共备份记录](validation/iteration-0.28.0-public-backup-files.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -204,7 +208,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，处理 Editing render 重试树、跨页纯规则、CLI 支持与最终发行
+1. 继续当前架构重置目标，处理上传源文件交接、跨页纯规则、CLI 支持与最终发行
    文档。同时取得测试维护规则的明确决定并逐类关闭完整 CI；主目标
    不能缩成局部通过或文档审查。
    临时故障注入仍放在已忽略的 `validation/local/`，未得到例外前不改 tracked tests。

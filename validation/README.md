@@ -15,6 +15,7 @@ results belong outside Git or under ignored `validation/local/`.
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
 - Workflow form rules: [shared validation and incomplete absolute schedules](iteration-0.28.0-workflow-shared-validation.md).
 - Editing AI retry graph: [one owner for resolution and project cancellation](iteration-0.28.0-editing-ai-retry-ownership.md).
+- Editing render retry graph: [shared resolution, snapshot and cancellation fences](iteration-0.28.0-editing-render-retry-ownership.md).
 - Workflow retry/cancellation: [shared result application and cancellation tail](iteration-0.28.0-workflow-retry-cancel-tails.md).
 - Backup file ownership: [protect foreign targets and close owned descriptors](iteration-0.28.0-backup-file-ownership.md).
 - Editing copy ownership: [shared owned-file cleanup and collision protection](iteration-0.28.0-editing-copy-ownership.md).

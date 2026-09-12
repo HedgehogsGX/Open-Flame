@@ -2440,6 +2440,16 @@ class EditingService:
             )
         return self._plan_by_id(db, plan_id)
 
+    def resolve_plan_retry(
+        self, plan_id: str, *, project_id: str
+    ) -> dict[str, Any]:
+        """Return the render leaf after validating its entire project snapshot."""
+
+        plan_id, project_id = _identifier(plan_id), _identifier(project_id)
+        with self._db() as db:
+            db.execute("BEGIN")
+            return self._latest_plan_for_project_in(db, plan_id, project_id)
+
     def _latest_plan_for_project_in(
         self,
         db: sqlite3.Connection,
@@ -2450,11 +2460,11 @@ class EditingService:
             "SELECT * FROM render_plans WHERE project_id=? ORDER BY created_at,id",
             (project_id,),
         ).fetchall()
+        plans = [self._plan_public(db, row) for row in rows]
         records: dict[str, dict[str, Any]] = {}
         successors: dict[str, str] = {}
         try:
-            for row in rows:
-                plan = self._plan_public(db, row)
+            for plan in plans:
                 plan_id = _identifier(plan["id"])
                 if plan.get("project_id") != project_id or plan_id in records:
                     raise EditingError("edit_plan_set_invalid")
@@ -2482,14 +2492,16 @@ class EditingService:
                 ):
                     raise EditingError("edit_plan_set_invalid")
                 successors[parent_id] = plan_id
+            resolved: set[str] = set()
             for plan_id in records:
                 cursor = plan_id
                 seen: set[str] = set()
-                while cursor in successors:
+                while cursor in successors and cursor not in resolved:
                     if cursor in seen:
                         raise EditingError("edit_plan_set_invalid")
                     seen.add(cursor)
                     cursor = successors[cursor]
+                resolved.update(seen)
         except EditingError as error:
             if error.code in {"edit_plan_set_invalid", "edit_plan_mismatch"}:
                 raise
@@ -2586,9 +2598,15 @@ class EditingService:
                 raise EditingError("edit_project_mismatch")
             if plan is not None:
                 root_plan_id = _identifier(plan["id"])
-                leaf = self._latest_plan_for_project_in(
-                    db, root_plan_id, project_id
-                )
+                try:
+                    leaf = self._latest_plan_for_project_in(
+                        db, root_plan_id, project_id
+                    )
+                except EditingError as error:
+                    # Discovery cancellation keeps its existing set-level error.
+                    if error.code in {"edit_plan_set_invalid", "edit_plan_mismatch"}:
+                        raise
+                    raise EditingError("edit_plan_set_invalid") from error
                 canceled_plan = self._cancel_plan_in(db, leaf["id"])
                 return {
                     "kind": "plan",
