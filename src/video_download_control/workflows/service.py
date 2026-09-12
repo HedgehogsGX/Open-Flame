@@ -27,6 +27,7 @@ from .contracts import (
     WorkflowDomainAdapter,
     WorkflowError,
     workflow_outputs_match_state,
+    workflow_upload_request_key,
 )
 from .profile import (
     canonical_workflow_mapping,
@@ -1720,13 +1721,8 @@ class WorkflowService:
         """Return each upload slot's immutable per-segment request key."""
 
         return [
-            (
-                f"wf-{record['id']}-upload-jobs"
-                if output["segment_ordinal"] == 1
-                else (
-                    f"wf-{record['id']}-upload-jobs-"
-                    f"{output['segment_ordinal']:03d}"
-                )
+            workflow_upload_request_key(
+                record["id"], output["segment_ordinal"]
             )
             for output in record["outputs"]
             for _target in output["targets"]

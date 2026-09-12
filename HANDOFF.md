@@ -12,8 +12,8 @@
 重整架构并解决完整 CI；**尚未完成，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
-下方记录。后续仍须完成封面/AI 重试图/Workflow
-重复规则收敛、完整测试维护及四格 hosted CI 验证。
+下方记录。Workflow 请求键与冻结投稿字段也已统一构造；后续仍须完成封面、AI 重试图、
+Workflow 重试结果/前端纯校验、完整测试维护及四格 hosted CI 验证。
 当前 AGENTS 禁改测试规则的例外已询问用户，未答复前只保留 ignored 测试迁移草案，不能
 把其局部通过当成完整 CI。源码与验证入口见下方独立记录。
 
@@ -136,6 +136,7 @@ Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与�
 | 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
 | 当前系统结构 | [当前架构](docs/CURRENT_ARCHITECTURE.md)、[继续开发提示词](docs/HANDOFF_PROMPT.md) |
 | 本轮补充修复 | [字幕清理](validation/iteration-0.28.0-caption-cleanup-errors.md)、[发行文档检查边界](validation/iteration-0.28.0-release-documentation-boundary.md) |
+| Workflow 身份构造 | [请求键与冻结投稿字段](validation/iteration-0.28.0-workflow-request-construction.md) |
 | 本轮架构重置 | [Worker/CLI 分责](validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](validation/iteration-0.28.0-media-cleanup-errors.md)、[辅助素材清理](validation/iteration-0.28.0-auxiliary-cleanup-errors.md)、[adapter 解码](validation/iteration-0.28.0-adapter-control-decoding.md)、[回执状态合同](validation/iteration-0.28.0-upload-receipt-contract.md)、[Download 素材读取](validation/iteration-0.28.0-download-asset-reader.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |

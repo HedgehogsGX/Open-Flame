@@ -341,9 +341,10 @@ stateDiagram-v2
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
-4. **规则 Locality 仍不够集中。** 当前优先候选是：封面/稳定 request 字段投影；Editing AI retry
+4. **规则 Locality 仍不够集中。** 当前优先候选是：封面平台规则；Editing AI retry
    forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。Download 素材读取、
    两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
+   Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](../validation/iteration-0.28.0-workflow-request-construction.md)。
    备份的公共文件操作与入口文档仍需收敛。
 5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
    尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release

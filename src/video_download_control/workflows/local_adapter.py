@@ -34,6 +34,8 @@ from .contracts import (
     MAX_WORKFLOW_SEGMENTS,
     UploadPrepared,
     UploadSnapshot,
+    workflow_upload_request,
+    workflow_upload_request_key,
 )
 from .contracts import WorkflowError
 
@@ -2274,11 +2276,7 @@ class LocalWorkflowAdapter:
             source_id = _managed_import_id(
                 workflow_id, "edit_video", output_id, output_sha256
             )
-            request_key = (
-                f"wf-{workflow_id}-upload-jobs"
-                if segment_ordinal == 1
-                else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
-            )
+            request_key = workflow_upload_request_key(workflow_id, segment_ordinal)
             edit_imported_cover_id = (
                 _managed_import_id(
                     workflow_id,
@@ -2470,17 +2468,11 @@ class LocalWorkflowAdapter:
             )
             if _record_id(source) != source_id:
                 raise WorkflowError("workflow_domain_data_invalid")
+            request = workflow_upload_request(source_id, account_ids, upload, overrides)
+            # Keep the execution boundary's tag list separate from frozen intent.
+            request["tags"] = list(upload["tags"])
             jobs = service.create_jobs(
-                source_id=source_id,
-                account_ids=list(account_ids),
-                title=upload["title"],
-                description=upload["description"],
-                tags=list(upload["tags"]),
-                category_id=upload["category_id"],
-                mode=upload["mode"],
-                copyright=upload["copyright"],
-                source_credit=upload["source_credit"],
-                target_overrides=overrides,
+                **request,
                 expected_account_bindings=[dict(binding) for binding in bindings],
                 idempotency_key=request_key,
             )
@@ -3221,7 +3213,7 @@ class LocalWorkflowAdapter:
             if source_id in source_ids:
                 return UploadSnapshot("attention", code="upload_job_set_invalid")
             source_ids.add(source_id)
-            expected_requests[request_key] = self._workflow_upload_request(
+            expected_requests[request_key] = workflow_upload_request(
                 source_id, account_ids, expected_upload, overrides
             )
 
@@ -3503,11 +3495,7 @@ class LocalWorkflowAdapter:
         ):
             return CancellationSnapshot("attention", code="upload_request_mismatch")
 
-        request_key = (
-            f"wf-{workflow_id}-upload-jobs"
-            if segment_ordinal == 1
-            else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
-        )
+        request_key = workflow_upload_request_key(workflow_id, segment_ordinal)
         try:
             service = self.upload_manager.get()
         except UploadError as error:
@@ -3639,7 +3627,7 @@ class LocalWorkflowAdapter:
                 )
                 request_jobs = service.claim_workflow_request_for_cancellation(
                     request_key,
-                    expected_request=self._workflow_upload_request(
+                    expected_request=workflow_upload_request(
                         source_id, account_ids, expected_upload, overrides
                     ),
                 )
@@ -3653,7 +3641,7 @@ class LocalWorkflowAdapter:
                 )
                 request_jobs = service.claim_workflow_request_for_cancellation(
                     request_key,
-                    expected_request=self._workflow_upload_request(
+                    expected_request=workflow_upload_request(
                         source_id, account_ids, expected_upload, overrides
                     ),
                 )
@@ -3850,28 +3838,6 @@ class LocalWorkflowAdapter:
             for account_id in account_ids
             if account_id in by_account
         ]
-
-    @staticmethod
-    def _workflow_upload_request(
-        source_id: str,
-        account_ids: Sequence[str],
-        upload: Mapping[str, Any],
-        target_overrides: Sequence[Mapping[str, Any]],
-    ) -> dict[str, object]:
-        """Build the Upload-domain request identity from frozen Workflow data."""
-
-        return {
-            "source_id": source_id,
-            "account_ids": list(account_ids),
-            "title": upload.get("title"),
-            "description": upload.get("description"),
-            "tags": upload.get("tags"),
-            "category_id": upload.get("category_id"),
-            "mode": upload.get("mode"),
-            "copyright": upload.get("copyright"),
-            "source_credit": upload.get("source_credit"),
-            "target_overrides": [dict(item) for item in target_overrides],
-        }
 
     @staticmethod
     def _cover_slot(platform: str, width: int, height: int) -> str | None:

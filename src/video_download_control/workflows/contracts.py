@@ -24,6 +24,38 @@ class WorkflowError(ValueError):
         super().__init__(code)
 
 
+def workflow_upload_request_key(workflow_id: str, segment_ordinal: int) -> str:
+    """Construct the persisted key after the caller validates workflow/segment."""
+
+    return (
+        f"wf-{workflow_id}-upload-jobs"
+        if segment_ordinal == 1
+        else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
+    )
+
+
+def workflow_upload_request(
+    source_id: str,
+    account_ids: Sequence[str],
+    upload: Mapping[str, Any],
+    target_overrides: Sequence[Mapping[str, Any]],
+) -> dict[str, object]:
+    """Project frozen Workflow intent into the Upload request identity."""
+
+    return {
+        "source_id": source_id,
+        "account_ids": list(account_ids),
+        "title": upload.get("title"),
+        "description": upload.get("description"),
+        "tags": upload.get("tags"),
+        "category_id": upload.get("category_id"),
+        "mode": upload.get("mode"),
+        "copyright": upload.get("copyright"),
+        "source_credit": upload.get("source_credit"),
+        "target_overrides": [dict(item) for item in target_overrides],
+    }
+
+
 def workflow_outputs_match_state(
     state: object,
     outputs: Sequence[Mapping[str, Any]],
