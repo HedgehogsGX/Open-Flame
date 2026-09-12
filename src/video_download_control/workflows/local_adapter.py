@@ -3591,33 +3591,19 @@ class LocalWorkflowAdapter:
                     return CancellationSnapshot(
                         "attention", code="upload_request_mismatch"
                     )
-                overrides = self._upload_overrides(
-                    expected_upload.get("target_overrides"),
-                    account_ids,
-                    binding_platforms,
-                    cover_record,
-                    imported_cover_id,
-                )
-                request_jobs = service.claim_workflow_request_for_cancellation(
-                    request_key,
-                    expected_request=workflow_upload_request(
-                        source_id, account_ids, expected_upload, overrides
-                    ),
-                )
-            else:
-                overrides = self._upload_overrides(
-                    expected_upload.get("target_overrides"),
-                    account_ids,
-                    binding_platforms,
-                    cover_record,
-                    imported_cover_id,
-                )
-                request_jobs = service.claim_workflow_request_for_cancellation(
-                    request_key,
-                    expected_request=workflow_upload_request(
-                        source_id, account_ids, expected_upload, overrides
-                    ),
-                )
+            overrides = self._upload_overrides(
+                expected_upload.get("target_overrides"),
+                account_ids,
+                binding_platforms,
+                cover_record,
+                imported_cover_id,
+            )
+            request_jobs = service.claim_workflow_request_for_cancellation(
+                request_key,
+                expected_request=workflow_upload_request(
+                    source_id, account_ids, expected_upload, overrides
+                ),
+            )
         except WorkflowError as error:
             if error.code in {
                 "workflow_source_cover_unavailable",

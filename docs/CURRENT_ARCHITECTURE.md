@@ -317,7 +317,7 @@ stateDiagram-v2
 | Upload receipt 状态 | [`uploads/receipts.py`](../src/video_download_control/uploads/receipts.py) | 执行与备份共用纯状态合同，各自保留身份/事务/恢复处理 |
 | Upload 封面 | [`uploads/covers.py`](../src/video_download_control/uploads/covers.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 格式/解码与轻量平台规则分别归属 Upload；Workflow 不加载 Pillow，备份不依赖 service |
 | Download 素材读取 | [`download_assets.py`](../src/video_download_control/download_assets.py) | 登记文件、安全读取、snapshot 和跨域素材引用脱离 HTTP；API 保留响应与错误映射 |
-| Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类已集中，部分结果应用仍重复 |
+| Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类集中；service 内上传重试前后的成功/等待结果共用一处应用，重试权限保持显式 |
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
 | Editing AI 重试图 | [`editing/service.py`](../src/video_download_control/editing/service.py) | 完整图校验由查询和项目取消共用；Workflow 只复核返回合同与独立冻结身份 |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
@@ -343,8 +343,9 @@ stateDiagram-v2
 3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
    adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
    source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
-4. **规则 Locality 仍不够集中。** 当前优先候选是：上传 retry 前后结果应用；
-   取消封面分流后的公共尾段。Editing AI retry forest 已统一归 Editing 校验，见
+4. **规则 Locality 仍需持续检查。** 上传 retry 前后结果应用与取消封面分流后的公共尾段
+   已收敛，见[重试与取消记录](../validation/iteration-0.28.0-workflow-retry-cancel-tails.md)。
+   Editing AI retry forest 已统一归 Editing 校验，见
    [重试图所有权记录](../validation/iteration-0.28.0-editing-ai-retry-ownership.md)。Download 素材读取、
    两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
    Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](../validation/iteration-0.28.0-workflow-request-construction.md)。

@@ -892,28 +892,9 @@ class WorkflowService:
             )
 
         snapshot, classification, _job_ids_changed = self._observe_upload(record)
-        if classification.disposition == "ready":
-            self._record_upload_outcome(record, snapshot)
-            return self.get(workflow_id)
-        if classification.disposition == "waiting_active":
-            self._transition(
-                workflow_id, "uploading", classification.code, expected=record
-            )
-            return self.get(workflow_id)
-        if classification.disposition == "waiting_confirmation":
-            if classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
-                return self._attention(
-                    workflow_id,
-                    "workflow_domain_data_invalid",
-                    expected=record,
-                )
-            self._transition(
-                workflow_id,
-                "awaiting_upload_confirmation",
-                classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
+        applied = self._apply_upload_retry_observation(record, snapshot, classification)
+        if applied is not None:
+            return applied
         if classification.disposition == "invalid":
             return self._attention(
                 workflow_id,
@@ -935,31 +916,11 @@ class WorkflowService:
         )
         self._sync_upload_job_ids(record, retry_snapshot)
         retry_classification = classify_upload_snapshot(retry_snapshot)
-        if retry_classification.disposition == "ready":
-            self._record_upload_outcome(record, retry_snapshot)
-            return self.get(workflow_id)
-        if retry_classification.disposition == "waiting_active":
-            self._transition(
-                workflow_id,
-                "uploading",
-                retry_classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
-        if retry_classification.disposition == "waiting_confirmation":
-            if retry_classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
-                return self._attention(
-                    workflow_id,
-                    "workflow_domain_data_invalid",
-                    expected=record,
-                )
-            self._transition(
-                workflow_id,
-                "awaiting_upload_confirmation",
-                retry_classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
+        applied = self._apply_upload_retry_observation(
+            record, retry_snapshot, retry_classification
+        )
+        if applied is not None:
+            return applied
         return self._attention(
             workflow_id,
             (
@@ -969,6 +930,42 @@ class WorkflowService:
             ),
             expected=record,
         )
+
+    def _apply_upload_retry_observation(
+        self,
+        record: dict[str, Any],
+        snapshot: UploadSnapshot,
+        classification: UploadSnapshotClassification,
+    ) -> dict[str, Any] | None:
+        """Apply a checkpointed success/waiting result without authorizing a retry."""
+
+        workflow_id = record["id"]
+        if classification.disposition == "ready":
+            self._record_upload_outcome(record, snapshot)
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_active":
+            self._transition(
+                workflow_id,
+                "uploading",
+                classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_confirmation":
+            if classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
+                return self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
+            self._transition(
+                workflow_id,
+                "awaiting_upload_confirmation",
+                classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        return None
 
     def require_attention(
         self,
