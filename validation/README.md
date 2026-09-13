@@ -10,13 +10,13 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
-- CI recovery: [approved test maintenance, reproduced production failures and branch cleanup](iteration-0.28.0-ci-contract-maintenance.md).
+- CI recovery: [four green hosted jobs at 8564b30, bounded Windows SQLite snapshot fixes and test maintenance](iteration-0.28.0-ci-contract-maintenance.md).
 - Current architecture-reset supplements: [caption cleanup](iteration-0.28.0-caption-cleanup-errors.md)
   and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
 - Workflow form rules: [shared validation and incomplete absolute schedules](iteration-0.28.0-workflow-shared-validation.md).
 - Editing AI retry graph: [one owner for resolution and project cancellation](iteration-0.28.0-editing-ai-retry-ownership.md).
-- Upload reconciliation polling: [retained controls and the pending full CI maintenance candidate](iteration-0.28.0-upload-reconciliation-node-retention.md).
+- Upload reconciliation polling: [retained controls and the historical test-maintenance proposal](iteration-0.28.0-upload-reconciliation-node-retention.md).
 - Cross-page upload rules: [shared text, tags and schedules with retained page ownership](iteration-0.28.0-cross-page-upload-rules.md).
 - CLI shared rules: [normalized paths and existing worker output](iteration-0.28.0-cli-shared-parsing-output.md).
 - Upload source handoff: [protected consumption, staged bytes and post-execution results](iteration-0.28.0-upload-source-handoff.md).

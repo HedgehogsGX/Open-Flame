@@ -1,6 +1,6 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-13（Australia/Adelaide）
+> 最后更新：2026-09-14（Australia/Adelaide）
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
@@ -9,12 +9,12 @@
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
 当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
-重整架构并解决完整 CI；**尚未完成，未合并 main**。起点为远端 main `d481326`。已分别
+重整架构并解决完整 CI；**本轮已复现故障已修复，四格 CI 已恢复，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
-统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续仍须完成剩余规则收敛、
-完整测试维护及四格 hosted CI 验证。
+统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续精简按具体收益分段，
+不把所有业务规则机械合并。最终交付以同一提交的 CI、制品和包外 receipt 为准。
 Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
 备份复制的目标所有权、三个读取入口的 descriptor 交接及关闭失败保留主异常已修复，
 公共备份文件操作现由两域共同使用独立 `backup_files` Module。
@@ -37,11 +37,12 @@ Upload / Workflow 的跨页文本、标签与排程规则已共用，strict dire
 已补齐，见[跨页纯规则记录](validation/iteration-0.28.0-cross-page-upload-rules.md)。
 Upload 人工核对控件已移除冗余渲染缓存字段，勾选/取消勾选后的轮询保留原节点，见
 [控件保留与完整隔离回归](validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
-用户已明确批准限定测试维护例外，审查过的补丁已签名提交为 `3e482f0`。
-四格 CI 已恢复收集，Windows / Python 3.12 通过；其余结果与新发现的响应等待环、
-资产复制身份、清理主异常及 Linux 锁/日志修复见
+用户批准的限定测试维护已提交为 `3e482f0`；本次继续修复指令对应的平台维护已提交为
+`ac3532b`。生产修复 `8564b30` 补齐 Windows SQLite sidecar 的打开、读取及删除竞争窗口，
+[四格 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34762892893) 全部通过：Windows 每组 2442 passed / 16 skipped，
+Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，详见
 [CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
-继续核对修复后的完整本地与 hosted CI；其他测试改动仍受原门禁限制。
+其他测试改动仍受原门禁和具体授权范围限制；历史通过不能覆盖后续提交。
 
 ## 当前源码身份
 
@@ -57,9 +58,10 @@ Upload 人工核对控件已移除冗余渲染缓存字段，勾选/取消勾选
 | Git 身份 | `Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>` |
 | Upload Schema 4 源码提交 | `496fb63f9d0010c22fa1abc660e6450cd403b6be`；已签名直推 `origin/main`，GitHub author/committer 均归属 `novahanser` |
 
-当前源码位于 0.28.0 发布后的持续开发链。`0592b6f` 的五件制品和包外 receipt
-只证明其冻结构建；之后的提交尚未形成新的 clean release receipt。判断当前源码时以
-`git rev-parse HEAD`、源码中的版本/Schema 常量和对应提交后的验证记录为准。
+当前源码位于 0.28.0 发布后的持续开发链。历次五件制品和包外 receipt 只证明各自冻结构建。
+本轮最终制品须从包含本交接更新的 clean commit 冻结，和该提交的四格 CI、源码/wheel
+独立安装及包外 receipt 一起核对；精确路径与最终 HEAD 由交付报告提供。判断源码时以
+`git rev-parse HEAD`、版本/Schema 常量和对应提交后的验证记录为准。
 
 ## 当前已接线能力
 
@@ -185,15 +187,14 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    真人试听仍未知。
 2. **真实三平台发布未验收。** 本地账号显示 ready 只说明本地 session 记录状态；不能证明
    远端 session 仍有效，也不能证明上传、审核、定时发布或公开可见成功。
-3. **最终 release 验收尚未闭合。** `c07b0af` 已完成五件制品构建、源码/wheel 独立安装和
-   包外安装记录，但其 CI 尚未通过；此后生产修复仍须绑定最终提交重新冻结验收。
-   2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
-   应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **完整 CI 尚未恢复。** 已批准测试补丁 `3e482f0` 修复旧 import 与合同漂移，其两组
-   Windows hosted CI 均通过 2442 项、跳过 16 项。后续生产修复 `4b0cf3a` 的本地完整回归为
-   **2442 passed / 16 skipped**；两组 Linux CI 均收敛为 **21 failed / 2300 passed / 137 skipped**。
-   六个测试文件的平台假设和故障注入仍需维护，新增候选保存在 ignored 目录，尚未应用。
-   最新提交还须单独核对，不能用旧结果代替。见[CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
+3. **发行与真实应用根的验收边界。** 制品、独立安装和包外 receipt 必须绑定同一提交；
+   `c07b0af` / `65e5c48` 的历史安装结果不能覆盖最终交付。2026-09-10 的当前应用根记录
+   只验证 Upload Schema 1→3；本轮没有在该实际根执行 Schema 4 迁移或审计。
+   临时 Schema 4 smoke 和离线 CI 不能替代实际根验收。
+4. **完整 CI 已恢复，结果仍按提交冻结。** `8564b30` 的四格全部通过，Windows 各
+   2442 passed / 16 skipped，Ubuntu 各 2321 passed / 137 skipped。本地 CPython 3.12.10
+   全量也为 2442 passed / 16 skipped。包含本次文档更新的提交仍须单独核对同一 HEAD
+   的四格结果，见[CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -206,16 +207,16 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
-8. **架构重置仍在推进。** 线程启动回滚、媒体失败清理、Upload 源文件消费期保护、
+8. **后续架构精简按收益分段。** 线程启动回滚、媒体失败清理、Upload 源文件消费期保护、
    Download 受管读取、CLI 分责和跨页纯规则已实施；最新故障修复保留上述所有权边界。
-   当前重点是完整 CI 与最终发行验收，后续工作见
+   本轮工程验证已恢复；可继续收敛的职责与复杂度集中点见
    [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)。
 
 ## 下一入口
 
-1. 继续当前架构重置目标，核对最新完整 CI、处理已定位的平台测试维护，并固定最终
-   source/wheel 构建、安装与 receipt。已批准补丁无需再次审批；超出原冻结差分的候选
-   按具体范围另行处理。临时故障注入仍放在已忽略的 `validation/local/`。
+1. 从交付报告核对最新提交、四格 CI 和同一 source/wheel 构建、安装及 receipt，之后
+   优先处理外部测试的可复现反馈。已执行的限定补丁无需再次审批；超出冻结差分的改动
+   按具体范围管理。临时故障注入仍放在已忽略的 `validation/local/`。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)

@@ -52,17 +52,17 @@ git config --get core.hooksPath
 
 ## 2. 定位用基线
 
-截至 2026-09-11 的已核对快照：
+截至 2026-09-14 的已核对快照：
 
 - 产品版本：`0.28.0` 发布后的持续开发源码。
 - Schema：Download 11、Editing 4、Upload 4、Workflow 3、Workflow preset 2。
 - 上传备份格式：3。
 - 首批上传平台仅限 Bilibili、抖音、视频号；视频号内部 ID 为 `tencent`。
-- 2026-09-13 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
+- 2026-09-14 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
-- `0592b6f` 的 release receipt 只覆盖该冻结构建，不覆盖后续源码。
+- 历次 release receipt 只覆盖其中冻结的 source commit，不覆盖后续源码。
 - 2026-09-10 的实际应用根只完成 Upload Schema 1→3；Schema 4 只在独立临时根验收。
-- Hosted CI 最近状态为红色；必须实时查询后再描述当前状态。
+- `8564b30` 的[四格 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34762892893) 全绿；描述新 HEAD 前仍须实时查询。
 
 以上只用于判断是否进入了正确项目。若 Git 或源码与它不同，以当前事实为准，并在回报中说明差异。
 
@@ -102,7 +102,8 @@ git config --get core.hooksPath
 ## 5. 验证与提交门禁
 
 一般规则是不新增或修改 tracked 自动化测试文件。2026-09-13 用户已明确批准 `AGENTS.md`
-记载的限定差分，并已提交为 `3e482f0`，无需再次审批。其他测试改动须有对应的明确授权；
+记载的限定差分，并已提交为 `3e482f0`；本次继续修复对应的平台维护已提交为 `ac3532b`。
+这两份已执行差分无需再次审批。其他测试改动须有对应的明确授权；
 只删除历史测试仍可使用独立清理提交。不得通过减少收集范围或放宽安全断言伪造绿色结果。
 
 按改动范围运行：

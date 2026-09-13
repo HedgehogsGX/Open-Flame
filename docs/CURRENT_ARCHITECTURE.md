@@ -151,9 +151,10 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 | CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 直接调用公开 Worker builder/锁/logger；LocalApp/LocalWorker 的绝对路径解析及 Worker 结果输出共用既有 CLI support |
 
 本分支已修复下文第 9 节的前两条失败路径，并收敛两类 adapter 控制记录的 JSONL 解码。
-其他职责收敛和完整 CI 恢复仍在继续。已批准的测试维护提交 `3e482f0` 恢复标准收集；
-`4b0cf3a` 本地完整回归通过，但 Linux 平台 fixture 仍有 21 项失败。原批准差分之外的
-候选仍保存在 ignored 目录，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
+测试维护 `3e482f0` 恢复标准收集，平台维护 `ac3532b` 消除 Linux fixture 失败；
+Windows SQLite sidecar 竞争修复 `8564b30` 的四格 CI 已全部通过。测试收集和 skip 计数
+没有缩减，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
+剩余复杂度按具体收益继续精简，不能把 CI 通过解释成不存在架构债务或真实平台已验收。
 
 ## 4. 数据所有权与存储布局
 
@@ -326,7 +327,7 @@ stateDiagram-v2
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
 | 备份文件操作 | [`backup_files.py`](../src/video_download_control/backup_files.py) | Download/Upload 使用公开路径、复制与 snapshot；各自保留事务、锁、格式、审计和恢复 |
 | Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 分责；日期/DST、时限、标签、分区与短标题共享纯判定，调用者保留 DOM 与冻结时间上下文 |
-| 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；禁止新增/修改 tracked tests |
+| 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；默认禁止新增/修改 tracked tests，仅接受 AGENTS 记载的已授权冻结差分 |
 
 ## 9. 当前缺陷、复杂度集中点与下一切片
 
@@ -377,12 +378,12 @@ stateDiagram-v2
    Editing render retry forest 现也由公开解析与发现式取消共用，Workflow 删除两个重复
    定义；33 组真实 SQLite 对照和取消专项合同通过，speech checkpoint 的更强缓存/授权
    合同保留。见[render 图所有权](../validation/iteration-0.28.0-editing-render-retry-ownership.md)。
-5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
-   尚未在该实根迁移/审计。`c07b0af` 已完成独立 source/wheel 安装，但对应 CI 未闭合；
-   后续修复必须与最终提交的制品、检查和包外 receipt 重新绑定。当前 Linux CI 的剩余失败
-   已取得实际日志并定位到平台 fixture，不能用 Windows 通过替代。发行清单已补齐受检的必读
-   文档和相应链接；新发行在构建前执行文档完整性检查，通用 archive 校验保留制品自身合同，
-   见[发行文档分责](../validation/iteration-0.28.0-release-documentation-boundary.md)。这不是新发行已构建的证据。
+5. **实际应用根与发行证据仍有独立边界。** 2026-09-10 的实际 app root 只完成 Upload
+   Schema 1→3；Schema 4 尚未在该实根迁移/审计。`8564b30` 的四格离线 CI 已恢复；
+   包外 receipt 仍必须把最终提交、制品、source/wheel 安装和同提交 CI 绑定，历史安装
+   不能跨提交复用。发行清单包含受检必读文档和链接，构建前执行文档完整性检查，
+   通用 archive 校验保留制品自身合同，见
+   [发行文档分责](../validation/iteration-0.28.0-release-documentation-boundary.md)。
 
 推荐顺序：本分支已完成第 1、2 项小修，继续处理已确定的职责和规则重复；收到外部测试反馈时优先
 复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有

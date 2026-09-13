@@ -1,11 +1,12 @@
 # Open-Flame 后续执行计划
 
-2026-09-13 当前入口：已批准的测试合同维护提交为 `3e482f0`，生产故障修复 `4b0cf3a`
-本地全量通过，Linux CI 尚余平台 fixture 问题。继续依据
-[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md) 收敛，
-再冻结最终制品与 receipt。下方路线与历史计数不替代这份当前状态。
+2026-09-14 当前入口：测试维护 `3e482f0`、平台维护 `ac3532b` 和生产修复 `8564b30`
+已恢复 Windows/Ubuntu × CPython 3.12.10/3.13.14 四格 CI。本地 CPython 3.12.10
+全量也通过 2442 项、跳过 16 项。依据
+[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md) 核对最终交付报告中
+同一提交的 CI、制品与 receipt，再处理外部反馈。下方历史计数不替代当前提交证据。
 
-路线制定：2026-09-05；进度更新：2026-09-11。本文保留工作包、验收门槛与依赖顺序；当前源码身份、能力边界、风险和唯一下一入口以 [HANDOFF](../HANDOFF.md) 为准，逐项结果以 [validation 索引](../validation/README.md) 链接的独立 evidence 为准。当前开发版本为 0.28.0：Download/Editing/Upload/Workflow Schema 分别为 11/4/4/3，Workflow preset Schema 为 2，上传备份格式为 3；首批上传平台仍限 Bilibili、抖音和视频号。0592b6f 的五件制品与包外 receipt 只证明该冻结构建，之后源码尚无新 clean receipt；真实 OpenAI、真人试听、三平台发布与目标 Linux/Docker 验收均未完成。
+路线制定：2026-09-05；进度更新：2026-09-11。本文保留工作包、验收门槛与依赖顺序；当前源码身份、能力边界、风险和唯一下一入口以 [HANDOFF](../HANDOFF.md) 为准，逐项结果以 [validation 索引](../validation/README.md) 链接的独立 evidence 为准。当前开发版本为 0.28.0：Download/Editing/Upload/Workflow Schema 分别为 11/4/4/3，Workflow preset Schema 为 2，上传备份格式为 3；首批上传平台仍限 Bilibili、抖音和视频号。历次五件制品与包外 receipt 只证明其中绑定的冻结构建，不跨提交复用；真实 OpenAI、真人试听、三平台发布与目标 Linux/Docker 验收均未完成。
 
 架构精简 S1–S8 已按可独立回退的小切片完成：HTTP guard，公开 profile/metadata/identity 契约，AI/Upload/Edit snapshot 解释，verified media response，EditingManager，受管文件身份/读取，以及 Workflow 上传表单与 recipe 分责均已收敛；受管读取又补齐单遍有界不可变字节 snapshot，使 AI WAV 与 Upload cover 复用同一“读取字节即摘要”实现，同时保留 AI 的增强文件属性/规范路径身份和各域错误码。2026-09-11 只对新增 bounded-byte snapshot 与受影响的 AI/Upload 路径执行增量复验；未重跑的 S6b 检查仍只绑定 2026-09-10 基线。各域权限、事务、错误、确认与 capability 边界保持。HANDOFF 现只保留当前身份、能力、风险与下一入口，validation README 只做证据索引；历史结果继续留在各自 evidence 和 Git 历史。仓库 hook 与 hosted CI 已复核为共用 scripts/verify_commit_scope.py，分别检查 staged diff 与事件 merge-base 净差，允许只删除旧测试。下一入口统一为接收外部测试反馈、修复可复现问题，再固定精确 clean candidate；真实 OpenAI、真人试听与三平台发布仍需对具体动作另行明确授权。WorkflowStore 或更短 handler 只在能够删除现有重复且故障恢复语义可逐项证明时再提取。来源封面偏好沿用该评审的核心判断：保持本地模块化单体，以 Download 的窄只读 resolver 接入既有 Workflow/Upload 边界，不复制下载状态、不增加跨域数据库或运行服务。
 
@@ -66,7 +67,7 @@ request/job 摘要、账号 session revision、source/cover SHA-256、product bu
 | T14 | 必要生命周期切片在本地完成 | 去重、总配额、自动孤儿清理仍为后续优化 |
 | T07 | 当前上传备份格式 3 / Upload Schema 4 可保存受管封面、定时、平台参数及 attempt receipts；格式 1 / Schema 2 与格式 2 / Schema 3 只作为严格只读输入在 staging 中迁移且不补造旧 receipt | 当前实际 app root Schema 4 迁移、真实容量、异机/offsite、NAS 与人工值班演练未做 |
 | T08 | 三平台串行、300 轮本地轮询和复制中断清理的有界切片完成 | 更广故障矩阵按剩余风险继续补充，不把本切片扩写为长期生产压测 |
-| T09 | 托管 Windows/Linux × CPython 3.12.10/3.13.14 四格已运行，测试前环境和门禁均通过 | 完整 pytest 仍红；required checks / branch protection **NOT CONFIGURED** |
+| T09 | `8564b30` 的 Windows/Ubuntu × CPython 3.12.10/3.13.14 四格全部通过；Windows 各 2442/16，Ubuntu 各 2321/137（passed/skipped） | 新提交须重新核对；本轮没有配置或验收 required checks / branch protection |
 | T10（0.24.4 历史阶段） | 版本号、第 14 个 wheel 命令入口及源码侧发行门禁已接线 | 只保留为 0.24.4 源码准备记录，不能证明 0.25.0 制品 |
 | T16 / G6（0.25.0 历史阶段） | T16.1～T16.7 本地开发与禁止远端调用的 G6 验收完成 | 保留为前端基线，不能证明当前制品或平台能力 |
 | T17 / G7（0.26.0 历史阶段） | 三平台独立标题/简介/标签、受管封面、定时和平台专属字段完成 | 真实平台逐字段接受、定时触发、封面裁切和发布结果 **NOT RUN** |

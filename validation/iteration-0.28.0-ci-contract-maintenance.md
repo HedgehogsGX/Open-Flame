@@ -117,3 +117,30 @@ Windows 的零链接元数据现在按文件已消失抛出 `FileNotFoundError`�
 更高频的诊断轮询仍可能耗尽原有五次快照一致性重试；这个有界失败保护没有放宽。
 上述结果只覆盖各自源码状态。最终交付必须核对后续提交的四格 CI 和同一提交制品 receipt，
 不能把 ac3532b 的三格通过解释为全绿。没有执行真实下载、登录、OpenAI 或平台发布。
+
+
+## 2026-09-14 四格 CI 恢复
+
+签名生产修复为 `8564b3019e1c2a512d14dc56620318eaf2338e78`，GitHub 验签有效，author/committer 均归属 `novahanser`。
+[此提交的完整 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34762892893) 四格全部 success，包含提交范围、固定依赖、
+CI 定义、完整 pytest 和源码空白门禁：
+
+| 环境 | 结果 | 时间 |
+| --- | --- | --- |
+| ubuntu-latest / CPython 3.12.10 | 2321 passed, 137 skipped | 243.39 秒 |
+| ubuntu-latest / CPython 3.13.14 | 2321 passed, 137 skipped | 182.24 秒 |
+| windows-latest / CPython 3.12.10 | 2442 passed, 16 skipped | 961.41 秒 |
+| windows-latest / CPython 3.13.14 | 2442 passed, 16 skipped | 730.86 秒 |
+
+同一固定提交的 Windows / CPython 3.12.10 本地全量为 `2442 passed, 16 skipped`，
+pytest 报告耗时 400.51 秒（JUnit 394.987 秒）。50 ms 间隔唤醒真实空闲 Worker 的第二 reader 探针
+连续 5000 次通过，160.282 秒；15 项读取/打开/零链接边界探针通过。
+
+一次诊断期间启动的本地全量因后续源码修改触发进程构建身份漂移保护，得到
+`26 failed, 2416 passed, 16 skipped`；该轮保留日志并作废，未当作固定提交的验收。
+上表 hosted jobs 使用固定 Git checkout，替代混合源码状态；本地全量也已重新从
+`8564b30` 的不变源码完整执行。原始记录均在 ignored 的 `validation/local/ci-continue-20260913/`。
+
+本次文档更新仍须以更新后 HEAD 的四格 CI 单独验收，最终 source/wheel 构建、独立安装、
+五件制品摘要和签名身份由同一提交的包外 receipt 记录。它们不证明真实 OpenAI、平台发布、
+实际用户应用根迁移或 Linux/Docker/NAS 部署验收；本轮没有合并或推送 main。
