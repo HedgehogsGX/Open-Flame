@@ -349,3 +349,5 @@ validation/iteration-0.28.0-upload-poll-reconnection.md
 validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md
 validation/iteration-0.28.0-application-data-recovery.md
 validation/iteration-0.28.0-runtime-route-logging.md
+validation/iteration-0.28.0-rollback-environment-drill.md
+docs/MAIN_MERGE_GATE.md

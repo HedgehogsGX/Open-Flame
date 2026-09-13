@@ -11,12 +11,17 @@
 ## 当前托管运行状态
 
 2026-09-14 重新查询 GitHub 后确认，提交
-[`d970bce18f23d205476b3ca86be4cb2465947dcb`](https://github.com/HedgehogsGX/Open-Flame/commit/d970bce18f23d205476b3ca86be4cb2465947dcb)
-的 [PR run 34772636658](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772636658)
-四格 `success`；[push run 34772635181](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772635181)
-三格 `success`，Windows / CPython 3.12.10 为 `failure`。具体是 Bilibili 封面测试的等待竞争；
-此前 `9822454` 的 PR 在视频号用例出现同类问题。首次等待方案及后续范围见
-[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。新的限定维护尚未应用。
+[`ceb77ece167e4ab4e6f18a720e8ebe8cc0804d2e`](https://github.com/HedgehogsGX/Open-Flame/commit/ceb77ece167e4ab4e6f18a720e8ebe8cc0804d2e)
+的 [push run 34774421941](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34774421941) 与
+[PR run 34774423528](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34774423528)
+均已 completed，四格均为 `success`。
+
+此前 `d970bce` push 的 Bilibili 封面失败、`9822454` PR 的视频号封面失败保留在
+[原记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。在暂停 backend 的
+隔离探针中，三个现有封面用例均可确定性复现过早检查删除；backend 列表已有记录不能证明
+任务已经提交或后续清理完成。新的 v2 方案只在三个函数各增加一行 submitted 等待，
+保留所有原断言；仅内存替换三个函数后原模块 40 项通过。精确门禁正反向验证通过，
+真实测试、AGENTS 例外和范围门禁尚未修改。绿色运行不能消除这项竞争，v2 仍待明确批准。
 PR #2 仍未合并；新提交必须查询自己的检查结果。此前签名和隔离验收见
 [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
 安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
@@ -26,8 +31,9 @@ PR #2 仍未合并；新提交必须查询自己的检查结果。此前签名�
 这两份冻结测试差分不构成后续修改测试文件的通用权限。
 
 本次查询 main 返回 `protected=false`，应用规则为空；required checks / branch protection
-仍为 **NOT CONFIGURED**。可继续准备规则，当前失败修正、设置和实际阻断验证仍是独立待办。
-四个真实 check context 与 GitHub Actions 来源已记录在发布准备基线中，不以绿色图标代替门禁。
+仍为 **NOT CONFIGURED**。包含上级规则的 ruleset 清单为空，当前 API 身份未显示 admin
+权限；四个实际 context、GitHub Actions 来源、完整配置选择与验证步骤见
+[main 门禁提案](MAIN_MERGE_GATE.md)。配置及实际阻断验证仍是独立待办。
 
 ## 历史失败：2026-09-10，bdd88ce
 

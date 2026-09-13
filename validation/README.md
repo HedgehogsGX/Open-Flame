@@ -10,6 +10,8 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Rollback preparation: [old-source environment copies, normal startup/stop, schema compatibility and encrypted private-state verification](iteration-0.28.0-rollback-environment-drill.md).
+- Main merge gate: [exact proposal, observed permission boundary and outstanding remote verification](../docs/MAIN_MERGE_GATE.md).
 - Application data: [observed Download/Upload protection, independent restore, normal startup and original-root preservation](iteration-0.28.0-application-data-recovery.md).
 - Runtime logging: [eight registered route templates, bounded log fields and real HTTP verification](iteration-0.28.0-runtime-route-logging.md).
 - Frozen load and CI: [9822454 storage 300-cycle run, normal stop and pending PR cover-test wait correction](iteration-0.28.0-storage-soak-and-ci-follow-up.md).
