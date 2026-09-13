@@ -10,6 +10,7 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Upload reconnection: [refresh the current session, clear recovered poll errors and preserve action feedback](iteration-0.28.0-upload-poll-reconnection.md).
 - Upload storage: [configurable free-space floor, incoming/copy checks and bounded exhaustion cleanup](iteration-0.28.0-upload-storage-threshold.md).
 - Release drill: [1540a7e isolated Setup/Start/stop, four-page browser checks, old Upload copy migration/restore and workflow notice correction](iteration-0.28.0-release-readiness-drill.md).
 - Release preparation: [live 7575773 baseline, green push/PR CI, matching installation receipt and pending merge gate](iteration-0.28.0-release-readiness-baseline.md).

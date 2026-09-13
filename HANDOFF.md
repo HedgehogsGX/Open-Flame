@@ -156,6 +156,7 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 
 | 范围 | 当前记录 |
 | --- | --- |
+| 上传页重连 | [恢复连接反馈、刷新当前会话并保留操作提示](validation/iteration-0.28.0-upload-poll-reconnection.md) |
 | 上传容量配置 | [部署阈值、接收/复制门槛与满盘清理](validation/iteration-0.28.0-upload-storage-threshold.md) |
 | 隔离验收与旧数据副本 | [1540a7e 普通启停、四页浏览器、Upload 副本迁移/恢复与流程文案修正](validation/iteration-0.28.0-release-readiness-drill.md) |
 | 发布准备基线 | [7575773 的 push/PR CI、同提交安装 receipt 与待配置门禁](validation/iteration-0.28.0-release-readiness-baseline.md) |
@@ -220,8 +221,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 1. 以[隔离验收记录](validation/iteration-0.28.0-release-readiness-drill.md)定位并重新核对
    HEAD/PR/CI。普通启停、四页浏览器与旧 Upload 数据副本迁移/独立恢复已完成限定验证；
-   上传剩余空间阈值已贯通启动、服务、API 和页面；下一步先修复重启后残留的上传页连接错误，
-   再补充固定负载持续运行与真实业务，总配额和跨进程空间预订仍未实现。
+   上传剩余空间阈值已贯通启动、服务、API 和页面；重启后残留的连接错误与旧 CSRF 已修复。
+   下一步冻结候选、核对自身 CI，再补充固定负载持续运行与真实业务；
+   总配额和跨进程空间预订仍未实现。
    门禁配置、全应用保护和实际根维护仍分别待办。当前 backup create 只接受 Schema 4；
    原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。
    外部反馈出现时优先复现。已批准并应用的测试差分不重复审批，也不扩大授权范围；

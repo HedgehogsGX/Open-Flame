@@ -345,3 +345,4 @@ validation/iteration-0.28.0-ci-contract-maintenance.md
 validation/iteration-0.28.0-release-readiness-baseline.md
 validation/iteration-0.28.0-release-readiness-drill.md
 validation/iteration-0.28.0-upload-storage-threshold.md
+validation/iteration-0.28.0-upload-poll-reconnection.md
