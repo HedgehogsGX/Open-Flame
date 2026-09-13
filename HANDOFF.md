@@ -9,7 +9,7 @@
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
 当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
-重整架构并解决完整 CI；**本轮已复现故障已修复，四格 CI 已恢复，未合并 main**。起点为远端 main `d481326`。已分别
+重整架构并解决完整 CI；**已复现生产故障已修复，最近核对的 `9822454` push CI 通过，PR CI 因一项测试等待竞争失败，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
@@ -156,6 +156,7 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 
 | 范围 | 当前记录 |
 | --- | --- |
+| 固定负载与最新 CI | [9822454 存储 300 轮通过、正常停机及 PR 封面测试等待竞争](validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md) |
 | 上传页重连 | [恢复连接反馈、刷新当前会话并保留操作提示](validation/iteration-0.28.0-upload-poll-reconnection.md) |
 | 上传容量配置 | [部署阈值、接收/复制门槛与满盘清理](validation/iteration-0.28.0-upload-storage-threshold.md) |
 | 隔离验收与旧数据副本 | [1540a7e 普通启停、四页浏览器、Upload 副本迁移/恢复与流程文案修正](validation/iteration-0.28.0-release-readiness-drill.md) |
@@ -197,9 +198,11 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    只验证 Upload Schema 1→3；本轮没有在该实际根执行 Schema 4 迁移或审计。
    `1540a7e` 已完成该旧库的保护副本、Schema 3→4 迁移和独立备份恢复；
    原库摘要未变，其他领域完整备份与实际根升级仍未执行，见隔离验收记录。
-4. **完整 CI 已恢复，合并门禁尚未配置。** `1540a7e` 的 push 与 PR 四格均为 success；
-   2026-09-14 实时核对 main 仍未受保护，PR #2 未合并。新提交仍须核对自己的 CI，
-   规则写入、阻断验证、合并及合并后 main 的 CI 各自取证，见发布准备基线。
+4. **最新 PR CI 有一项待处理，合并门禁尚未配置。** `9822454` 的 push 四格 success，
+   PR 三格 success，Windows / CPython 3.12.10 因视频号封面测试过早检查清理而失败。
+   单行等待方案已在隔离环境通过该文件 40 项测试，新测试维护例外尚待确认，见
+   [本轮记录](validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
+   main 仍未受保护，PR #2 未合并；规则写入、阻断验证和新提交 CI 各自取证。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -222,7 +225,8 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 1. 以[隔离验收记录](validation/iteration-0.28.0-release-readiness-drill.md)定位并重新核对
    HEAD/PR/CI。普通启停、四页浏览器与旧 Upload 数据副本迁移/独立恢复已完成限定验证；
    上传剩余空间阈值已贯通启动、服务、API 和页面；重启后残留的连接错误与旧 CSRF 已修复。
-   下一步冻结候选、核对自身 CI，再补充固定负载持续运行与真实业务；
+   `9822454` 固定合成存储负载已完成 600.77 秒/300 轮及正常停机。
+   下一步处理已复现的封面测试等待竞争，再核对新提交 CI、补充其余恢复负载与真实业务；
    总配额和跨进程空间预订仍未实现。
    门禁配置、全应用保护和实际根维护仍分别待办。当前 backup create 只接受 Schema 4；
    原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。

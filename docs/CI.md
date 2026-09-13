@@ -11,11 +11,12 @@
 ## 当前托管运行状态
 
 2026-09-14 重新查询 GitHub 后确认，提交
-[`1540a7ed55e809c9f86a2eeff87855cf7ff2963b`](https://github.com/HedgehogsGX/Open-Flame/commit/1540a7ed55e809c9f86a2eeff87855cf7ff2963b)
-的 [push run 34767925055](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34767925055)
-与 [PR run 34767928010](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34767928010)
-均已完成，Windows/Ubuntu × CPython 3.12.10/3.13.14 的四个 job 均为 `success`。
-PR #2 仍未合并；新提交必须查询自己的检查结果。当前签名和隔离验收见
+[`9822454462264297e83521b7c523cce557dd0c3f`](https://github.com/HedgehogsGX/Open-Flame/commit/9822454462264297e83521b7c523cce557dd0c3f)
+的 [push run 34771038229](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34771038229)
+四格 `success`；[PR run 34771040471](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34771040471)
+三格 `success`，Windows / CPython 3.12.10 为 `failure`。具体是视频号封面测试的等待竞争，
+可复现原因及尚未应用的限定维护方案见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
+PR #2 仍未合并；新提交必须查询自己的检查结果。此前签名和隔离验收见
 [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
 安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
 
@@ -24,7 +25,7 @@ PR #2 仍未合并；新提交必须查询自己的检查结果。当前签名�
 这两份冻结测试差分不构成后续修改测试文件的通用权限。
 
 本次查询 main 返回 `protected=false`，应用规则为空；required checks / branch protection
-仍为 **NOT CONFIGURED**。CI 已满足准备门禁的前提，设置和实际阻断验证仍是独立待办。
+仍为 **NOT CONFIGURED**。可继续准备规则，当前失败修正、设置和实际阻断验证仍是独立待办。
 四个真实 check context 与 GitHub Actions 来源已记录在发布准备基线中，不以绿色图标代替门禁。
 
 ## 历史失败：2026-09-10，bdd88ce

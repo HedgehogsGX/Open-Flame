@@ -61,6 +61,9 @@ git config --get core.hooksPath
 - 2026-09-14 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
 - 历次 release receipt 只覆盖其中冻结的 source commit，不覆盖后续源码。
+- `9822454` 已完成固定合成存储负载 600.77 秒/300 轮与正常停机；push CI 四格通过，
+  PR CI 一项视频号封面测试等待竞争失败。单行修正及精确门禁方案已在隔离环境验证，
+  新测试维护例外仍待确认，见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
 - `7575773116f7aeebe6bc21bbdb02f9f469a3ea5e` 已有同提交 source/wheel 独立安装 receipt，
   push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
   2026-09-14 实时核对 PR #2 未合并，main 未受保护，见

@@ -10,6 +10,7 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Frozen load and CI: [9822454 storage 300-cycle run, normal stop and pending PR cover-test wait correction](iteration-0.28.0-storage-soak-and-ci-follow-up.md).
 - Upload reconnection: [refresh the current session, clear recovered poll errors and preserve action feedback](iteration-0.28.0-upload-poll-reconnection.md).
 - Upload storage: [configurable free-space floor, incoming/copy checks and bounded exhaustion cleanup](iteration-0.28.0-upload-storage-threshold.md).
 - Release drill: [1540a7e isolated Setup/Start/stop, four-page browser checks, old Upload copy migration/restore and workflow notice correction](iteration-0.28.0-release-readiness-drill.md).
