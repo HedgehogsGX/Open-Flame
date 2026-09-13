@@ -61,8 +61,12 @@ git config --get core.hooksPath
 - 2026-09-14 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
 - 历次 release receipt 只覆盖其中冻结的 source commit，不覆盖后续源码。
+- `7575773116f7aeebe6bc21bbdb02f9f469a3ea5e` 已有同提交 source/wheel 独立安装 receipt，
+  push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
+  2026-09-14 实时核对 PR #2 未合并，main 未受保护，见
+  [发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
 - 2026-09-10 的实际应用根只完成 Upload Schema 1→3；Schema 4 只在独立临时根验收。
-- `8564b30` 的[四格 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34762892893) 全绿；描述新 HEAD 前仍须实时查询。
+- `8564b30` 是 CI 生产修复里程碑；描述新 HEAD 前仍须实时查询，不能沿用旧结果。
 
 以上只用于判断是否进入了正确项目。若 Git 或源码与它不同，以当前事实为准，并在回报中说明差异。
 

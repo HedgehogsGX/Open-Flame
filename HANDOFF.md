@@ -25,7 +25,7 @@ Editing 复制也已补齐目标创建权与失败清理，并与备份共用受
 Editing 成品元数据校验已前移，复制后立即登记清理责任，见
 [成品登记清理](validation/iteration-0.28.0-editing-registration-cleanup.md)。备份锁 descriptor
 与 SQLite 连接交接也已补齐，见[资源回收记录](validation/iteration-0.28.0-backup-resource-handoff.md)。
-公共备份迁移、39 项故障反馈及当前测试入口阻断见
+公共备份迁移、39 项故障反馈及当时的测试入口阻断见
 [公共备份文件记录](validation/iteration-0.28.0-public-backup-files.md)。render 重试树现也由
 Editing 公开解析，Workflow 删除两个重复定义；一致读、取消写事务、后继与 unknown
 保护见[render 图所有权记录](validation/iteration-0.28.0-editing-render-retry-ownership.md)。
@@ -156,6 +156,7 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 
 | 范围 | 当前记录 |
 | --- | --- |
+| 发布准备基线 | [7575773 的 push/PR CI、同提交安装 receipt 与待配置门禁](validation/iteration-0.28.0-release-readiness-baseline.md) |
 | 当前状态与 CI 策略 | [文档状态收敛](validation/iteration-0.28.0-document-status-consolidation.md) |
 | 封面规则与当前回归 | [Upload 封面所有权及备份审计](validation/iteration-0.28.0-upload-cover-ownership.md) |
 | AI 重试图所有权 | [Editing 统一校验与取消事务](validation/iteration-0.28.0-editing-ai-retry-ownership.md) |
@@ -175,7 +176,7 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 | 本轮架构重置 | [Worker/CLI 分责](validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](validation/iteration-0.28.0-media-cleanup-errors.md)、[辅助素材清理](validation/iteration-0.28.0-auxiliary-cleanup-errors.md)、[adapter 解码](validation/iteration-0.28.0-adapter-control-decoding.md)、[回执状态合同](validation/iteration-0.28.0-upload-receipt-contract.md)、[Download 素材读取](validation/iteration-0.28.0-download-asset-reader.md) |
 | 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
 | 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
-| CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
+| CI | [当前状态与历史失败](docs/CI.md)、[合同维护与恢复](validation/iteration-0.28.0-ci-contract-maintenance.md) |
 
 这些记录分别绑定各自源码和环境。它们不能相互拼接成当前 release receipt，也不能把
 synthetic/offline/browser 结果解释成真实模型质量或平台接收。
@@ -188,13 +189,13 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 2. **真实三平台发布未验收。** 本地账号显示 ready 只说明本地 session 记录状态；不能证明
    远端 session 仍有效，也不能证明上传、审核、定时发布或公开可见成功。
 3. **发行与真实应用根的验收边界。** 制品、独立安装和包外 receipt 必须绑定同一提交；
-   `c07b0af` / `65e5c48` 的历史安装结果不能覆盖最终交付。2026-09-10 的当前应用根记录
+   `7575773` 已有同提交 source/wheel 安装 receipt，见发布准备基线；该结果不覆盖后续提交。
+   `c07b0af` / `65e5c48` 的历史结果单独保留。2026-09-10 的实际应用根记录
    只验证 Upload Schema 1→3；本轮没有在该实际根执行 Schema 4 迁移或审计。
    临时 Schema 4 smoke 和离线 CI 不能替代实际根验收。
-4. **完整 CI 已恢复，结果仍按提交冻结。** `8564b30` 的四格全部通过，Windows 各
-   2442 passed / 16 skipped，Ubuntu 各 2321 passed / 137 skipped。本地 CPython 3.12.10
-   全量也为 2442 passed / 16 skipped。包含本次文档更新的提交仍须单独核对同一 HEAD
-   的四格结果，见[CI 合同维护记录](validation/iteration-0.28.0-ci-contract-maintenance.md)。
+4. **完整 CI 已恢复，合并门禁尚未配置。** `7575773` 的 push 与 PR 四格均为 success；
+   2026-09-14 实时核对 main 仍未受保护，PR #2 未合并。新提交仍须核对自己的 CI，
+   规则写入、阻断验证、合并及合并后 main 的 CI 各自取证，见发布准备基线。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -214,9 +215,12 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 从交付报告核对最新提交、四格 CI 和同一 source/wheel 构建、安装及 receipt，之后
-   优先处理外部测试的可复现反馈。已执行的限定补丁无需再次审批；超出冻结差分的改动
-   按具体范围管理。临时故障注入仍放在已忽略的 `validation/local/`。
+1. 以[发布准备基线](validation/iteration-0.28.0-release-readiness-baseline.md)定位并重新核对
+   HEAD/PR/CI。先准备合并门禁与隔离验收环境，优先演练旧 Upload 数据的保护副本、
+   Schema 4 迁移和独立恢复，再安排实际根维护。当前 backup create 只接受 Schema 4；
+   原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。
+   外部反馈出现时优先复现。已批准并应用的测试差分不重复审批，也不扩大授权范围；
+   临时故障注入仍放在已忽略的 `validation/local/`。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)

@@ -10,7 +10,8 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
-- CI recovery: [four green hosted jobs at 8564b30, bounded Windows SQLite snapshot fixes and test maintenance](iteration-0.28.0-ci-contract-maintenance.md).
+- Release preparation: [live 7575773 baseline, green push/PR CI, matching installation receipt and pending merge gate](iteration-0.28.0-release-readiness-baseline.md).
+- CI recovery history: [bounded Windows SQLite snapshot fixes and approved test maintenance](iteration-0.28.0-ci-contract-maintenance.md).
 - Current architecture-reset supplements: [caption cleanup](iteration-0.28.0-caption-cleanup-errors.md)
   and [release documentation boundary](iteration-0.28.0-release-documentation-boundary.md).
 - Workflow request identity: [shared key and frozen request construction](iteration-0.28.0-workflow-request-construction.md).
@@ -31,8 +32,8 @@ results belong outside Git or under ignored `validation/local/`.
 - Upload cover ownership: [shared format/platform rules and backup audit](iteration-0.28.0-upload-cover-ownership.md).
   The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
   the three added failures still patch the former service decoder location.
-- Development version: `0.28.0`; the current post-release source has no new
-  clean release receipt.
+- Development version: `0.28.0`; post-release commit `7575773` has a matching
+  clean source/wheel installation receipt. Later commits need their own receipt.
 - The `0592b6f` receipt applies only to that frozen build.
 - Real OpenAI responses, human listening quality, Bilibili/Douyin/WeChat
   Channels upload acceptance, scheduled publication and public visibility are
@@ -58,7 +59,7 @@ results belong outside Git or under ignored `validation/local/`.
 - Explicit dubbing render retries can reuse individually verified cue WAV
   checkpoints from the same immutable retry lineage; see the scoped
   [validation record](iteration-0.28.0-speech-checkpoint-retry.md).
-- Hosted branch run `34680878428` at clean `36cfb56` reached offline pytest on
+- Historical failures before CI recovery: hosted branch run `34680878428` at clean `36cfb56` reached offline pytest on
   Windows/Linux and CPython 3.12/3.13; all four jobs failed. Local failures
   include old internal interfaces, HTTP, Schema and fixture contracts, but
   their causes are not a complete classification of hosted logs. This run
@@ -75,10 +76,11 @@ The concise current development state, risks and next actions live in
 
 ## Current 0.28.0 evidence
 
-### Architecture reset branch in progress (2026-09-12)
+### Architecture reset implementation and CI recovery (2026-09-14 snapshot)
 
-`codex/architecture-reset-ci` is not merged into main and the full CI recovery is
-unfinished. These scoped records cover the implemented slices, not the entire goal:
+`codex/architecture-reset-ci` is not merged into main. Its `7575773` push and PR
+runs each passed all four CI jobs. Merge enforcement and real business acceptance
+remain separate work. These records cover the implemented slices:
 
 - [Workflow startup rollback](iteration-0.28.0-workflow-start-rollback.md)
 - [Primary media errors and cleanup](iteration-0.28.0-media-cleanup-errors.md)

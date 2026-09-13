@@ -10,11 +10,30 @@
 
 ## 当前托管运行状态
 
+2026-09-14 重新查询 GitHub 后确认，提交
+[`7575773116f7aeebe6bc21bbdb02f9f469a3ea5e`](https://github.com/HedgehogsGX/Open-Flame/commit/7575773116f7aeebe6bc21bbdb02f9f469a3ea5e)
+的 [push run 34763783506](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34763783506)
+与 [PR run 34765157437](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34765157437)
+均已完成，Windows/Ubuntu × CPython 3.12.10/3.13.14 的四个 job 均为 `success`。
+PR #2 仍未合并；新提交必须查询自己的检查结果。签名、安装 receipt 与合并门禁快照见
+[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
+
+`3e482f0` 和 `ac3532b` 的限定测试维护已获批准并应用，Windows SQLite sidecar 竞争由
+`8564b30` 修复，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
+这两份冻结测试差分不构成后续修改测试文件的通用权限。
+
+本次查询 main 返回 `protected=false`，应用规则为空；required checks / branch protection
+仍为 **NOT CONFIGURED**。CI 已满足准备门禁的前提，设置和实际阻断验证仍是独立待办。
+四个真实 check context 与 GitHub Actions 来源已记录在发布准备基线中，不以绿色图标代替门禁。
+
+## 历史失败：2026-09-10，bdd88ce
+
 [GitHub Actions run 34393235622](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34393235622) 精确绑定提交 [`bdd88ce184b2f86f957f7df9129baa21863227dd`](https://github.com/HedgehogsGX/Open-Flame/commit/bdd88ce184b2f86f957f7df9129baa21863227dd)。2026-09-10 的最终公开状态显示，四格均已通过 checkout、CPython 选择、commit scope、固定 uv、CI definition、runtime identities、locked development environment、`uv pip check` 及矩阵 Python/pytest 身份检查，随后四格都在 `Run the offline test suite` 失败；run 总结论为 `failure`。逐格链接与最终状态记录在[托管 CI 恢复证据](../validation/iteration-0.28.0-hosted-ci-recovery.md)。
 
 同一源码的本机全量结果是 **173 failed, 2277 passed, 8 skipped in 327.39s**。失败主要暴露既有测试与当前产品合同的漂移：大量下载 API 测试仍使用 `Host: testserver` 且未先获取下载域 session/提交 `X-Download-CSRF`，另有 Editing Schema 1、旧 release metadata/version、旧 UI 导航和 validation identity 断言。仓库策略禁止修改这些测试，本轮也没有在产品中加入测试绕过。因此当前结论是“托管执行链与前置门禁已恢复，完整测试仍红”，不能称为 CI 绿色。失败后的 whitespace steps 也没有在这些 job 中运行。
 
-required checks 与 branch protection 仍为 **NOT CONFIGURED**。在测试合同与当前产品行为达成明确处置、四格完整通过并保存实际 runner 身份前，不应把这些 checks 设为 required。
+以上是该旧提交的失败记录，后续限定维护与生产修复已完成；不能将这段历史结论解释为
+`7575773` 或未来 HEAD 的当前状态。
 
 ## 本地复验
 
