@@ -69,3 +69,51 @@ NTFS 实际释放空间。详细清单和本轮探针保存在忽略目录 `vali
 调用前以配置预算做 min 上限后，同一探针得到 15 秒与 queued_count 1，现有 API/短链接
 69 项回归通过。旧 CI 中两项短链接失败没有记录实际 timeout，因此不能单凭同症状认定
 这就是它们的唯一原因。临时探针在 `validation/local/cleanup-20260913/`，未改 tracked 测试。
+
+## 平台维护落地与 Windows 快照读取竞争
+
+用户在收到七个测试/fixture 路径的补充方案后要求“继续修复ci,并确保其全绿”。本轮据此
+应用已审查范围，签名提交为 `ac3532be91f632da8a09c543379b8ced24f6da7d`；`AGENTS.md`
+记录这次继续执行的具体范围。六个测试文件与一个显式请求的共用 fixture 调整平台假设，
+门禁只接受冻结差分，没有扩大 pytest 收集豁免或增加 skip。
+
+增量测试差分 SHA-256 为
+`b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679`；相对 main 的累计差分为
+`7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1`。
+实际范围、用例名称、skip 数量和安全断言检查见 ignored 的 `platform-applied.json`。
+相关 246 项回归通过；该提交的本地全量为 `2442 passed, 16 skipped`，394.02 秒。
+
+[ac3532b 的四格 CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34761461628) 已全部结束：
+
+| 环境 | 实际结果 | 时间 |
+| --- | --- | --- |
+| Ubuntu / CPython 3.12.10 | 2321 passed, 137 skipped | 125.70 秒 |
+| Ubuntu / CPython 3.13.14 | 2321 passed, 137 skipped | 127.13 秒 |
+| Windows / CPython 3.13.14 | 2442 passed, 16 skipped | 546.05 秒 |
+| Windows / CPython 3.12.10 | 1 failed, 2441 passed, 16 skipped | 424.98 秒 |
+
+原有 21 个 Linux 平台 fixture 失败全部消除，跳过计数保持不变。Windows 3.12 的失败发生在
+`test_draft_is_persistent_and_requires_explicit_confirm` 创建第二个 UploadService reader 时。
+以相同 CPython 3.12.10 重放未修改的原用例，第 64 次复现 `upload_schema_unsupported`；
+异常链实际指向源 `uploads.sqlite3-shm` 的 `PermissionError`。只保留空库、真实空闲 Worker
+和第二个 reader 的精简探针在第 67 次也观察到同一错误，目标为源 WAL 文件。
+
+修复只让 Windows 源 `-wal` / `-shm` 的 `PermissionError` 进入已有整份快照重试，仍限定
+五次、每次间隔 10 ms。每次重新复制并执行文件身份、摘要、WAL 和精确 Schema 校验；
+主数据库、临时目录或其他路径的权限错误保持立即拒绝。没有写回或修复原数据库文件。
+加压探针还在 `read()` 调用处观察到不带文件名的 `PermissionError`，因此 sidecar 内容读取
+也在最窄的读取边界转换为快照重试，目标临时文件写入不进入这项例外。
+随后第 3110 次加压读取记录到普通 WAL 文件 `st_nlink=0`：SQLite 正在解除路径链接。
+Windows 的零链接元数据现在按文件已消失抛出 `FileNotFoundError`，由 sidecar 的既有缺失
+重试处理；主数据库缺失仍失败，硬链接、重解析点和非普通文件仍拒绝。
+
+确定性探针分别覆盖带文件名的打开冲突、不带文件名的内容读取冲突及零链接窗口，共十五项：修复前单次
+冲突即失败；修复后 WAL/SHM 单次冲突均恢复，持续冲突均在第五次失败，主数据库读取
+无权限只尝试一次。首次修复后原失败用例连续 250 次通过；现有 Upload Service、Schema
+2/3、备份恢复与 activity lock 回归为 `234 passed`，86.99 秒；内容读取补充修复后同集合
+再次 `234 passed`，84.26 秒。零链接分类补充后，14 项现有 Schema/数据库回归通过，3.82 秒。
+临时探针和完整异常链位于 ignored 的 `validation/local/ci-continue-20260913/`。
+
+更高频的诊断轮询仍可能耗尽原有五次快照一致性重试；这个有界失败保护没有放宽。
+上述结果只覆盖各自源码状态。最终交付必须核对后续提交的四格 CI 和同一提交制品 receipt，
+不能把 ac3532b 的三格通过解释为全绿。没有执行真实下载、登录、OpenAI 或平台发布。

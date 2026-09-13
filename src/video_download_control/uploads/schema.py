@@ -1,6 +1,7 @@
 """Exact validation plus atomic creation and migration for the upload schema."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sqlite3
@@ -617,7 +618,13 @@ def _require_plain_database(path: Path) -> os.stat_result:
     info = path.lstat()
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
-            or getattr(info, "st_file_attributes", 0) & reparse or info.st_nlink != 1):
+            or getattr(info, "st_file_attributes", 0) & reparse):
+        raise UploadSchemaError
+    if os.name == "nt" and info.st_nlink == 0:
+        # SQLite may unlink a sidecar between the path lookup and metadata read.
+        # Classify it as absent so snapshot callers can retry; never accept it.
+        raise FileNotFoundError(errno.ENOENT, "database file was unlinked", str(path))
+    if info.st_nlink != 1:
         raise UploadSchemaError
     return info
 
@@ -637,6 +644,8 @@ def _file_identity(info: os.stat_result) -> tuple[int, ...]:
 def _fingerprint_file(
     path: Path,
     copy_to: Path | None = None,
+    *,
+    sidecar: bool = False,
 ) -> tuple[tuple[int, ...], bytes]:
     before = _require_plain_database(path)
     digest = sha256()
@@ -644,12 +653,21 @@ def _fingerprint_file(
     destination = copy_to.open("xb") if copy_to is not None else None
     try:
         with path.open("rb") as source:
+            def read_chunk(size: int) -> bytes:
+                try:
+                    return source.read(size)
+                except PermissionError:
+                    # Windows byte-range locks can reject reads without a filename.
+                    if sidecar and os.name == "nt":
+                        raise _SnapshotChanged from None
+                    raise
+
             opened = os.fstat(source.fileno())
             if _file_identity(opened) != _file_identity(before):
                 raise _SnapshotChanged
             remaining = before.st_size
             while remaining:
-                chunk = source.read(min(_SNAPSHOT_CHUNK_BYTES, remaining))
+                chunk = read_chunk(min(_SNAPSHOT_CHUNK_BYTES, remaining))
                 if not chunk:
                     raise _SnapshotChanged
                 total += len(chunk)
@@ -657,7 +675,7 @@ def _fingerprint_file(
                 digest.update(chunk)
                 if destination is not None:
                     destination.write(chunk)
-            if source.read(1):
+            if read_chunk(1):
                 raise _SnapshotChanged
             after = os.fstat(source.fileno())
         if total != before.st_size or _file_identity(after) != _file_identity(before):
@@ -700,9 +718,9 @@ def _copy_stable_snapshot(path: Path, destination: Path) -> None:
     expected = {path: _fingerprint_file(path, destination)}
     try:
         if wal_present:
-            expected[wal] = _fingerprint_file(wal, _sidecar(destination, "-wal"))
+            expected[wal] = _fingerprint_file(wal, _sidecar(destination, "-wal"), sidecar=True)
         if shm_present:
-            expected[shm] = _fingerprint_file(shm)
+            expected[shm] = _fingerprint_file(shm, sidecar=True)
     except FileNotFoundError:
         raise _SnapshotChanged from None
 
@@ -714,7 +732,7 @@ def _copy_stable_snapshot(path: Path, destination: Path) -> None:
         raise _SnapshotChanged
     for source, fingerprint in expected.items():
         try:
-            current = _fingerprint_file(source)
+            current = _fingerprint_file(source, sidecar=source != path)
         except FileNotFoundError:
             if source != path:
                 raise _SnapshotChanged from None
@@ -905,7 +923,17 @@ def _validated_schema_version(path: Path, allowed_versions: frozenset[int]) -> i
                     finally:
                         db.close()
                 return version
-            except _SnapshotChanged:
+            except (_SnapshotChanged, PermissionError) as exc:
+                # A closing SQLite connection can temporarily deny Windows reads
+                # of its WAL/SHM files. Retry the whole verified snapshot only;
+                # permissions on the database or our temporary files still fail.
+                if isinstance(exc, PermissionError) and (
+                    os.name != "nt" or exc.filename is None
+                    or Path(exc.filename) not in (
+                        _sidecar(resolved, "-wal"), _sidecar(resolved, "-shm")
+                    )
+                ):
+                    raise
                 if attempt + 1 == _SNAPSHOT_ATTEMPTS:
                     raise UploadSchemaError from None
                 time.sleep(_SNAPSHOT_RETRY_SECONDS)
