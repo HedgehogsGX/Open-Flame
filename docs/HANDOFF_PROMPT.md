@@ -61,9 +61,9 @@ git config --get core.hooksPath
 - 2026-09-14 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
 - 历次 release receipt 只覆盖其中冻结的 source commit，不覆盖后续源码。
-- `9822454` 已完成固定合成存储负载 600.77 秒/300 轮与正常停机；push CI 四格通过，
-  PR CI 一项视频号封面测试等待竞争失败。单行修正及精确门禁方案已在隔离环境验证，
-  新测试维护例外仍待确认，见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
+- `9822454` 已完成固定合成存储负载 600.77 秒/300 轮与正常停机；其 PR CI 的视频号封面
+  等待竞争尚未修正。最新 `d970bce` 的 PR 四格通过，push 在 Bilibili 用例出现同类失败。
+  新测试维护须冻结精确范围后确认，见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
 - `7575773116f7aeebe6bc21bbdb02f9f469a3ea5e` 已有同提交 source/wheel 独立安装 receipt，
   push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
   2026-09-14 实时核对 PR #2 未合并，main 未受保护，见
@@ -71,7 +71,9 @@ git config --get core.hooksPath
 - `1540a7e` 的 push/PR 四格均已通过；隔离 Setup、普通启停、四页浏览器及实际旧 Upload
   数据的保护副本、Schema 3→4 迁移和独立恢复已通过限定验证，见
   [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
-  实际应用根本身仍为 Upload Schema 3；全应用保护和实际根升级未执行。
+  实际应用根本身仍为 Upload Schema 3。`d970bce` 又完成当前 Download/Upload 业务数据的
+  联合保护副本、独立恢复和副本普通启停；原根缺席的 Editing/Workflow 没有历史内容恢复证据，
+  凭据/部署环境保护与实际根升级仍待办，见[数据恢复记录](../validation/iteration-0.28.0-application-data-recovery.md)。
 - `8564b30` 是 CI 生产修复里程碑；描述新 HEAD 前仍须实时查询，不能沿用旧结果。
 
 以上只用于判断是否进入了正确项目。若 Git 或源码与它不同，以当前事实为准，并在回报中说明差异。

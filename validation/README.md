@@ -10,6 +10,8 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Application data: [observed Download/Upload protection, independent restore, normal startup and original-root preservation](iteration-0.28.0-application-data-recovery.md).
+- Runtime logging: [eight registered route templates, bounded log fields and real HTTP verification](iteration-0.28.0-runtime-route-logging.md).
 - Frozen load and CI: [9822454 storage 300-cycle run, normal stop and pending PR cover-test wait correction](iteration-0.28.0-storage-soak-and-ci-follow-up.md).
 - Upload reconnection: [refresh the current session, clear recovered poll errors and preserve action feedback](iteration-0.28.0-upload-poll-reconnection.md).
 - Upload storage: [configurable free-space floor, incoming/copy checks and bounded exhaustion cleanup](iteration-0.28.0-upload-storage-threshold.md).

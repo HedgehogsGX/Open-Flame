@@ -11,11 +11,12 @@
 ## 当前托管运行状态
 
 2026-09-14 重新查询 GitHub 后确认，提交
-[`9822454462264297e83521b7c523cce557dd0c3f`](https://github.com/HedgehogsGX/Open-Flame/commit/9822454462264297e83521b7c523cce557dd0c3f)
-的 [push run 34771038229](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34771038229)
-四格 `success`；[PR run 34771040471](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34771040471)
-三格 `success`，Windows / CPython 3.12.10 为 `failure`。具体是视频号封面测试的等待竞争，
-可复现原因及尚未应用的限定维护方案见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
+[`d970bce18f23d205476b3ca86be4cb2465947dcb`](https://github.com/HedgehogsGX/Open-Flame/commit/d970bce18f23d205476b3ca86be4cb2465947dcb)
+的 [PR run 34772636658](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772636658)
+四格 `success`；[push run 34772635181](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772635181)
+三格 `success`，Windows / CPython 3.12.10 为 `failure`。具体是 Bilibili 封面测试的等待竞争；
+此前 `9822454` 的 PR 在视频号用例出现同类问题。首次等待方案及后续范围见
+[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。新的限定维护尚未应用。
 PR #2 仍未合并；新提交必须查询自己的检查结果。此前签名和隔离验收见
 [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
 安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。

@@ -1,7 +1,7 @@
 # Open-Flame 后续执行计划
 
-2026-09-14 当前入口：`9822454` 的 push run `34771038229` 四格通过，PR run `34771040471`
-有一项封面测试等待竞争失败；固定合成存储负载 600.77 秒/300 轮及正常停机通过，见
+2026-09-14 当前入口：`d970bce` 的 PR run `34772636658` 四格通过，push run `34772635181`
+有一项 Bilibili 封面测试等待竞争失败。此前 `9822454` 固定合成存储负载 600.77 秒/300 轮及正常停机通过，见
 [负载与 CI 后续](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
 `1540a7e` 的隔离普通启停、四页浏览器、旧 Upload 数据副本迁移与独立恢复已完成限定验证，
 见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
@@ -10,7 +10,11 @@
 仍待验收。上传剩余空间阈值配置与写入门槛已完成限定验证，见
 [容量记录](../validation/iteration-0.28.0-upload-storage-threshold.md)；重启观察到的上传页连接错误
 与旧会话已[独立修复](../validation/iteration-0.28.0-upload-poll-reconnection.md)。
-下一步处理已复现的单行测试等待修正，再核对新提交 CI、继续其余恢复与真实业务验收。
+下一步处理已复现的封面测试等待竞争，再核对新提交 CI、继续其余恢复与真实业务验收。
+后续 `d970bce` 的当前 Download/Upload 业务数据保护、独立恢复和恢复副本启停已完成限定检查，
+见[数据恢复记录](../validation/iteration-0.28.0-application-data-recovery.md)；原根未升级，凭据与
+部署环境恢复仍待办。恢复检查发现的 8 个合法路由日志拒写已[修复](../validation/iteration-0.28.0-runtime-route-logging.md)。
+新增 CI 日志也在 Bilibili 封面用例发现同类等待竞争，限定测试维护须覆盖实际复现的同类调用点。
 测试维护与生产修复经过见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
 下方旧阶段的失败、测试数量、未生成 receipt 等表述只绑定各自历史源码，不代表本次基线。
 
@@ -475,7 +479,7 @@ T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的�
 
 **历史实现补充（2026-09-10～11）：** 上传 Setup 的独立 ignored validator 已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变和输出脱敏；当前实际 app-root 的后续刷新又验证了真实目录上的安全留档、两个 runtime 安装、Upload Schema 1→3 数据保留迁移与本地 Start。这是 2026-09-10 的历史实根记录，尚未覆盖当前 Upload Schema 4。Workflow Schema 2 阶段已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账、原始 queued 预授权续跑、一次完整批量确认、重复下载 owner 恢复、语速冻结/恢复、attention 后精确确认恢复，以及在当时 Schema 3 合同下只替换 failed/canceled slot 的事务化投稿重试；当前 Upload Schema 4 还要求 leaf 通过 attempt receipt 校验。当前 Workflow Schema 3 又把来源标题、逐账号最终标题与 ready asset 一次冻结；Workflow preset Schema 2 让上次成功预设在依赖读取成功且用户未编辑时恢复，并按每次创建的固定锚点生成逐账号相对发布时间。方向 C“编辑式玻璃”也已实施于生产四页并完成当前 Chromium 44/44 QA；translation revision 精确绑定已经完成并按独立证据复验。其余工作是把已签名的 Upload Schema 4 源码里程碑纳入新的 clean release candidate，并在当前实际 app root 执行迁移审计；随后在明确授权与测试账号/素材具备后执行真实 OpenAI、真人试听及三平台外部验收。
 
-**当前接续（2026-09-14）：** `7575773` 已取得同提交工程 receipt，`1540a7e` 的 push/PR 四格也已通过；以上旧 CI 合同漂移已有修复。隔离普通启停/四页浏览器与旧 Upload 数据副本迁移、独立恢复已通过限定检查，见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。最新核对的 `9822454` 固定存储负载 300 轮通过，push CI 四格通过，PR CI 的视频号封面测试等待竞争仍待限定维护，见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。main 门禁、全应用保护、实际根升级、其余故障/负载矩阵、真实模型和平台验收仍待完成；最终发行候选变更后重新完成受影响验收与制品冻结。
+**当前接续（2026-09-14）：** `7575773` 已取得同提交工程 receipt，`1540a7e` 的 push/PR 四格也已通过；以上旧 CI 合同漂移已有修复。隔离普通启停/四页浏览器与旧 Upload 数据副本迁移、独立恢复已通过限定检查，见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。`9822454` 固定存储负载 300 轮通过；最新 `d970bce` 的 PR 四格通过、push 一项封面测试等待竞争失败，见[本轮记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。当前 Download/Upload 业务数据保护和独立恢复已完成限定检查，见[数据恢复记录](../validation/iteration-0.28.0-application-data-recovery.md)。main 门禁、凭据和部署环境保护、实际根升级、其余故障/负载矩阵、真实模型和平台验收仍待完成；最终发行候选变更后重新完成受影响验收与制品冻结。
 
 ## 5. 每个工作包统一交付检查
 

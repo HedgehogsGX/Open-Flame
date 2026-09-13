@@ -69,6 +69,16 @@ ignored 探针在原用例暂停模拟 backend，稳定得到同一封面存在�
 精确增量/累计差分及门禁方案已在 Git 外冻结，并验证额外一行改动仍被拒绝。
 本记录冻结时，新的测试维护例外尚待用户确认，仓库测试和门禁未修改，PR 失败仍未关闭。
 
+### 后续同类失败：d970bce
+
+2026-09-13 18:19:07 UTC 重新查询，`d970bce` 的
+[PR run 34772636658](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772636658) 四格 success；
+[push run 34772635181](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34772635181) 为 3 success、1 failure。
+Windows / CPython 3.12.10 的 `test_bilibili_cover_schedule_and_options_reach_upload_request`
+在等待模拟 backend 请求列表后，同样因临时封面仍存在而失败：**1 failed、2441 passed、16 skipped**。
+两次失败均保留，另一 run 的绿色不消除等待竞争。首次视频号单行方案的范围不足以覆盖
+新出现的 Bilibili 调用点，后续须逐项验证并冻结新的精确维护补丁，再按仓库策略确认。
+
 ## 后续范围
 
 本次只补齐固定小负载下的 Upload 存储运行、局部资源增长、草稿取消和正常停机证据。
