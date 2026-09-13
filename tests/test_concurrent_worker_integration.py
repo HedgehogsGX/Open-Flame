@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 
+from windows_worker_fixtures import windows_worker_contract
+
 import video_download_control.local_app as local_app_module
 import video_download_control.local_worker_cli as local_worker_module
 import video_download_control.worker_pool as worker_pool_module
@@ -131,6 +133,7 @@ def _start_call(callback: Callable[[], None]) -> tuple[Thread, list[BaseExceptio
     return thread, errors
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_worker_drain_starts_second_platform_before_first_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -173,6 +176,7 @@ def test_local_worker_drain_starts_second_platform_before_first_finishes(
     assert {item["job_id"] for item in output if "job_id" in item} == worker.job_ids
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_worker_poll_starts_second_platform_before_first_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -241,6 +245,7 @@ def test_local_worker_poll_starts_second_platform_before_first_finishes(
     assert events[-1]["reason"] == "keyboard_interrupt"
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_worker_ctrl_c_stops_and_joins_both_active_platform_attempts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -346,6 +351,7 @@ class _SupervisorCommands:
         self.closed = True
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_app_child_starts_second_platform_before_first_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from windows_worker_fixtures import windows_worker_contract
+
 from video_download_control.adapters import AdapterNetworkMode
 from video_download_control.candidate_cookies import (
     AttemptCookieResolver,
@@ -62,6 +64,7 @@ def test_local_worker_requires_command_line_direct_network_acknowledgement(
         main(cli_arguments(tmp_path, acknowledge=False))
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_direct_guard_rechecks_feature_gate_each_cycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -284,6 +287,7 @@ def test_cookie_argument_failure_does_not_echo_private_value(
     assert marker not in capsys.readouterr().err
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_build_local_worker_uses_shared_database_and_explicit_direct_route(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -369,6 +373,7 @@ def test_build_local_worker_uses_shared_database_and_explicit_direct_route(
         cookie_source.chmod(0o600)
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_local_worker_cookie_profile_reaches_yt_dlp_attempt_copy_and_ready_asset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -523,6 +528,7 @@ def test_local_worker_cookie_profile_reaches_yt_dlp_attempt_copy_and_ready_asset
         cookie_source.chmod(0o600)
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_main_runs_one_idle_cycle_with_explicit_local_opt_in(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -558,6 +564,7 @@ def test_main_runs_one_idle_cycle_with_explicit_local_opt_in(
     assert {event["component"] for event in events} == {"local-worker"}
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_main_check_validates_without_claiming_and_reports_cookie_platforms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -602,6 +609,7 @@ def test_main_check_validates_without_claiming_and_reports_cookie_platforms(
     ]
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_main_check_real_builder_preserves_queue_and_attempt_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -724,6 +732,7 @@ def test_main_check_real_builder_preserves_queue_and_attempt_state(
         cookie_source.chmod(0o600)
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_main_redacts_cookie_startup_failure_and_discards_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -756,6 +765,7 @@ def test_main_redacts_cookie_startup_failure_and_discards_context(
     assert marker not in next((data_root / "logs").iterdir()).read_text("utf-8")
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_singleton_lock_rejects_second_process_scope_and_allows_stale_reuse(
     tmp_path: Path,
 ) -> None:
@@ -791,6 +801,7 @@ def test_control_database_hardlink_is_rejected(tmp_path: Path) -> None:
         local_worker_module.validate_local_worker_paths(config)
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_unavailable_initial_log_prevents_builder_and_queue_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -818,6 +829,7 @@ def test_unavailable_initial_log_prevents_builder_and_queue_claim(
     assert builder_called is False
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_singleton_open_error_is_bounded_before_builder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -847,6 +859,7 @@ def test_singleton_open_error_is_bounded_before_builder(
     assert builder_called is False
 
 
+@pytest.mark.usefixtures("windows_worker_contract")
 def test_builder_revalidates_js_runtime_before_tool_inspection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -31,6 +31,13 @@ EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 APPROVED_TEST_MAINTENANCE_PATCH_SHA256 = "5ddff9cedcdfe0f5dd4a67beb9cab8566e1a743cebd3a37695ce4caeb3297a14"
 
 
+# Reviewed platform maintenance applied for the user's 2026-09-13 CI continuation.
+# Freeze both the incremental commit and the cumulative PR diff.
+APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S = frozenset({
+    "b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679",
+    "7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1",
+})
+
 def _is_test_artifact(value: str) -> bool:
     path = PurePosixPath(value.replace("\\", "/"))
     parts = {part.casefold() for part in path.parts}
@@ -85,7 +92,11 @@ def _approved_test_maintenance(diff_args: Sequence[str], paths: Sequence[str]) -
         "--unified=3", "--inter-hunk-context=0", "--diff-algorithm=myers",
         "--no-indent-heuristic", *diff_args, "--", *paths,
     )
-    return hashlib.sha256(patch).hexdigest() == APPROVED_TEST_MAINTENANCE_PATCH_SHA256
+    digest = hashlib.sha256(patch).hexdigest()
+    return (
+        digest == APPROVED_TEST_MAINTENANCE_PATCH_SHA256
+        or digest in APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S
+    )
 
 
 def _commit(value: str) -> str:

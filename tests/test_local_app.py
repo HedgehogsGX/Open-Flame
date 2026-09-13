@@ -211,8 +211,8 @@ def test_windows_local_path_rejects_root_unc_device_unsafe_or_reserved_component
         local_app_module._validate_windows_local_path(path, "test path")
 
 
-def test_windows_local_path_accepts_a_normal_absolute_path() -> None:
-    path = Path("C:\\safe-root\\plain-directory\\file.json")
+def test_windows_local_path_accepts_a_normal_absolute_path(tmp_path: Path) -> None:
+    path = tmp_path / "safe-root" / "plain-directory" / "file.json"
 
     assert local_app_module._validate_windows_local_path(path, "test path") == path
 
@@ -481,7 +481,8 @@ def test_child_environment_is_rebuilt_from_a_small_allowlist(
 
 def test_reserve_loopback_socket_rejects_an_occupied_port() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
-        occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         occupied.bind(("127.0.0.1", 0))
         occupied.listen(1)
         port = int(occupied.getsockname()[1])
@@ -551,7 +552,8 @@ def test_occupied_port_fails_before_database_child_or_browser_side_effects(
         raising=False,
     )
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
-        occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         occupied.bind(("127.0.0.1", 0))
         occupied.listen(1)
         occupied_config = replace(

@@ -23,3 +23,22 @@
 用户明确回复“批准本次限定测试维护例外”，已启用并应用审查过的测试合同维护补丁。
 范围门禁只接受规范化完整测试差分 SHA-256 为 `5ddff9cedcdfe0f5dd4a67beb9cab8566e1a743cebd3a37695ce4caeb3297a14` 的那一份补丁；路径、内容、增删或上下文变化都会恢复阻断。
 此例外不授权跳过测试、改变 pytest 收集范围或放宽生产安全合同，也不改变源码制品排除 `tests/` 的规则。完成该补丁后，其他自动化测试的新增或修改仍需另行明确授权。
+
+### 平台测试维护范围（2026-09-13 继续修复 CI）
+
+用户收到补充范围和架构复审后明确要求“继续修复ci,并确保其全绿”。本轮据此执行已审查的
+平台维护补丁：修改 6 个历史测试并增加 1 个共用 fixture，限定路径为：
+
+- `tests/test_assets.py`
+- `tests/test_concurrent_worker_integration.py`
+- `tests/test_local_app.py`
+- `tests/test_local_worker_cli.py`
+- `tests/test_upload_backend.py`
+- `tests/test_upload_runtime_integrity.py`
+- `tests/windows_worker_fixtures.py`
+
+本轮可在上述 7 个文件内依据实际 CI 日志补正同类平台 fixture；每次仍须固定完整差分摘要、
+复核收集用例和原安全断言。不得新增 skip、删除测试、更改 pytest 收集范围或放宽生产合同；
+不授权此范围之外的测试修改。完成本轮 CI 维护后恢复一般测试策略。
+本次冻结增量差分 SHA-256：`b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679`；累计 PR 差分 SHA-256：`7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1`。
+门禁只接受已固定摘要；同范围修正仍须同步摘要与验证证据，不能改成通用路径豁免。

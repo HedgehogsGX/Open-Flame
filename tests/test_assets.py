@@ -335,7 +335,14 @@ def test_asset_store_fails_closed_when_staging_directory_sync_fails(
             staticmethod(fail_directory_sync),
         )
     else:
-        monkeypatch.setattr(os, "open", fail_directory_sync)
+        original_open = os.open
+
+        def open_with_failed_directory_sync(path, flags, *args, **kwargs):
+            if flags & os.O_DIRECTORY:
+                return fail_directory_sync(path, flags, *args, **kwargs)
+            return original_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", open_with_failed_directory_sync)
 
     with pytest.raises(AssetStorageError, match="failed to sync managed directory"):
         store.stage_file(

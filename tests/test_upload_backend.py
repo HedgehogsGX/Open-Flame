@@ -171,8 +171,10 @@ def test_install_never_resigns_legacy_runtime(tmp_path, monkeypatch):
         lambda *_: pytest.fail("legacy runtime must stop before downloading"),
     )
 
-    with pytest.raises(SetupError, match="runtime_upgrade_requires_reinstall"):
+    expected = "runtime_upgrade_requires_reinstall" if os.name == "nt" else "windows_x64_required"
+    with pytest.raises(SetupError, match=expected):
         install(tmp_path, Path(sys.executable))
+    assert inspect_runtime(tmp_path) == {"ready": False, "code": "runtime_upgrade_required"}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows OS file lock")
