@@ -689,7 +689,9 @@ def create_app(
             status_code = 404 if exc.code in {"asset_not_found", "asset_not_ready"} else 409
             raise HTTPException(status_code=status_code, detail=exc.code) from None
 
-    app.state.upload_service_factory = UploadService
+    app.state.upload_service_factory = lambda root: UploadService(
+        root, storage_min_free_bytes=resolved_settings.upload_storage_min_free_bytes,
+    )
     upload_manager = UploadManager(
         default_upload_root(resolved_settings.data_root),
         service_factory=lambda root: app.state.upload_service_factory(root),

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -8,6 +10,23 @@ from typing import Protocol
 
 
 PLATFORMS = {"bilibili": "Bilibili", "douyin": "抖音", "tencent": "视频号"}
+DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES = 64 * 1024**2
+MAX_UPLOAD_STORAGE_MIN_FREE_BYTES = 2**63 - 1
+
+
+def validate_upload_storage_min_free_bytes(value: object) -> None:
+    if type(value) is not int or not 0 <= value <= MAX_UPLOAD_STORAGE_MIN_FREE_BYTES:
+        raise ValueError("upload storage threshold must be a non-negative 64-bit integer")
+
+
+def is_upload_storage_full(error: OSError | sqlite3.Error) -> bool:
+    return (
+        getattr(error, "errno", None) in {errno.ENOSPC, errno.EDQUOT}
+        or getattr(error, "winerror", None) == 112
+        or getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL
+    )
+
+
 UPLOAD_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 UPLOAD_ATTEMPT_STATES = frozenset(
     {"reserved", "dispatch_may_have_started", "responded", "unknown", "reconciled"}

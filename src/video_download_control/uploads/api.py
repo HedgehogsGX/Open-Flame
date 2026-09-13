@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..local_http_guard import install_local_http_guard
 from ..ui_assets import page_content_security_policy
-from .contracts import UploadError
+from .contracts import UploadError, is_upload_storage_full
 from .manager import UploadManager
 from .web import UPLOAD_HTML
 
@@ -416,13 +416,28 @@ def install_upload_routes(
             return await run_in_threadpool(work)
         except UploadError as exc:
             raise _safe_error(exc) from None
-        except sqlite3.Error:
-            raise HTTPException(status_code=503, detail="upload_database_unavailable") from None
+        except (OSError, sqlite3.Error) as exc:
+            if is_upload_storage_full(exc):
+                raise HTTPException(status_code=409, detail="upload_storage_full") from None
+            if isinstance(exc, sqlite3.Error):
+                raise HTTPException(status_code=503, detail="upload_database_unavailable") from None
+            raise
 
     async def invoke(method: str, *args, **kwargs):
         def work():
             return getattr(manager.get(), method)(*args, **kwargs)
         return await run_guarded(work)
+
+    async def write_incoming(handle, chunk, total: int) -> None:
+        # Keep space for both the incoming bytes and the future managed copy.
+        for offset in range(0, len(chunk), 64 * 1024):
+            payload = memoryview(chunk)[offset:offset + 64 * 1024]
+            await invoke("require_storage_space", total + len(payload))
+            await run_guarded(lambda: handle.write(payload))
+
+    async def flush_incoming(handle) -> None:
+        await run_guarded(handle.flush)
+        await run_guarded(lambda: os.fsync(handle.fileno()))
 
     @app.get("/uploads", response_class=HTMLResponse, include_in_schema=False)
     def page():
@@ -510,12 +525,14 @@ def install_upload_routes(
         if len(lengths) > 1 or (lengths and (
                 not lengths[0].isdigit() or int(lengths[0]) > MAX_SOURCE_BYTES)):
             raise HTTPException(status_code=413, detail="source_too_large")
-        await run_guarded(manager.get)
+        await invoke("require_storage_space", 2 * int(lengths[0]) if lengths else 0)
         incoming = root / "incoming"
         incoming.mkdir(exist_ok=True)
         if incoming.is_symlink() or incoming.resolve() != incoming:
             raise HTTPException(status_code=409, detail="source_storage_invalid")
-        descriptor, temporary = tempfile.mkstemp(prefix="restore-", suffix=".media", dir=incoming)
+        descriptor, temporary = await run_guarded(
+            lambda: tempfile.mkstemp(prefix="restore-", suffix=".media", dir=incoming)
+        )
         source = Path(temporary)
         try:
             total = 0
@@ -524,14 +541,10 @@ def install_upload_routes(
                     total += len(chunk)
                     if total > MAX_SOURCE_BYTES:
                         raise HTTPException(status_code=413, detail="source_too_large")
-                    for offset in range(0, len(chunk), 64 * 1024):
-                        await run_in_threadpool(
-                            handle.write, memoryview(chunk)[offset:offset + 64 * 1024]
-                        )
+                    await write_incoming(handle, chunk, total)
                 if total == 0:
                     raise HTTPException(status_code=422, detail="source_empty")
-                await run_in_threadpool(handle.flush)
-                await run_in_threadpool(os.fsync, handle.fileno())
+                await flush_incoming(handle)
             result = await invoke("restore_source_media", source_id, source)
             return _public(result, _SOURCE_FIELDS)
         finally:
@@ -548,12 +561,14 @@ def install_upload_routes(
         lengths = request.headers.getlist("content-length")
         if len(lengths) > 1 or (lengths and (not lengths[0].isdigit() or int(lengths[0]) > MAX_SOURCE_BYTES)):
             raise HTTPException(status_code=413, detail="source_too_large")
-        await run_guarded(manager.get)
+        await invoke("require_storage_space", 2 * int(lengths[0]) if lengths else 0)
         incoming = root / "incoming"
         incoming.mkdir(exist_ok=True)
         if incoming.is_symlink() or incoming.resolve() != incoming:
             raise HTTPException(status_code=409, detail="source_storage_invalid")
-        descriptor, temporary = tempfile.mkstemp(prefix="import-", suffix=Path(name).suffix, dir=incoming)
+        descriptor, temporary = await run_guarded(
+            lambda: tempfile.mkstemp(prefix="import-", suffix=Path(name).suffix, dir=incoming)
+        )
         source = Path(temporary)
         try:
             total = 0
@@ -562,12 +577,10 @@ def install_upload_routes(
                     total += len(chunk)
                     if total > MAX_SOURCE_BYTES:
                         raise HTTPException(status_code=413, detail="source_too_large")
-                    for offset in range(0, len(chunk), 64 * 1024):
-                        await run_in_threadpool(handle.write, memoryview(chunk)[offset:offset + 64 * 1024])
+                    await write_incoming(handle, chunk, total)
                 if total == 0:
                     raise HTTPException(status_code=422, detail="source_empty")
-                await run_in_threadpool(handle.flush)
-                await run_in_threadpool(os.fsync, handle.fileno())
+                await flush_incoming(handle)
             result = await invoke("import_source", source, name)
             return _public(result, _SOURCE_FIELDS)
         finally:
@@ -674,13 +687,13 @@ def install_upload_routes(
         if len(lengths) > 1 or (lengths and (
                 not lengths[0].isdigit() or int(lengths[0]) > MAX_COVER_BYTES)):
             raise HTTPException(status_code=413, detail="cover_too_large")
-        await run_guarded(manager.get)
+        await invoke("require_storage_space", 2 * int(lengths[0]) if lengths else 0)
         incoming = root / "incoming"
         incoming.mkdir(exist_ok=True)
         if incoming.is_symlink() or incoming.resolve() != incoming:
             raise HTTPException(status_code=409, detail="cover_storage_invalid")
-        descriptor, temporary = tempfile.mkstemp(
-            prefix="cover-", suffix=Path(name).suffix.lower(), dir=incoming,
+        descriptor, temporary = await run_guarded(
+            lambda: tempfile.mkstemp(prefix="cover-", suffix=Path(name).suffix.lower(), dir=incoming)
         )
         cover_path = Path(temporary)
         try:
@@ -690,14 +703,10 @@ def install_upload_routes(
                     total += len(chunk)
                     if total > MAX_COVER_BYTES:
                         raise HTTPException(status_code=413, detail="cover_too_large")
-                    for offset in range(0, len(chunk), 64 * 1024):
-                        await run_in_threadpool(
-                            handle.write, memoryview(chunk)[offset:offset + 64 * 1024]
-                        )
+                    await write_incoming(handle, chunk, total)
                 if total == 0:
                     raise HTTPException(status_code=422, detail="cover_empty")
-                await run_in_threadpool(handle.flush)
-                await run_in_threadpool(os.fsync, handle.fileno())
+                await flush_incoming(handle)
             result = await invoke("import_cover", cover_path, name)
             return _public(result, _COVER_FIELDS)
         finally:

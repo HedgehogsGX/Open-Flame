@@ -44,6 +44,10 @@ from .candidate_cookies import (
     CookieSource,
 )
 from .config import DEFAULT_STORAGE_MIN_FREE_BYTES, Settings
+from .uploads.contracts import (
+    DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES,
+    validate_upload_storage_min_free_bytes,
+)
 from .cookie_source_config import (
     CookieSourceConfig,
     CookieSourceConfigError,
@@ -222,6 +226,7 @@ class LocalAppConfig:
     max_height: int = 1080
     max_file_bytes: int = 8 * 1024 * 1024 * 1024
     storage_min_free_bytes: int = DEFAULT_STORAGE_MIN_FREE_BYTES
+    upload_storage_min_free_bytes: int = DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES
     socket_timeout_seconds: int = 20
     probe_timeout_seconds: float = 90.0
     download_timeout_seconds: float = 30.0 * 60.0
@@ -231,6 +236,7 @@ class LocalAppConfig:
 
     def __post_init__(self) -> None:
         try:
+            validate_upload_storage_min_free_bytes(self.upload_storage_min_free_bytes)
             if not _normalized_absolute_path(self.app_root):
                 raise ValueError
             expected_data_root = self.app_root / "data"
@@ -360,6 +366,7 @@ class LocalAppConfig:
             host="127.0.0.1",
             port=self.port,
             storage_min_free_bytes=self.storage_min_free_bytes,
+            upload_storage_min_free_bytes=self.upload_storage_min_free_bytes,
             runtime_log_level=self.runtime_log_level,
             runtime_log_max_bytes=self.runtime_log_max_bytes,
             runtime_log_backup_count=self.runtime_log_backup_count,
@@ -447,6 +454,9 @@ class LocalAppConfig:
                 ) from None
         return replace(
             base,
+            upload_storage_min_free_bytes=getattr(
+                args, "upload_storage_min_free_bytes", base.upload_storage_min_free_bytes,
+            ),
             tool_root=getattr(args, "tool_root", None),
             js_runtime=getattr(args, "js_runtime", None),
             cookie_config_path=cookie_path,

@@ -28,6 +28,10 @@ from .runtime_logging import (
     DEFAULT_RUNTIME_LOG_MAX_BYTES,
 )
 from .startup_diagnostics import DiagnosticCode, emit_failure
+from .uploads.contracts import (
+    DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES,
+    MAX_UPLOAD_STORAGE_MIN_FREE_BYTES,
+)
 from .worker_cli_support import absolute_path as _absolute_path
 
 _MAX_COOKIE_BYTES = 64 * 1024 * 1024
@@ -211,6 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         default=DEFAULT_RUNTIME_LOG_BACKUP_COUNT,
         help="number of rotated structured logs retained (default: 5)",
+    )
+    parser.add_argument(
+        "--upload-storage-min-free-bytes",
+        type=_bounded_integer(
+            label="upload free space threshold", minimum=0,
+            maximum=MAX_UPLOAD_STORAGE_MIN_FREE_BYTES,
+        ),
+        default=DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES,
+        help="free bytes to retain after upload media writes (default: 67108864)",
     )
     return parser
 

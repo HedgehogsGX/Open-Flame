@@ -229,6 +229,7 @@ uv run video-download-local-worker `
 | `VDC_SHORT_LINK_TRANSPORT_SOCKET` | 未设置 | 短链 egress 服务创建的绝对、规范化、同 UID 私有 Unix socket |
 | `VDC_SHORT_LINK_ATTESTATION_KEY_FILE` | 未设置 | 控制面与 egress 服务共同读取的绝对、规范化、同 UID 私有 HMAC key 文件 |
 | `VDC_STORAGE_MIN_FREE_BYTES` | `1073741824` | 低于该剩余空间时拒绝恢复持久化队列 |
+| `VDC_UPLOAD_STORAGE_MIN_FREE_BYTES` | `67108864` | 独立控制面上传媒体写入后须保留的空间；普通 Windows Start 使用同名含义的 CLI 参数，见[启动指南](docs/WINDOWS_LAUNCHER.md#上传媒体预留空间) |
 | `VDC_RUNTIME_LOG_LEVEL` | `INFO` | 运行日志最低级别：`DEBUG`、`INFO`、`WARNING` 或 `ERROR` |
 | `VDC_RUNTIME_LOG_MAX_BYTES` | `10485760` | 每个组件 active JSONL 文件触发轮转前的最大字节数，范围 1 KiB–1 GiB |
 | `VDC_RUNTIME_LOG_BACKUP_COUNT` | `5` | 每个组件保留的轮转文件数，范围 1–20 |

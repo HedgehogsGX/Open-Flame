@@ -5,7 +5,9 @@
 见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
 `7575773` 的 source/wheel 安装 receipt 仍按[原基线](../validation/iteration-0.28.0-release-readiness-baseline.md)
 限定。PR #2 未合并，main 保护尚未配置；原应用根升级、全应用恢复、固定负载 soak 和真实业务
-仍待验收。优先处理反馈；无新增阻断时推进上传剩余空间阈值配置。
+仍待验收。上传剩余空间阈值配置与写入门槛已完成限定验证，见
+[容量记录](../validation/iteration-0.28.0-upload-storage-threshold.md)；先修复本次重启观察到的
+上传页连接错误残留，再继续固定负载与真实业务验收。
 测试维护与生产修复经过见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
 下方旧阶段的失败、测试数量、未生成 receipt 等表述只绑定各自历史源码，不代表本次基线。
 

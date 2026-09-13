@@ -46,6 +46,7 @@ from .activity_lock import (
     upload_activity_lock,
 )
 from .contracts import (
+    DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES,
     UPLOAD_CODE_PATTERN as _SAFE_CODE,
     UPLOAD_EVIDENCE_KINDS,
     UPLOAD_RECONCILIATIONS,
@@ -56,10 +57,12 @@ from .contracts import (
     UploadError,
     UploadRequest,
     is_tencent_short_title_output,
+    is_upload_storage_full,
     legacy_migrated_platform_options,
     normalize_tencent_short_title,
     upload_adapter_identity_matches,
     upload_evidence_is_valid,
+    validate_upload_storage_min_free_bytes,
 )
 from .covers import COVER_MIME_TYPES, MAX_COVER_BYTES, cover_metadata
 from .identity import (
@@ -89,7 +92,7 @@ from .receipts import validate_upload_attempt_state
 from .schema import UploadSchemaError, ensure_upload_schema
 
 MAX_SOURCE_BYTES = 2 * 1024**3
-UPLOAD_RESERVE_BYTES = 64 * 1024**2
+UPLOAD_RESERVE_BYTES = DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES
 _ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -145,8 +148,13 @@ def _requires_activity(method):
 
     @wraps(method)
     def locked(self, *args, **kwargs):
-        with self._activity():
-            return method(self, *args, **kwargs)
+        try:
+            with self._activity():
+                return method(self, *args, **kwargs)
+        except (OSError, sqlite3.Error) as exc:
+            if is_upload_storage_full(exc):
+                raise UploadError("upload_storage_full") from None
+            raise
 
     return locked
 
@@ -184,7 +192,12 @@ class _SchedulerLock:
 
 
 class UploadService:
-    def __init__(self, root: Path, backend: UploadBackend | None = None):
+    def __init__(
+        self, root: Path, backend: UploadBackend | None = None, *,
+        storage_min_free_bytes: int = UPLOAD_RESERVE_BYTES,
+    ):
+        validate_upload_storage_min_free_bytes(storage_min_free_bytes)
+        self.storage_min_free_bytes = storage_min_free_bytes
         requested_root = Path(os.path.abspath(root))
         # Every existing ancestor must be a plain directory, including junctions.
         for ancestor in reversed((requested_root, *requested_root.parents)):
@@ -1173,8 +1186,7 @@ class UploadService:
                     ).fetchone()
                 return self._asset_public(row)
 
-            if shutil.disk_usage(self.root).free < len(payload) + UPLOAD_RESERVE_BYTES:
-                raise UploadError("upload_storage_full")
+            self.require_storage_space(len(payload))
             stage = assets_root / f".{asset_id}.{uuid4().hex}.import"
             published: Path | None = None
             try:
@@ -1186,11 +1198,14 @@ class UploadService:
                     os.fsync(handle.fileno())
                 if _plain(stage).st_size != len(payload):
                     raise UploadError("cover_unavailable")
+                self.require_storage_space()
                 try:
                     os.link(stage, target)
                 except FileExistsError:
                     raise UploadError("cover_import_conflict") from None
-                except OSError:
+                except OSError as exc:
+                    if is_upload_storage_full(exc):
+                        raise UploadError("upload_storage_full") from None
                     raise UploadError("cover_import_failed") from None
                 published = target
                 stage.unlink()
@@ -1264,6 +1279,13 @@ class UploadService:
                 except OSError:
                     raise UploadError("cover_delete_cleanup_failed") from None
         return result
+
+    def require_storage_space(self, additional_bytes: int = 0) -> None:
+        """Check live free space on this volume; do not promise a global quota reservation."""
+        if type(additional_bytes) is not int or additional_bytes < 0:
+            raise UploadError("invalid_storage_size")
+        if shutil.disk_usage(self.root).free < additional_bytes + self.storage_min_free_bytes:
+            raise UploadError("upload_storage_full")
 
     def storage_usage(self) -> dict:
         with self._db() as db:
@@ -1353,8 +1375,8 @@ class UploadService:
             "orphan_bytes": orphan_bytes,
             "unsafe_entry_count": unsafe_entries,
             "free_bytes": disk.free,
-            "reserve_bytes": UPLOAD_RESERVE_BYTES,
-            "low_space": disk.free < UPLOAD_RESERVE_BYTES,
+            "reserve_bytes": self.storage_min_free_bytes,
+            "low_space": disk.free < self.storage_min_free_bytes,
         }
 
     @_requires_activity
@@ -1519,8 +1541,7 @@ class UploadService:
                     ).fetchone()
                 return self._source_public(row)
 
-            if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
-                raise UploadError("upload_storage_full")
+            self.require_storage_space(before.st_size)
             stage = media_root / f".{source_id}.{uuid4().hex}.import"
             digest_builder, total = hashlib.sha256(), 0
             published: Path | None = None
@@ -1534,6 +1555,7 @@ class UploadService:
                         total += len(chunk)
                         if total > MAX_SOURCE_BYTES:
                             raise UploadError("source_size_invalid")
+                        self.require_storage_space(len(chunk))
                         dst.write(chunk)
                         digest_builder.update(chunk)
                     if file_signature(os.fstat(src.fileno())) != file_signature(before):
@@ -1547,11 +1569,14 @@ class UploadService:
                     raise UploadError("source_hash_mismatch")
                 if _plain(stage).st_size != total:
                     raise UploadError("source_unavailable")
+                self.require_storage_space()
                 try:
                     os.link(stage, target)
                 except FileExistsError:
                     raise UploadError("source_import_conflict") from None
-                except OSError:
+                except OSError as exc:
+                    if is_upload_storage_full(exc):
+                        raise UploadError("upload_storage_full") from None
                     raise UploadError("source_import_failed") from None
                 published = target
                 stage.unlink()
@@ -1591,8 +1616,7 @@ class UploadService:
             raise UploadError("source_unavailable") from None
         if before.st_size != row["size"]:
             raise UploadError("source_restore_mismatch")
-        if shutil.disk_usage(self.root).free < before.st_size + UPLOAD_RESERVE_BYTES:
-            raise UploadError("upload_storage_full")
+        self.require_storage_space(before.st_size)
         media_root = self.root / "media"
         _plain(media_root, directory=True)
         stage = media_root / f".{source_id}.{uuid4().hex}.restore"
@@ -1606,6 +1630,7 @@ class UploadService:
                 while chunk := src.read(1024 * 1024):
                     total += len(chunk)
                     digest.update(chunk)
+                    self.require_storage_space(len(chunk))
                     dst.write(chunk)
                 if file_signature(os.fstat(src.fileno())) != file_signature(before):
                     raise UploadError("source_changed")
@@ -1614,6 +1639,7 @@ class UploadService:
             if (total != row["size"] or digest.hexdigest() != row["sha256"]
                     or file_signature(_plain(path)) != file_signature(before)):
                 raise UploadError("source_restore_mismatch")
+            self.require_storage_space()
             with self._active_guard, self._db() as db:
                 db.execute("BEGIN IMMEDIATE")
                 current = db.execute(self._source_query() + " WHERE s.id=?", (source_id,)).fetchone()
@@ -1626,7 +1652,9 @@ class UploadService:
                     os.link(stage, target)
                 except FileExistsError:
                     raise UploadError("source_restore_conflict") from None
-                except OSError:
+                except OSError as exc:
+                    if is_upload_storage_full(exc):
+                        raise UploadError("upload_storage_full") from None
                     raise UploadError("source_restore_failed") from None
                 published = target
                 stage.unlink()
