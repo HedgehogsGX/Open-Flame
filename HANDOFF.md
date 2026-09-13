@@ -156,6 +156,7 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 
 | 范围 | 当前记录 |
 | --- | --- |
+| 隔离验收与旧数据副本 | [1540a7e 普通启停、四页浏览器、Upload 副本迁移/恢复与流程文案修正](validation/iteration-0.28.0-release-readiness-drill.md) |
 | 发布准备基线 | [7575773 的 push/PR CI、同提交安装 receipt 与待配置门禁](validation/iteration-0.28.0-release-readiness-baseline.md) |
 | 当前状态与 CI 策略 | [文档状态收敛](validation/iteration-0.28.0-document-status-consolidation.md) |
 | 封面规则与当前回归 | [Upload 封面所有权及备份审计](validation/iteration-0.28.0-upload-cover-ownership.md) |
@@ -192,8 +193,9 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    `7575773` 已有同提交 source/wheel 安装 receipt，见发布准备基线；该结果不覆盖后续提交。
    `c07b0af` / `65e5c48` 的历史结果单独保留。2026-09-10 的实际应用根记录
    只验证 Upload Schema 1→3；本轮没有在该实际根执行 Schema 4 迁移或审计。
-   临时 Schema 4 smoke 和离线 CI 不能替代实际根验收。
-4. **完整 CI 已恢复，合并门禁尚未配置。** `7575773` 的 push 与 PR 四格均为 success；
+   `1540a7e` 已完成该旧库的保护副本、Schema 3→4 迁移和独立备份恢复；
+   原库摘要未变，其他领域完整备份与实际根升级仍未执行，见隔离验收记录。
+4. **完整 CI 已恢复，合并门禁尚未配置。** `1540a7e` 的 push 与 PR 四格均为 success；
    2026-09-14 实时核对 main 仍未受保护，PR #2 未合并。新提交仍须核对自己的 CI，
    规则写入、阻断验证、合并及合并后 main 的 CI 各自取证，见发布准备基线。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
@@ -215,9 +217,10 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 
 ## 下一入口
 
-1. 以[发布准备基线](validation/iteration-0.28.0-release-readiness-baseline.md)定位并重新核对
-   HEAD/PR/CI。先准备合并门禁与隔离验收环境，优先演练旧 Upload 数据的保护副本、
-   Schema 4 迁移和独立恢复，再安排实际根维护。当前 backup create 只接受 Schema 4；
+1. 以[隔离验收记录](validation/iteration-0.28.0-release-readiness-drill.md)定位并重新核对
+   HEAD/PR/CI。普通启停、四页浏览器与旧 Upload 数据副本迁移/独立恢复已完成限定验证；
+   后续补充固定负载持续运行与真实业务，并在无新增阻断时推进可配置空间阈值。
+   门禁配置、全应用保护和实际根维护仍分别待办。当前 backup create 只接受 Schema 4；
    原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。
    外部反馈出现时优先复现。已批准并应用的测试差分不重复审批，也不扩大授权范围；
    临时故障注入仍放在已忽略的 `validation/local/`。

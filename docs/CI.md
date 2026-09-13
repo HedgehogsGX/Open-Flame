@@ -11,12 +11,13 @@
 ## 当前托管运行状态
 
 2026-09-14 重新查询 GitHub 后确认，提交
-[`7575773116f7aeebe6bc21bbdb02f9f469a3ea5e`](https://github.com/HedgehogsGX/Open-Flame/commit/7575773116f7aeebe6bc21bbdb02f9f469a3ea5e)
-的 [push run 34763783506](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34763783506)
-与 [PR run 34765157437](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34765157437)
+[`1540a7ed55e809c9f86a2eeff87855cf7ff2963b`](https://github.com/HedgehogsGX/Open-Flame/commit/1540a7ed55e809c9f86a2eeff87855cf7ff2963b)
+的 [push run 34767925055](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34767925055)
+与 [PR run 34767928010](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34767928010)
 均已完成，Windows/Ubuntu × CPython 3.12.10/3.13.14 的四个 job 均为 `success`。
-PR #2 仍未合并；新提交必须查询自己的检查结果。签名、安装 receipt 与合并门禁快照见
-[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
+PR #2 仍未合并；新提交必须查询自己的检查结果。当前签名和隔离验收见
+[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
+安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
 
 `3e482f0` 和 `ac3532b` 的限定测试维护已获批准并应用，Windows SQLite sidecar 竞争由
 `8564b30` 修复，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。

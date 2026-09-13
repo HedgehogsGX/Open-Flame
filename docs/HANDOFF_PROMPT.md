@@ -65,7 +65,10 @@ git config --get core.hooksPath
   push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
   2026-09-14 实时核对 PR #2 未合并，main 未受保护，见
   [发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
-- 2026-09-10 的实际应用根只完成 Upload Schema 1→3；Schema 4 只在独立临时根验收。
+- `1540a7e` 的 push/PR 四格均已通过；隔离 Setup、普通启停、四页浏览器及实际旧 Upload
+  数据的保护副本、Schema 3→4 迁移和独立恢复已通过限定验证，见
+  [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
+  实际应用根本身仍为 Upload Schema 3；全应用保护和实际根升级未执行。
 - `8564b30` 是 CI 生产修复里程碑；描述新 HEAD 前仍须实时查询，不能沿用旧结果。
 
 以上只用于判断是否进入了正确项目。若 Git 或源码与它不同，以当前事实为准，并在回报中说明差异。

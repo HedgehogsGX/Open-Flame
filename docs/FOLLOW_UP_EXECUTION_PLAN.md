@@ -1,10 +1,11 @@
 # Open-Flame 后续执行计划
 
-2026-09-14 当前入口：`7575773` 的 push run `34763783506` 与 PR run `34765157437`
-均已四格通过，同提交 source/wheel 安装 receipt 已核对。PR #2 未合并，main 保护尚未配置。
-精确时间、SHA、运行链接与证据边界见
-[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
-先完成门禁准备、隔离启动与旧数据副本迁移/独立恢复，再推进真实业务验收及反馈修复。
+2026-09-14 当前入口：`1540a7e` 的 push run `34767925055` 与 PR run `34767928010`
+均已四格通过；隔离普通启停、四页浏览器、旧 Upload 数据副本迁移与独立恢复已完成限定验证，
+见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
+`7575773` 的 source/wheel 安装 receipt 仍按[原基线](../validation/iteration-0.28.0-release-readiness-baseline.md)
+限定。PR #2 未合并，main 保护尚未配置；原应用根升级、全应用恢复、固定负载 soak 和真实业务
+仍待验收。优先处理反馈；无新增阻断时推进上传剩余空间阈值配置。
 测试维护与生产修复经过见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
 下方旧阶段的失败、测试数量、未生成 receipt 等表述只绑定各自历史源码，不代表本次基线。
 
@@ -81,7 +82,7 @@ request/job 摘要、账号 session revision、source/cover SHA-256、product bu
 
 以下是 0.24.4 冻结准备阶段的历史定向结果，不能单独替代 T10，也不能借给 0.25.0：上传相关精确集合为 **383 passed in 100.29s**；activity lock/上传备份/CLI 为 **133 passed in 49.68s**；包含 Windows 发布离线门禁的下载备份/发行/CI/验证/部署/API 组合为 **287 passed、4 skipped in 44.13s**，其中 4 个 skip 是 Windows 上的 root/POSIX/getfacl 环境合同。0.25.0 冻结 commit 的全量结果和源码/制品身份只记录在本轮新生成的包外 release receipt。
 
-0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12 与 T15 当前均未运行；GitHub hosted CI 已实际进入四格完整 pytest，但测试仍红，不能称为门禁通过。外部开发者和测试员先按[完整测试手册](../TESTING.md)固定身份与执行边界，再按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项决定真实动作，并用[回传模板](EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)留下后续开发入口。
+0.24.4、0.25.0 T16、0.26.0 T17、0.27.0 T18 与当前 0.28.0 T19 的本地验收均未进行真实 OpenAI 调用或媒体上传。T18/T19 的真实媒体处理只使用本机 synthetic 视频。T11、T12 与 T15 当前均未运行；历史四格 pytest 红色已由后续限定维护与生产修复关闭，当前结果按顶部精确提交记录，合并门禁配置仍未完成。外部开发者和测试员先按[完整测试手册](../TESTING.md)固定身份与执行边界，再按[上传测试计划](UPLOADER_TEST_PLAN.md)逐项决定真实动作，并用[回传模板](EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)留下后续开发入口。
 
 ## 2. 执行顺序与阶段门槛
 
@@ -469,7 +470,7 @@ T15 的环境准备与 Linux/NAS 适配另估，不包含在 Windows 支线的�
 
 **历史实现补充（2026-09-10～11）：** 上传 Setup 的独立 ignored validator 已在显式临时 app-root 禁网通过，覆盖精确 `data-uploads` 派生、默认/覆盖构建解释器、ready 复用、三层锁、固定失败码、旧/坏/含非允许内容的部分 runtime 不变和输出脱敏；当前实际 app-root 的后续刷新又验证了真实目录上的安全留档、两个 runtime 安装、Upload Schema 1→3 数据保留迁移与本地 Start。这是 2026-09-10 的历史实根记录，尚未覆盖当前 Upload Schema 4。Workflow Schema 2 阶段已完成最多 10 段 × 3 账号的有序 fan-out、prefix checkpoint、重启/unknown/retry slot 对账、原始 queued 预授权续跑、一次完整批量确认、重复下载 owner 恢复、语速冻结/恢复、attention 后精确确认恢复，以及在当时 Schema 3 合同下只替换 failed/canceled slot 的事务化投稿重试；当前 Upload Schema 4 还要求 leaf 通过 attempt receipt 校验。当前 Workflow Schema 3 又把来源标题、逐账号最终标题与 ready asset 一次冻结；Workflow preset Schema 2 让上次成功预设在依赖读取成功且用户未编辑时恢复，并按每次创建的固定锚点生成逐账号相对发布时间。方向 C“编辑式玻璃”也已实施于生产四页并完成当前 Chromium 44/44 QA；translation revision 精确绑定已经完成并按独立证据复验。其余工作是把已签名的 Upload Schema 4 源码里程碑纳入新的 clean release candidate，并在当前实际 app root 执行迁移审计；随后在明确授权与测试账号/素材具备后执行真实 OpenAI、真人试听及三平台外部验收。
 
-**当前接续（2026-09-14）：** `7575773` 已取得新的同提交工程 receipt 与 push/PR 绿色 CI，以上历史“完整 CI 仍红 / 无新 receipt”不再是当前结论。仍缺的是 main 门禁、隔离普通启停/浏览器、现有数据升级与恢复、真实模型和平台验收。先按发布准备基线取证；最终发行候选变更后重新完成受影响验收与制品冻结。
+**当前接续（2026-09-14）：** `7575773` 已取得同提交工程 receipt，`1540a7e` 的 push/PR 四格也已通过；以上历史“完整 CI 仍红 / 无新 receipt”不再是当前结论。隔离普通启停/四页浏览器与旧 Upload 数据副本迁移、独立恢复已通过限定检查，见[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。main 门禁、全应用保护、实际根升级、固定负载持续运行、真实模型和平台验收仍待完成；最终发行候选变更后重新完成受影响验收与制品冻结。
 
 ## 5. 每个工作包统一交付检查
 
