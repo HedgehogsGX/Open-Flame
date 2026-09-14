@@ -8,8 +8,15 @@
 数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
-2026-09-15 已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
-重新读取 GitHub 确认 `7b48a9f` 的 push/PR 共八格均 success；该结论只绑定此提交。
+2026-09-15 当前开发继续按六类核心职责加 CLI 修复边界：AssetStore 统一完整输出库存校验，
+目录不可读或不可信时拒绝登记；能力证据 CLI 复用受管文件的有界读取与身份核对；
+supervisor 返回不依赖 HTTP 的不可变观察值，由 API 转为 DTO；重试数值合同由领域层共享，
+RetryPolicy 判断可排程范围，Worker 将非法延时收敛为明确失败，保留原有 CAS 和存储异常处理。
+复现、现有回归和真实 loopback HTTP/Workflow 预检结果见[本轮验收](validation/README.md#core-ownership-repair-2026-09-15)。
+没有新增运行时、数据库、公共命令或 tracked 自动化测试。
+
+已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
+本轮开始前重新读取 GitHub，确认修正后的 `d7f0c60` push/PR 共八格均 success；该结论只绑定此提交。
 旧测试补丁的通用摘要豁免已撤除，暂存测试一律拦截；仅保留本 PR 固定已提交历史的
 范围校验，base 前移即失效。发行清单移出 118 份历史报告，保留固定提交链接、索引、
 两份 Stage 0 模板及 Linux 操作指南。当前修复验证与剩余评论见 [验收索引](validation/README.md)。
@@ -17,7 +24,7 @@
 也没有这些用例。下一步以实际失败输入复现，不能据成功比例推定 extractor 或下载根因。
 
 当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
-重整架构并解决完整 CI；**v3 精确测试维护已应用，本地 73 项通过；新提交的 CI 以 PR 同提交检查为准，未合并 main**。起点为远端 main `d481326`。已分别
+重整架构并解决完整 CI；**历史限定测试维护和 CI 恢复已完成；本轮新提交的 CI 以 PR 同提交检查为准，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing

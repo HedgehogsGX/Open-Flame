@@ -19,6 +19,7 @@ from .domain import (
     SourceType,
 )
 from .credential_defaults import CredentialMode
+from .worker_runtime_status import WorkerRuntimeMode, WorkerRuntimeState
 
 
 class BatchCreateRequest(BaseModel):
@@ -228,8 +229,8 @@ class RuntimeLogsResponse(BaseModel):
 class WorkerRuntimeStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["managed_direct", "external_unknown"]
-    state: Literal["starting", "online", "paused", "stopping", "stopped", "check_only", "stale", "unknown"]
+    mode: WorkerRuntimeMode
+    state: WorkerRuntimeState
     run_id: str | None = None
     worker_pid: int | None = None
     heartbeat_age_seconds: float | None = None

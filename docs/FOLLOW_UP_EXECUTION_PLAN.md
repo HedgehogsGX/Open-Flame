@@ -1,12 +1,15 @@
 # Open-Flame 后续执行计划
 
-2026-09-15 当前入口：处理 [PR #2 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)
-与用户反馈的 YT 6/10。`7b48a9f` push/PR 八格已重新核实为 success；测试门禁已收紧到
-固定已提交历史，历史报告已移出发行清单，见 [本轮记录](../validation/README.md#pr-2-review-follow-up-2026-09-15)。
+2026-09-15 当前入口：按六类核心职责加 CLI 继续修复架构。完整输出库存归 AssetStore，
+能力证据读取复用受管文件，supervisor 观察值与 HTTP DTO 分离，重试延时先验证数值和排程范围。
+本轮开始前的 `d7f0c60` push/PR 八格已重新核实为 success；本轮验证见
+[当前记录](../validation/README.md#core-ownership-repair-2026-09-15)，之后每个提交仍需读取自己的 CI。
+[PR #2 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057) 的测试门禁与
+发行清理已处理，详见[评论处理记录](../validation/README.md#pr-2-review-follow-up-2026-09-15)。
 YT 尚缺四个失败用例的 URL、错误及执行版本，未宣称已复现或修复。取得输入后先保留
 原始失败，再进行受控修复和同一批样本复验；真实上传、账号操作和原应用根维护仍按各自范围执行。
 
-2026-09-14 当前入口：v3 精确测试维护已应用，真实两模块回归 73 项通过，见
+2026-09-14 阶段记录：v3 精确测试维护已应用，真实两模块回归 73 项通过，见
 [维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md)。维护前 `0dfcf82` push 四格
 通过，PR 的 Windows 3.13 诊断日志并发用例失败；新提交须读取自己的 hosted 检查。
 此前 `9822454` 固定合成存储负载 600.77 秒/300 轮及正常停机通过，见
@@ -166,7 +169,7 @@ T06 文档、T09 CI 设计可与阶段 A 并行；真实上传测试须先过 G1
 
 T14 先确定账号/媒体生命周期，再冻结 T07 的备份格式。T15 是 Linux/Docker/NAS 的独立环境验收支线，不据此阻断已经明确仅支持 Windows 的源码测试版，也不能省略后宣称跨平台通过。工作包编号用于跟踪，执行先后以本节依赖为准。
 
-T19 延续 T16 设计规范和 T17 逐任务确认；自动流程按预授权或逐节点确认推进，未知远端结果仍停止。T11/T12/T15 保持 **NOT RUN**；GitHub hosted CI 的执行链已经恢复，但当前完整 pytest 为 **FAIL**。不能用 G6～G9 的本地页面、合成媒体或截图替代外部能力证据。必须以 0.28.0 的 clean commit 构建并独立安装五件制品，再由包外 receipt 绑定，才可交给 T11/T12 或称为最终交付包。
+T19 延续 T16 设计规范和 T17 逐任务确认；自动流程按预授权或逐节点确认推进，未知远端结果仍停止。T11/T12/T15 保持 **NOT RUN**；GitHub hosted CI 已恢复，当前结果以顶部精确提交记录为准。不能用 G6～G9 的本地页面、合成媒体或截图替代外部能力证据。必须以 0.28.0 的 clean commit 构建并独立安装五件制品，再由包外 receipt 绑定，才可交给 T11/T12 或称为最终交付包。
 
 ## 3. 工作包与验收条件
 

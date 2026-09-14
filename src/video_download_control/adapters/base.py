@@ -20,7 +20,7 @@ from ..diagnostics import (
     sanitize_diagnostic,
 )
 from ..capabilities import AdapterRoute
-from ..domain import ErrorCode, Platform, SourceType
+from ..domain import ErrorCode, Platform, SourceType, validate_retry_delay_seconds
 
 
 class AdapterNetworkMode(StrEnum):
@@ -162,8 +162,8 @@ class AdapterFailure(RuntimeError):
         diagnostic: str,
         retry_after: float | None = None,
     ) -> None:
-        if retry_after is not None and retry_after < 0:
-            raise ValueError("retry_after must be non-negative")
+        if retry_after is not None:
+            validate_retry_delay_seconds(retry_after)
         bounded_diagnostic = sanitize_diagnostic(diagnostic)
         self.code = code
         self.diagnostic = bounded_diagnostic

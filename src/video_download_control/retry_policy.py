@@ -8,9 +8,10 @@ registry, or enqueue work.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 
-from .domain import ErrorCode
+from .domain import ErrorCode, validate_retry_delay_seconds
 
 
 class RetryAction(StrEnum):
@@ -33,6 +34,7 @@ class RetryContext:
     fallback_available: bool = False
     fallback_already_used: bool = False
     retry_after_seconds: float | None = None
+    failed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.total_attempts < 1:
@@ -45,8 +47,8 @@ class RetryContext:
             raise ValueError(
                 "attempts_on_current_adapter cannot exceed total_attempts"
             )
-        if self.retry_after_seconds is not None and self.retry_after_seconds < 0:
-            raise ValueError("retry_after_seconds must be non-negative")
+        if self.retry_after_seconds is not None:
+            validate_retry_delay_seconds(self.retry_after_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,15 @@ class RetryDecision:
     @property
     def is_terminal(self) -> bool:
         return self.action is RetryAction.TERMINAL
+
+    def scheduled_at(self, failed_at: datetime) -> datetime | None:
+        """Project a validated delay into the caller's clock, without reading time."""
+
+        validate_retry_delay_seconds(self.delay_seconds)
+        return (
+            failed_at + timedelta(seconds=self.delay_seconds)
+            if self.action is RetryAction.RETRY else None
+        )
 
 
 class RetryPolicy:
@@ -127,11 +138,22 @@ class RetryPolicy:
                     context.attempts_on_current_adapter,
                 )
                 requested_delay = context.retry_after_seconds or 0.0
-                return RetryDecision(
+                decision = RetryDecision(
                     action=RetryAction.RETRY,
                     delay_seconds=max(policy_delay, requested_delay),
                     reason="same_adapter_retry_available",
                 )
+                try:
+                    # Callers without a clock still cannot request a delay
+                    # longer than the entire representable datetime range.
+                    decision.scheduled_at(context.failed_at or datetime.min)
+                except OverflowError:
+                    return RetryDecision(
+                        action=RetryAction.TERMINAL,
+                        delay_seconds=0.0,
+                        reason="retry_schedule_out_of_range",
+                    )
+                return decision
             return RetryDecision(
                 action=RetryAction.TERMINAL,
                 delay_seconds=0.0,
@@ -161,6 +183,7 @@ def decide_retry(
     fallback_available: bool = False,
     fallback_already_used: bool = False,
     retry_after_seconds: float | None = None,
+    failed_at: datetime | None = None,
 ) -> RetryDecision:
     """Convenience pure function for callers that do not retain a policy."""
 
@@ -172,5 +195,6 @@ def decide_retry(
             fallback_available=fallback_available,
             fallback_already_used=fallback_already_used,
             retry_after_seconds=retry_after_seconds,
+            failed_at=failed_at,
         ),
     )

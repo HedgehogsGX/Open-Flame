@@ -6,6 +6,7 @@ import re
 import shutil
 import threading
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
@@ -114,7 +115,11 @@ from .workflows.contracts import WorkflowError
 from .workflows.local_adapter import LocalWorkflowAdapter
 from .workflows.manager import WorkflowManager
 from .workflows.service import default_workflow_root
-from .worker_runtime_status import ManagedWorkerRuntimeStatus, unknown_runtime_status
+from .worker_runtime_status import (
+    ManagedWorkerRuntimeStatus,
+    WorkerRuntimeObservation,
+    unknown_runtime_status,
+)
 from .worker_repository import (
     CircuitResetConflict,
     InvalidTransition,
@@ -570,7 +575,7 @@ def create_app(
     managed_product_identity = current_product_identity() if managed_worker_status is not None else None
     upload_root = default_upload_root(resolved_settings.data_root)
 
-    def current_worker_runtime_status() -> WorkerRuntimeStatusResponse:
+    def current_worker_runtime_status() -> WorkerRuntimeObservation:
         if managed_worker_status is None or managed_product_identity is None:
             return unknown_runtime_status()
         try:
@@ -711,7 +716,7 @@ def create_app(
         download_asset_resolver=upload_original_asset,
         download_caption_resolver=workflow_download_caption,
         download_cover_resolver=workflow_download_cover,
-        download_runtime_probe=lambda: current_worker_runtime_status().model_dump(),
+        download_runtime_probe=lambda: asdict(current_worker_runtime_status()),
         download_control=worker_repository,
     )
     workflow_manager = WorkflowManager(
@@ -879,7 +884,9 @@ def create_app(
 
     @app.get("/api/v1/operations/runtime", response_model=WorkerRuntimeStatusResponse)
     def worker_runtime_status() -> WorkerRuntimeStatusResponse:
-        return current_worker_runtime_status()
+        return WorkerRuntimeStatusResponse.model_validate(
+            current_worker_runtime_status(), from_attributes=True
+        )
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

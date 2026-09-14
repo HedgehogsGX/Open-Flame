@@ -218,6 +218,75 @@ class AssetStore:
             ) from exc
         return AttemptPaths(root=root, output=output, metadata=metadata)
 
+    def validate_output_inventory(
+        self,
+        *,
+        attempt: AttemptPaths,
+        produced_paths: Sequence[Path],
+    ) -> None:
+        """Require unique plain files and a complete, readable output inventory.
+
+        The Worker owns media keys, roles and ordinals; this store owns file
+        identities and the attempt tree. Staging still revalidates each file
+        before copying because this inventory does not freeze the filesystem.
+        """
+
+        def fail_unreadable_directory(error: OSError) -> None:
+            # os.walk otherwise skips an unreadable subtree silently, which
+            # would let unreported downloader output disappear from the set.
+            raise error
+
+        try:
+            if not is_plain_entry(attempt.output.lstat(), directory=True):
+                raise AssetValidationError(
+                    "adapter output contains an untrusted link"
+                )
+            expected: set[Path] = set()
+            seen_identities: set[tuple[int, int]] = set()
+            for produced_path in produced_paths:
+                resolved = self._validate_produced_path(attempt.output, produced_path)
+                info = resolved.stat()
+                identity = (info.st_dev, info.st_ino)
+                if identity in seen_identities:
+                    raise AssetValidationError("produced file path is duplicated")
+                seen_identities.add(identity)
+                expected.add(resolved)
+
+            observed: set[Path] = set()
+            for root, directories, filenames in os.walk(
+                attempt.output,
+                topdown=True,
+                followlinks=False,
+                onerror=fail_unreadable_directory,
+            ):
+                root_path = Path(root)
+                if not is_plain_entry(root_path.lstat(), directory=True):
+                    raise AssetValidationError(
+                        "adapter output contains an untrusted link"
+                    )
+                for directory in directories:
+                    if not is_plain_entry(
+                        (root_path / directory).lstat(), directory=True
+                    ):
+                        raise AssetValidationError(
+                            "adapter output contains an untrusted link"
+                        )
+                for filename in filenames:
+                    candidate = root_path / filename
+                    if not is_plain_entry(candidate.lstat()):
+                        raise AssetValidationError(
+                            "adapter output contains an untrusted link"
+                        )
+                    observed.add(candidate.resolve(strict=True))
+        except AssetValidationError:
+            raise
+        except OSError as exc:
+            raise AssetValidationError(
+                "adapter output inventory is unreadable"
+            ) from exc
+        if observed != expected:
+            raise AssetValidationError("adapter output inventory is not exact")
+
     def stage_file(
         self,
         *,

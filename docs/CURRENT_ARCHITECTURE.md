@@ -1,6 +1,6 @@
 # Open-Flame 当前架构
 
-> 状态日期：2026-09-12（Australia/Adelaide）
+> 状态日期：2026-09-15（Australia/Adelaide）
 > 文档起始源码基线：`30548f32e072ee549a322b840374d09486d63110`
 > 产品版本：`0.28.0` 发布后的持续开发源码
 
@@ -155,6 +155,14 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 Windows SQLite sidecar 竞争修复 `8564b30` 的四格 CI 已全部通过。测试收集和 skip 计数
 没有缩减，详见[CI 合同维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md)。
 剩余复杂度按具体收益继续精简，不能把 CI 通过解释成不存在架构债务或真实平台已验收。
+
+2026-09-15 的边界修复继续沿用现有 Module：`AssetStore.validate_output_inventory` 拥有
+文件身份去重和完整、可读的目录集合，Worker 只传路径并保留媒体 key/owner/ordinal；
+能力证据 CLI 将打开身份、有界快照和读取后复验交给 `managed_files`。
+`worker_runtime_status.py` 返回不可变 `WorkerRuntimeObservation`，不再导入 HTTP DTO；
+API 负责 response 投影，Workflow 得到普通 mapping。AdapterFailure 与 RetryContext 共用
+领域层的有限、非负数值合同；RetryPolicy 用调用者提供的失败时刻判断可排程范围，
+不缩短上游的重试提示，Worker 持久化终态或重试。验证记录见[验收索引](../validation/README.md#core-ownership-repair-2026-09-15)。
 
 ## 4. 数据所有权与存储布局
 

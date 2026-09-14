@@ -14,6 +14,15 @@ from .capability_evidence import (
     CapabilityGovernanceError,
 )
 from .database import Database
+from .managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    close_binary_on_error,
+    file_signature,
+    open_matching_binary,
+    require_matching_fstat,
+    snapshot_open_binary,
+)
 from .validation import ValidationManifestError
 
 
@@ -68,9 +77,9 @@ def _absolute_normalized_path(raw: str) -> Path:
     return path
 
 
-def _plain_file_identity(
+def _plain_file_info(
     path: Path, *, require_single_link: bool = False
-) -> tuple[int, int]:
+) -> os.stat_result:
     current = Path(path.anchor)
     for part in path.parts[1:]:
         current /= part
@@ -94,27 +103,38 @@ def _plain_file_identity(
         raise CapabilityGovernanceError("plain_file_required", exit_code=2)
     if require_single_link and getattr(info, "st_nlink", 1) != 1:
         raise CapabilityGovernanceError("hard_link_rejected", exit_code=2)
+    return info
+
+
+def _plain_file_identity(
+    path: Path, *, require_single_link: bool = False
+) -> tuple[int, int]:
+    info = _plain_file_info(path, require_single_link=require_single_link)
     return int(info.st_dev), int(info.st_ino)
 
 
-def _require_plain_existing_file(path: Path) -> None:
-    _plain_file_identity(path)
-
-
 def _read_input(path: Path) -> bytes:
-    _require_plain_existing_file(path)
+    info = _plain_file_info(path)
+    if info.st_size > MAX_EVIDENCE_INPUT_BYTES:
+        raise CapabilityGovernanceError("evidence_input_too_large", exit_code=2)
+    expected = file_signature(info)
     try:
-        size = path.stat().st_size
-        if size > MAX_EVIDENCE_INPUT_BYTES:
-            raise CapabilityGovernanceError("evidence_input_too_large", exit_code=2)
-        content = path.read_bytes()
-    except CapabilityGovernanceError:
-        raise
+        opened = open_matching_binary(path, expected=expected)
+        with close_binary_on_error(opened.handle) as handle:
+            snapshot = snapshot_open_binary(
+                handle, maximum=MAX_EVIDENCE_INPUT_BYTES
+            )
+            if snapshot.size != info.st_size:
+                raise ManagedFileChanged
+            require_matching_fstat(handle, expected=expected)
+            if file_signature(_plain_file_info(path)) != expected:
+                raise ManagedFileChanged
+            handle.close()
+    except (ManagedFileChanged, ManagedFileSizeExceeded) as exc:
+        raise CapabilityGovernanceError("evidence_input_changed", exit_code=6) from exc
     except OSError as exc:
         raise CapabilityGovernanceError("input_unavailable", exit_code=6) from exc
-    if len(content) != size or len(content) > MAX_EVIDENCE_INPUT_BYTES:
-        raise CapabilityGovernanceError("evidence_input_changed", exit_code=6)
-    return content
+    return snapshot.payload
 
 
 def _database_and_repository(raw_path: str) -> CapabilityEvidenceRepository:

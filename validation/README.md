@@ -13,6 +13,50 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Core ownership repair (2026-09-15)
+
+Development starts from clean `d7f0c60`. Its
+[push run](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34871536574) and
+[PR run](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34871544112) were
+re-read as completed/success, four jobs each. New commits require their own CI.
+
+- AssetStore owns the complete output inventory, including file identity
+  uniqueness and readable plain directories. Worker retains media identity,
+  owner and ordinal rules. The former walk silently skipped unreadable output;
+  an offline Worker could publish one ready asset while hiding an undeclared
+  sibling. The same fixture now fails validation and registers no asset.
+- Capability evidence input uses existing managed-file matching-open, bounded
+  snapshot and final identity checks. Same-size replacement and mid-read
+  mutation are rejected; growth reads at most 4 MiB plus one sentinel byte.
+  CSV hard links remain allowed; database hard links remain rejected.
+- Supervisor observations are immutable standard-library values. API projects
+  them into HTTP DTOs; Workflow receives a mapping. Nine observation payloads
+  and the public JSON Schema are unchanged, and isolated supervisor import
+  succeeds with HTTP/Pydantic imports blocked.
+- AdapterFailure and RetryContext share the domain numeric contract. RetryPolicy
+  checks representable scheduling from the failure clock without shortening
+  upstream hints. Nonfinite/malformed hints or invalid injected decisions become
+  controlled Worker failures; huge finite delays become terminal policy decisions.
+  No attempt remains running because retry arithmetic escaped failure handling.
+
+Ignored reproductions: inventory **7/10 before, 10/10 after**; capability input
+**7/11 before, 11/11 after**; retry boundaries **3/24 before, 24/24 after**.
+Existing focused regressions passed: runtime **110**, capability **91**,
+inventory **65**, retry **66**. These overlapping groups must not be summed.
+The complete existing suite reports **2442 passed, 16 skipped** in 333.97 seconds.
+The existing platform/bundle skips remain; no tests were changed or deselected.
+An independent comparison preserves all **4,560** valid retry/fallback outcomes
+and the runtime response JSON Schema against the starting commit.
+A real loopback Uvicorn/HTTP smoke exercised six runtime states and the actual
+Workflow preflight gates using isolated local stores, then stopped normally.
+No page markup, Schema, attempt budget, fallback policy, CI workflow or tracked
+test file changed. Raw scripts, logs, JSON and JUnit remain under ignored
+`validation/local/architecture-repair-20260915/`.
+
+These repairs do not reproduce or resolve the user's four missing YouTube
+failure samples. Real-platform acceptance and original application roots remain
+outside this offline development record.
+
 ## PR #2 review follow-up (2026-09-15)
 
 Read [the review](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)

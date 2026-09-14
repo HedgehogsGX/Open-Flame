@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from threading import Event, Lock, RLock, Thread
 from time import perf_counter
 
@@ -35,7 +33,7 @@ from .assets import (
 )
 from .domain import ErrorCode, JobStatus, SourceType
 from .graph import GraphValidationError, XAttachmentProbeItem
-from .retry_policy import RetryAction, RetryContext, RetryPolicy
+from .retry_policy import RetryAction, RetryContext, RetryDecision, RetryPolicy
 from .runtime_logging import RuntimeLogger, safe_exception_type
 from .worker_repository import JobLease, LostLease, WorkerRepository
 
@@ -155,7 +153,8 @@ class _LeaseHeartbeat:
 class Worker:
     """Runs one injected adapter without owning network or subprocess policy.
 
-    Adapter construction and real-network feature gates stay in the CLI layer.
+    Adapter construction and real-network feature gates stay in the runtime
+    composition modules used by the thin CLI entrypoints.
     Graph jobs additionally require an adapter-declared exact-selector
     capability; the production candidate deliberately does not declare it.
     """
@@ -664,12 +663,14 @@ class Worker:
                 per_asset_limit=MAX_CAPTIONS_PER_ASSET,
                 total_limit=MAX_TOTAL_CAPTIONS_PER_DOWNLOAD,
             )
-            self._validate_unique_produced_paths(
-                (*download.files, *download.thumbnails, *download.captions)
-            )
-            self._validate_output_inventory(
-                attempt_paths.output,
-                (*download.files, *download.thumbnails, *download.captions),
+            self.asset_store.validate_output_inventory(
+                attempt=attempt_paths,
+                produced_paths=tuple(
+                    item.path
+                    for item in (
+                        *download.files, *download.thumbnails, *download.captions
+                    )
+                ),
             )
             self._emit_phase(lease, "verifying")
             self.repository.transition(
@@ -872,59 +873,6 @@ class Worker:
             )
         return grouped
 
-    @staticmethod
-    def _validate_unique_produced_paths(files: Sequence[ProducedFile]) -> None:
-        seen: set[object] = set()
-        for produced in files:
-            try:
-                resolved = produced.path.resolve(strict=True)
-                info = resolved.stat()
-            except OSError as exc:
-                raise AssetValidationError(
-                    "produced file is missing or unreadable"
-                ) from exc
-            identity = (info.st_dev, info.st_ino)
-            if identity in seen:
-                raise AssetValidationError("produced file path is duplicated")
-            seen.add(identity)
-
-    @staticmethod
-    def _validate_output_inventory(
-        output_dir: Path,
-        files: Sequence[ProducedFile],
-    ) -> None:
-        """Reject unreported downloader output, including fetched siblings."""
-
-        try:
-            expected = {item.path.resolve(strict=True) for item in files}
-            observed: set[object] = set()
-            for root, directories, filenames in os.walk(
-                output_dir,
-                topdown=True,
-                followlinks=False,
-            ):
-                root_path = Path(root)
-                for directory in directories:
-                    if (root_path / directory).is_symlink():
-                        raise AssetValidationError(
-                            "adapter output contains an untrusted link"
-                        )
-                for filename in filenames:
-                    candidate = root_path / filename
-                    if candidate.is_symlink():
-                        raise AssetValidationError(
-                            "adapter output contains an untrusted link"
-                        )
-                    observed.add(candidate.resolve(strict=True))
-        except AssetValidationError:
-            raise
-        except OSError as exc:
-            raise AssetValidationError(
-                "adapter output inventory is unreadable"
-            ) from exc
-        if observed != expected:
-            raise AssetValidationError("adapter output inventory is not exact")
-
     def _emit(self, event: str, *, level: str = "INFO", **fields: object) -> None:
         if self.runtime_logger is None:
             return
@@ -1043,15 +991,31 @@ class Worker:
             attempts_on_adapter = sum(
                 attempt["adapter"] == lease.adapter for attempt in attempts
             )
-            decision = self.retry_policy.decide(
-                error_code,
-                RetryContext(
-                    total_attempts=len(attempts),
-                    attempts_on_current_adapter=attempts_on_adapter,
-                    fallback_available=False,
-                    retry_after_seconds=retry_after_seconds,
-                ),
-            )
+            failed_at = self.clock()
+            try:
+                decision = self.retry_policy.decide(
+                    error_code,
+                    RetryContext(
+                        total_attempts=len(attempts),
+                        attempts_on_current_adapter=attempts_on_adapter,
+                        fallback_available=False,
+                        retry_after_seconds=retry_after_seconds,
+                        failed_at=failed_at,
+                    ),
+                )
+                retry_at = decision.scheduled_at(failed_at)
+            except (TypeError, ValueError, OverflowError):
+                # A malformed adapter hint or injected policy must not strand
+                # an attempt inside this failure handler. Persistence and CAS
+                # errors remain outside this narrow contract boundary.
+                error_code = ErrorCode.WORKER_INTERNAL
+                diagnostic = "invalid retry contract"
+                decision = RetryDecision(
+                    action=RetryAction.TERMINAL,
+                    delay_seconds=0.0,
+                    reason="invalid_retry_contract",
+                )
+                retry_at = None
             self._emit(
                 "worker.retry_decided",
                 level="WARNING",
@@ -1061,20 +1025,15 @@ class Worker:
                 error_code=error_code.value,
                 retry_action=decision.action.value,
                 retry_delay_ms=min(
-                    max(round(decision.delay_seconds * 1000), 0),
+                    max(round(min(decision.delay_seconds, 1_000_000) * 1000), 0),
                     1_000_000_000,
                 ),
-            )
-            retry_at = (
-                self.clock() + timedelta(seconds=decision.delay_seconds)
-                if decision.action == RetryAction.RETRY
-                else None
             )
             status = self.repository.finish_failure(
                 lease,
                 error_code=error_code,
                 diagnostic=diagnostic,
-                now=self.clock(),
+                now=failed_at,
                 retry_at=retry_at,
                 remove_pending_asset=self.asset_store.remove_pending_asset,
             )
