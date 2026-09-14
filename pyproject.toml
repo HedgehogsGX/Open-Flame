@@ -44,12 +44,15 @@ packages = ["src/video_download_control"]
 [tool.hatch.build.targets.sdist]
 # Historical validation reports stay in Git. Only the explicit index, templates
 # and operator guide below enter an sdist, including direct Hatch builds.
-# Runtime/build trees are explicit exclusions because
+# File selection narrows the distribution without replacing the audited
+# safety exclusions. Runtime/build trees are explicit exclusions because
 # nested negated .env.example rules can otherwise re-include files from an
 # ignored parent directory in some archive builders.
+include = ["/**", "!/validation/**"]
 exclude = [
   "/tests/**",
-  "/validation/**",
+  "/validation/apache-2.0-license-migration-evidence.md",
+  "/validation/local/**",
   "/runtime-tools/**",
   "/data-uploads/**",
   "/data-edits/**",

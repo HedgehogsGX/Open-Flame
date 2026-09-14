@@ -15,7 +15,8 @@ py -3 -I .\scripts\release.py check-source
 它检查明确源码清单、身份和 docs/validation 中受检的字面 Markdown 文件链接。
 新发行只携带 `validation/README.md`、两份 Stage 0 CSV 模板和 Linux 操作指南。
 118 份历史报告保留在 Git，通过固定提交链接访问；不随源码 ZIP 或 sdist 递归分发。
-`release-files.txt` 与 Hatch 的精确 force-include 同步限定这一范围，新增历史报告被
+`release-files.txt` 与 Hatch 的 include/精确 force-include 同步限定这一范围，已审
+安全排除清单保持不变。新增历史报告被
 `historical_validation_in_release` 拒绝；普通本地文档缺项仍被拒绝。历史制品的 `verify`
 继续按其原清单验证，避免把新的分发策略反向套用于旧包。
 `build` 会在创建输出和调用工具前执行同一文档检查；缺失文档以

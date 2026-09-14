@@ -10,6 +10,12 @@
 
 ## 当前托管运行状态
 
+PR 评论修复提交 `a20adc2` 的 Linux PR 检查在既有许可证回归失败：发行配置替换了
+已审 `exclude` 清单。已在本地复现后保留原清单，改用额外 include 选择范围及四项
+force-include 达到同样的历史报告排除效果；许可证、发行和 CI 模块 122 项通过，直接
+Hatch 打包内容也已逐项核对。测试和 CI workflow 均未修改，后续提交等待自己的 hosted
+结果；详见[本轮验收](../validation/README.md#pr-2-review-follow-up-2026-09-15)。
+
 2026-09-15 重新读取 GitHub：提交 `7b48a9fe4dae09279a3e986642af68263386e796` 的
 [push run 34807785099](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34807785099)
 和 [PR run 34807788883](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34807788883)

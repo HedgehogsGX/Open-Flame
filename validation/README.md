@@ -48,6 +48,18 @@ input. The legacy `7575773` release still verifies; missing local documentation
 and newly listed historical reports are rejected. These are development build
 checks, not a new final installation receipt or platform acceptance.
 
+CI follow-up: `a20adc2` reached the offline suite but its Linux PR job
+[`104065965207`](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34870821699/job/104065965207)
+failed `test_sdist_excludes_self_reference_and_local_runtime_trees` because
+the packaging change replaced the audited exclusion list. The same assertion
+failed locally before correction. The original exclusion list is now retained;
+an additional include filter selects files outside validation, and the four
+explicit force-includes restore its shipped entry files. Existing license,
+release and CI modules pass **122/122** after correction. Actual direct Hatch
+output matches the complete source inventory plus PKG-INFO, with the existing
+historical-report/test sentinels excluded. No test changes or collection edits
+were required. Later hosted results must be read at the corrected commit.
+
 Remaining review boundaries: the repository owner's PR confirmation of prior
 test-maintenance authorization is not supplied by code or by this record;
 real Bilibili upload compatibility, platform acceptance, macOS execution and
