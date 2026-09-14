@@ -10,6 +10,20 @@
 
 ## 当前托管运行状态
 
+2026-09-15 重新读取 GitHub：提交 `7b48a9fe4dae09279a3e986642af68263386e796` 的
+[push run 34807785099](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34807785099)
+和 [PR run 34807788883](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34807788883)
+均 completed/success，Windows/Linux × CPython 3.12/3.13 共八格全部 success。
+PR 评论中 `0dfcf82` 的红格属于下方历史记录；该旧失败确切原因仍不能从缺少 stderr 的
+日志推定。后续提交仍需核对自己的 CI，不继承这里的绿色结论。
+
+本轮删除可重复使用的测试补丁摘要豁免。`--staged` 一律拒绝新增/修改自动化测试；
+范围检查仅在 merge-base 精确等于 `d481326`、head 包含已审 `7b48a9f`，且净测试差分
+与这段固定历史逐字节一致时接受本 PR 的既有维护。新测试内容、缺少已审提交的复制历史、
+base 前移及合并后再次应用旧补丁均不在该范围。固定历史校验允许本 PR 首次 merge 的
+正常 push 检查；后续 base 包含已合并历史时自然失效，再删除这两个历史端点及比较函数。
+这些端点不随迭代追加，也不是仓库所有者授权的远端证明。
+
 2026-09-14 维护前核对：提交
 [`0dfcf82b7896e2a61b1201f3f974a5f7adf3dcdd`](https://github.com/HedgehogsGX/Open-Flame/commit/0dfcf82b7896e2a61b1201f3f974a5f7adf3dcdd)
 的 [push run 34777870858](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34777870858)
@@ -18,19 +32,19 @@
 两套 run 均已 completed。原日志缺少子进程 stderr，确切 hosted 根因未被证明。
 
 此前 `d970bce` push 的 Bilibili 封面失败、`9822454` PR 的视频号封面失败保留在
-[原记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。在暂停 backend 的
+[原记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。在暂停 backend 的
 隔离探针中，三个现有封面用例均可确定性复现过早检查删除；backend 列表已有记录不能证明
 任务已经提交或后续清理完成。本次按用户提交指令应用 v3：三个函数各增加一行 submitted
 等待，另一个诊断日志用例只设置子进程锁预算并补充断言详情。原断言条件、独立超时测试、
 收集范围和生产默认预算保持；真实两模块回归 73 项通过，精确范围与摘要见
-[维护记录](../validation/iteration-0.28.0-async-test-maintenance.md)。本次维护提交的 CI
+[维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md)。本次维护提交的 CI
 以 PR 同提交检查及交付记录为准，上述维护前结果不自动覆盖它。
 PR #2 仍未合并。此前签名和隔离验收见
-[隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
-安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
+[隔离验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
+安装 receipt 与合并门禁准备见[发布准备基线](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md)。
 
 `3e482f0` 和 `ac3532b` 的限定测试维护已获批准并应用，Windows SQLite sidecar 竞争由
-`8564b30` 修复，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
+`8564b30` 修复，详见[CI 合同维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md)。
 这两份冻结测试差分不构成后续修改测试文件的通用权限。
 
 本次查询 main 返回 `protected=false`，应用规则为空；required checks / branch protection
@@ -40,7 +54,7 @@ PR #2 仍未合并。此前签名和隔离验收见
 
 ## 历史失败：2026-09-10，bdd88ce
 
-[GitHub Actions run 34393235622](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34393235622) 精确绑定提交 [`bdd88ce184b2f86f957f7df9129baa21863227dd`](https://github.com/HedgehogsGX/Open-Flame/commit/bdd88ce184b2f86f957f7df9129baa21863227dd)。2026-09-10 的最终公开状态显示，四格均已通过 checkout、CPython 选择、commit scope、固定 uv、CI definition、runtime identities、locked development environment、`uv pip check` 及矩阵 Python/pytest 身份检查，随后四格都在 `Run the offline test suite` 失败；run 总结论为 `failure`。逐格链接与最终状态记录在[托管 CI 恢复证据](../validation/iteration-0.28.0-hosted-ci-recovery.md)。
+[GitHub Actions run 34393235622](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34393235622) 精确绑定提交 [`bdd88ce184b2f86f957f7df9129baa21863227dd`](https://github.com/HedgehogsGX/Open-Flame/commit/bdd88ce184b2f86f957f7df9129baa21863227dd)。2026-09-10 的最终公开状态显示，四格均已通过 checkout、CPython 选择、commit scope、固定 uv、CI definition、runtime identities、locked development environment、`uv pip check` 及矩阵 Python/pytest 身份检查，随后四格都在 `Run the offline test suite` 失败；run 总结论为 `failure`。逐格链接与最终状态记录在[托管 CI 恢复证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-hosted-ci-recovery.md)。
 
 同一源码的本机全量结果是 **173 failed, 2277 passed, 8 skipped in 327.39s**。失败主要暴露既有测试与当前产品合同的漂移：大量下载 API 测试仍使用 `Host: testserver` 且未先获取下载域 session/提交 `X-Download-CSRF`，另有 Editing Schema 1、旧 release metadata/version、旧 UI 导航和 validation identity 断言。仓库策略禁止修改这些测试，本轮也没有在产品中加入测试绕过。因此当前结论是“托管执行链与前置门禁已恢复，完整测试仍红”，不能称为 CI 绿色。失败后的 whitespace steps 也没有在这些 job 中运行。
 

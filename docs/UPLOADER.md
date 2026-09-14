@@ -43,7 +43,7 @@ Open-Flame 的上传页面位于 `/uploads`，下载首页也有入口。首批�
 
 点击来源封面的“用于上传”会把 `cover_artifact_id` 带到 `/uploads`；若所属成品是视频，链接也会同时带上 `asset_id`，供用户分别导入。上传页不会因 URL 参数发起写请求；用户点击“导入此来源封面”后，服务端才重新核对 artifact 属于 ready 原件、路径与文件身份安全、MIME/大小/SHA-256 一致，再交给上传域执行现有的完整静态图片校验并创建独立受管副本。成功后仍需在对应平台封面选择器中明确选择。该动作不创建本地草稿、不选择账号、不确认任务，也不向平台发送请求。
 
-“来源封面（平台返回）”只表示固定提取器从平台 thumbnail 响应取得的图片字节，不承诺它是发布者上传的原始母版、最高分辨率或无损版本。当前固定 yt-dlp 的 Bilibili 提取器会把 `videoData.pic` 映射为 thumbnail；Douyin 提取器可提供 `cover`、`origin_cover` 及动态变体，但当前单 thumbnail 流程不依赖其内部排序，也不把结果承诺为 `origin_cover`。Bilibili、Douyin 的这部分提取器接线与本地导入不能替代真实 URL、Cookie、封面内容和平台投稿验收。yt-dlp 当前没有视频号专用 extractor，本功能不支持或暗示视频号网址封面抓取。调研、许可证取舍和当前验证范围见[来源封面调研与导入记录](../validation/iteration-0.28.0-source-cover-research-and-import.md)。
+“来源封面（平台返回）”只表示固定提取器从平台 thumbnail 响应取得的图片字节，不承诺它是发布者上传的原始母版、最高分辨率或无损版本。当前固定 yt-dlp 的 Bilibili 提取器会把 `videoData.pic` 映射为 thumbnail；Douyin 提取器可提供 `cover`、`origin_cover` 及动态变体，但当前单 thumbnail 流程不依赖其内部排序，也不把结果承诺为 `origin_cover`。Bilibili、Douyin 的这部分提取器接线与本地导入不能替代真实 URL、Cookie、封面内容和平台投稿验收。yt-dlp 当前没有视频号专用 extractor，本功能不支持或暗示视频号网址封面抓取。调研、许可证取舍和当前验证范围见[来源封面调研与导入记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)。
 
 所有平台的定时值至少精确到整分钟；页面中的 `datetime-local` 按浏览器本地时区解释，草稿同时保存 UTC Unix 时间与当时确认的 UTC 偏移。本地夏令时跳过的时间或重复出现的歧义时间会被拒绝。这里的“定时发布”表示确认后立即上传，并要求平台在指定时间发布；Open-Flame 不会等到指定时间才开始上传。创建、最终确认和调用上游前都会再次检查提前量；时间已经太近时任务明确失败，不会自动改成立即发布。
 

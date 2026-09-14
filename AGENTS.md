@@ -18,51 +18,19 @@
 - 提交前运行 `scripts/verify_commit_scope.py --staged`；仓库使用 `.githooks/pre-commit` 自动执行同一检查。克隆后执行 `git config core.hooksPath .githooks` 启用仓库 hook。
 - 功能提交仍须运行与改动相称的现有回归、静态检查和真实 smoke，并把必要结论记录到交接或验收文档；历史结果不能替代当前复验。
 
-### 本次测试维护例外（2026-09-13 已获用户明确批准）
+### 已完成的测试维护与当前范围校验
 
-用户明确回复“批准本次限定测试维护例外”，已启用并应用审查过的测试合同维护补丁。
-范围门禁只接受规范化完整测试差分 SHA-256 为 `5ddff9cedcdfe0f5dd4a67beb9cab8566e1a743cebd3a37695ce4caeb3297a14` 的那一份补丁；路径、内容、增删或上下文变化都会恢复阻断。
-此例外不授权跳过测试、改变 pytest 收集范围或放宽生产安全合同，也不改变源码制品排除 `tests/` 的规则。完成该补丁后，其他自动化测试的新增或修改仍需另行明确授权。
+2026-09-13 的限定测试维护及平台 fixture 维护、2026-09-14 的 v3 封面/诊断日志维护均已
+提交，最后一份为 `7b48a9fe4dae09279a3e986642af68263386e796`。此前会话中的批准原话、
+具体文件/函数和差分摘要保留在
+[冻结的原约定](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/AGENTS.md)
+及相应验收记录；这些本地开发记录不替代仓库所有者在 PR 中的确认。
 
-### 平台测试维护范围（2026-09-13 继续修复 CI）
+2026-09-15 起撤除可复用的测试补丁摘要白名单，`--staged` 对所有新增/修改测试统一拒绝。
+范围门禁仅允许从本 PR 原 merge-base `d48132637ce94a8b0b41bc2a965d24e27ac62aff`
+到包含上述已审提交的 head，且净测试差分仍与已审历史完全相同。该历史校验不允许再编辑
+测试、复制同样字节到无已审祖先的新历史、base 前移后重算摘要或合并后再次应用旧补丁。
+原 base 前移后校验自然失效；合并后删除固定端点和历史比较函数，不逐轮累积例外。
 
-用户收到补充范围和架构复审后明确要求“继续修复ci,并确保其全绿”。本轮据此执行已审查的
-平台维护补丁：修改 6 个历史测试并增加 1 个共用 fixture，限定路径为：
-
-- `tests/test_assets.py`
-- `tests/test_concurrent_worker_integration.py`
-- `tests/test_local_app.py`
-- `tests/test_local_worker_cli.py`
-- `tests/test_upload_backend.py`
-- `tests/test_upload_runtime_integrity.py`
-- `tests/windows_worker_fixtures.py`
-
-本轮可在上述 7 个文件内依据实际 CI 日志补正同类平台 fixture；每次仍须固定完整差分摘要、
-复核收集用例和原安全断言。不得新增 skip、删除测试、更改 pytest 收集范围或放宽生产合同；
-不授权此范围之外的测试修改。完成本轮 CI 维护后恢复一般测试策略。
-本次冻结增量差分 SHA-256：`b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679`；累计 PR 差分 SHA-256：`7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1`。
-门禁只接受已固定摘要；同范围修正仍须同步摘要与验证证据，不能改成通用路径豁免。
-
-### 封面与诊断日志测试维护例外（2026-09-14 本次提交）
-
-用户在收到完整 v3 方案与范围说明后要求“commit本次改动并pr”，据此应用并提交该精确方案。
-
-本次精确维护限于两个既有测试文件、四个既有函数：
-
-- `tests/test_upload_platform_parameters.py` 的
-  `test_bilibili_cover_schedule_and_options_reach_upload_request`、
-  `test_verified_cover_bytes_are_staged_before_the_backend_reopens_them`、
-  `test_tencent_dual_cover_ratio_short_title_and_content_label`：
-  各增加一条本 job 进入 submitted 的等待，保留全部原断言。
-- `tests/test_startup_diagnostic_persistence.py` 的
-  `test_parallel_process_writers_have_complete_noninterleaved_records`：
-  仅在该用例子进程设定 10 秒锁等待预算，并给原成功断言追加子进程退出码/stderr。
-  生产 1 秒上限及独立 busy-writer 超时测试不变。
-
-增量完整测试差分 SHA-256：
-`848b90eda9f0e84d1f1071602c6f45d8a695a36ea73a11eb53c1de60c4944f15`。
-累计 PR 完整测试差分 SHA-256：
-`3ab252285d0d0cde29e33a78d4bde2329823e989d3489688fd9141e167bfd143`。
-
-门禁仅增加这两个固定摘要；不开放路径豁免，不新增 skip、不改收集范围、不放宽原断言条件，
-也不授权其他测试修改。此前未应用的封面 v2 提案由本次完整 v3 方案接续，不再分开应用。
+本轮 PR 评论修复和 YT 定位沿用一般测试策略。新复现、临时回归与日志只放在忽略目录，
+不改动任何 tracked tests，不降低原断言、不新增 skip、不改 pytest 收集范围。

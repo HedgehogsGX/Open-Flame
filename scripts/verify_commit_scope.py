@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import PurePosixPath
@@ -26,23 +25,13 @@ TEST_FILE_SUFFIXES = (
 )
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-# One frozen maintenance patch, activated only after the user approves its
-# reviewed 2026-09-13 proposal. Any other test diff remains blocked.
-APPROVED_TEST_MAINTENANCE_PATCH_SHA256 = "5ddff9cedcdfe0f5dd4a67beb9cab8566e1a743cebd3a37695ce4caeb3297a14"
+# PR #2 already contains reviewed test maintenance. Only that committed history
+# may cross its original base; it never authorizes a newly staged patch. Once
+# the merge base advances, this bridge is inactive and can be removed. Keep the
+# review endpoints fixed instead of accumulating reusable patch exemptions.
+REVIEWED_PR_BASE = "d48132637ce94a8b0b41bc2a965d24e27ac62aff"
+REVIEWED_PR_HEAD = "7b48a9fe4dae09279a3e986642af68263386e796"
 
-
-# Reviewed platform maintenance applied for the user's 2026-09-13 CI continuation.
-# Freeze both the incremental commit and the cumulative PR diff.
-APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S = frozenset({
-    "b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679",
-    "7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1",
-})
-
-# Frozen cover completion and diagnostic writer test maintenance.
-APPROVED_ASYNC_TEST_MAINTENANCE_PATCH_SHA256S = frozenset({
-    "848b90eda9f0e84d1f1071602c6f45d8a695a36ea73a11eb53c1de60c4944f15",
-    "3ab252285d0d0cde29e33a78d4bde2329823e989d3489688fd9141e167bfd143",
-})
 
 def _is_test_artifact(value: str) -> bool:
     path = PurePosixPath(value.replace("\\", "/"))
@@ -89,20 +78,27 @@ def _changed_paths(diff_args: Sequence[str]) -> list[str]:
     return paths
 
 
-def _approved_test_maintenance(diff_args: Sequence[str], paths: Sequence[str]) -> bool:
-    if not paths:
-        return False
-    patch = _git(
+def _test_patch(base: str, head: str, paths: Sequence[str]) -> bytes:
+    return _git(
         "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv",
         "--no-renames", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
         "--unified=3", "--inter-hunk-context=0", "--diff-algorithm=myers",
-        "--no-indent-heuristic", *diff_args, "--", *paths,
+        "--no-indent-heuristic", base, head, "--", *paths,
     )
-    digest = hashlib.sha256(patch).hexdigest()
-    return (
-        digest == APPROVED_TEST_MAINTENANCE_PATCH_SHA256
-        or digest in APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S
-        or digest in APPROVED_ASYNC_TEST_MAINTENANCE_PATCH_SHA256S
+
+
+def _reviewed_pr_test_history(base: str, head: str, paths: Sequence[str]) -> bool:
+    if not paths or base != REVIEWED_PR_BASE:
+        return False
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", REVIEWED_PR_HEAD, head],
+        check=False,
+        capture_output=True,
+    )
+    if ancestry.returncode != 0:
+        return False
+    return _test_patch(base, head, paths) == _test_patch(
+        REVIEWED_PR_BASE, REVIEWED_PR_HEAD, paths,
     )
 
 
@@ -233,9 +229,6 @@ def main() -> int:
     try:
         if args.staged:
             blocked = staged_test_changes()
-            if _approved_test_maintenance(("--cached",), blocked):
-                print("commit_scope_approved_test_maintenance")
-                blocked = []
         else:
             if args.github_event:
                 base, head, base_is_tree = _github_range()
@@ -248,8 +241,8 @@ def main() -> int:
                 base_is_tree=base_is_tree,
             )
             print(f"commit_scope_range merge_base={merge_base} head={_commit(head)}")
-            if _approved_test_maintenance((merge_base, _commit(head)), blocked):
-                print("commit_scope_approved_test_maintenance")
+            if _reviewed_pr_test_history(merge_base, _commit(head), blocked):
+                print("commit_scope_reviewed_pr_history")
                 blocked = []
     except (OSError, UnicodeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"commit_scope_failed: {exc}", file=sys.stderr)

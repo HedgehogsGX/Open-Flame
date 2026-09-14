@@ -2,7 +2,7 @@
 
 版本：1.4，2026-09-09。适用范围：下载首页、编辑工作台、上传工作台、自动流程及后续新增的用户界面。用户已选定方向 C“编辑式玻璃（Editorial Glass）”作为整站生产风格：以编辑式排版与留白建立主次，在导航、主命令区和明确浮层中选择性使用液态玻璃，并由后续开发持续沿用。
 
-**状态：方向 C 已完成四页生产实现与当前浏览器复验。** 下载、编辑、上传与自动流程页使用同一共享样式、主题脚本、固定静态资源入口与 CSP；[交互式设计预览](design-preview.html)直接读取生产 CSS。[编辑式玻璃四页生产前端证据](../validation/iteration-0.28.0-editorial-glass-frontend.md)记录 44/44 个当前 Chromium 场景。历史 T16/T18 结果只证明当时构建；精确 commit、制品 hash 与独立安装结果仍由包外 release receipt 绑定。本地 synthetic 验收不证明 AI 模型、真实登录、下载、上传或平台审核结果。
+**状态：方向 C 已完成四页生产实现与当前浏览器复验。** 下载、编辑、上传与自动流程页使用同一共享样式、主题脚本、固定静态资源入口与 CSP；[交互式设计预览](design-preview.html)直接读取生产 CSS。[编辑式玻璃四页生产前端证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editorial-glass-frontend.md)记录 44/44 个当前 Chromium 场景。历史 T16/T18 结果只证明当时构建；精确 commit、制品 hash 与独立安装结果仍由包外 release receipt 绑定。本地 synthetic 验收不证明 AI 模型、真实登录、下载、上传或平台审核结果。
 
 ## 1. 视觉方向
 
@@ -164,9 +164,9 @@ T07 备份/恢复、T14 账号断开/媒体清理如提供 UI，沿用页面壳�
 - [静态资源加载器](../src/video_download_control/ui_assets.py)使用固定 allowlist 从 Python 包读取这两个文件，应用响应使用明确 Content-Type、`no-cache` 与 `nosniff`。不接受用户提供的资源路径。
 - [设计预览](design-preview.html)通过相对路径 `../src/video_download_control/static/open-flame.css` 直接读取同一 CSS，因此从仓库本地打开时不依赖应用服务器或外部网络；预览特有的片段布局和演示交互仍保留在预览文件内。
 
-以上结构已用于下载、编辑、上传和自动流程四张生产页面。历史源码行为回归与真实浏览器矩阵见 [0.25.0 T16 证据](../validation/iteration-0.25.0-t16-frontend-evidence.md)，方向 C 的当前证据见[编辑式玻璃四页生产前端证据](../validation/iteration-0.28.0-editorial-glass-frontend.md)，来源封面组件与显式导入边界见[来源封面调研与导入记录](../validation/iteration-0.28.0-source-cover-research-and-import.md)；各记录只覆盖自身列出的 checkout 与检查。源码 ZIP/sdist/wheel 的内容一致性和独立安装仍以同批包外 release receipt 为准，不能从源码文件存在推断。
+以上结构已用于下载、编辑、上传和自动流程四张生产页面。历史源码行为回归与真实浏览器矩阵见 [0.25.0 T16 证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.25.0-t16-frontend-evidence.md)，方向 C 的当前证据见[编辑式玻璃四页生产前端证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editorial-glass-frontend.md)，来源封面组件与显式导入边界见[来源封面调研与导入记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)；各记录只覆盖自身列出的 checkout 与检查。源码 ZIP/sdist/wheel 的内容一致性和独立安装仍以同批包外 release receipt 为准，不能从源码文件存在推断。
 
-0.26.0 新增的逐平台文案、封面和定时控件继续使用同一结构；当前真实浏览器的桌面/窄屏与交互结果见 [0.26.0 上传参数证据](../validation/iteration-0.26.0-upload-parameters-evidence.md)。该记录只证明禁止远端调用的本地页面范围。
+0.26.0 新增的逐平台文案、封面和定时控件继续使用同一结构；当前真实浏览器的桌面/窄屏与交互结果见 [0.26.0 上传参数证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.26.0-upload-parameters-evidence.md)。该记录只证明禁止远端调用的本地页面范围。
 
 - 共享 token 和通用组件只有 `open-flame.css` 一个生产来源；预览不得重新定义 `--of-*`，只保留合成样例所需的局部布局。
 - 新建或修改控件时先查本规范，复用现有语义 token；需要新 token 时说明使用场景并同步预览。避免全局 `button` 或 `.row` 改动意外改变另一个页面。

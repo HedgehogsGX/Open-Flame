@@ -46,6 +46,12 @@ MAX_FILE = 8 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_ENTRIES = 2000
 EXCLUDED_REPORT = "validation/apache-2.0-license-migration-evidence.md"
+SHIPPED_VALIDATION_FILES = frozenset({
+    "validation/README.md",
+    "validation/linux-docker-acceptance.md",
+    "validation/results.template.csv",
+    "validation/sample_manifest.template.csv",
+})
 FORBIDDEN_PARTS = {".git", ".venv", "__pycache__", "runtime-tools", "data", "data-edits", "data-uploads", "dist", "build", ".pytest_cache", "node_modules"}
 FORBIDDEN_SUFFIXES = {".exe", ".dll", ".pyd", ".pyc", ".db", ".sqlite", ".sqlite3", ".log", ".jsonl", ".mp4", ".mp3", ".webm", ".mkv", ".mov", ".wav", ".avi", ".flac", ".m4a", ".part", ".ytdl", ".pem", ".key", ".p12", ".pfx", ".zip", ".whl"}
 ENV_EXAMPLES = {".env.example", "deployment/.env.candidate.example", "deployment/cookies/cookie-sources.env.example"}
@@ -173,6 +179,11 @@ def validate_documentation_inventory(files: dict[str, bytes]) -> None:
     authoring check must not turn archive verification into a dependency on the
     current checkout's documentation history.
     """
+    require(
+        {name for name in files if name.startswith("validation/")}
+        <= SHIPPED_VALIDATION_FILES,
+        "historical_validation_in_release",
+    )
     require(documentation_targets(files) <= files.keys(), "unlisted_documentation_link")
 
 

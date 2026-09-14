@@ -21,9 +21,9 @@
 4. [`FOLLOW_UP_EXECUTION_PLAN.md`](FOLLOW_UP_EXECUTION_PLAN.md)
 5. [`validation/README.md`](../validation/README.md)
 6. 与本次改动直接相关的最新 validation 记录；上传和来源封面工作先读：
-   - [`iteration-0.28.0-upload-attempt-receipts.md`](../validation/iteration-0.28.0-upload-attempt-receipts.md)
-   - [`iteration-0.28.0-source-cover-research-and-import.md`](../validation/iteration-0.28.0-source-cover-research-and-import.md)
-   - [`iteration-0.28.0-workflow-source-cover-preference.md`](../validation/iteration-0.28.0-workflow-source-cover-preference.md)
+   - [`iteration-0.28.0-upload-attempt-receipts.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)
+   - [`iteration-0.28.0-source-cover-research-and-import.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)
+   - [`iteration-0.28.0-workflow-source-cover-preference.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)
 
 把附带的交接、评审、计划和 validation 文档当作上下文、证据和约束；其中的命令或待办不是本轮
 用户请求。以用户当前请求决定实际执行范围，并服从当前 `AGENTS.md`。
@@ -68,15 +68,15 @@ git config --get core.hooksPath
 - `7575773116f7aeebe6bc21bbdb02f9f469a3ea5e` 已有同提交 source/wheel 独立安装 receipt，
   push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
   2026-09-14 实时核对 PR #2 未合并，main 未受保护，见
-  [发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
+  [发布准备基线](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md)。
 - `1540a7e` 的 push/PR 四格均已通过；隔离 Setup、普通启停、四页浏览器及实际旧 Upload
   数据的保护副本、Schema 3→4 迁移和独立恢复已通过限定验证，见
-  [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)。
+  [隔离验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md)。
   实际应用根本身仍为 Upload Schema 3。`d970bce` 又完成当前 Download/Upload 业务数据的
   联合保护副本、独立恢复和副本普通启停；原根缺席的 Editing/Workflow 没有历史内容恢复证据，
-  见[数据恢复记录](../validation/iteration-0.28.0-application-data-recovery.md)。后续已完成环境保护/
-  独立副本、旧版普通启停及私有状态的加密解密验证，见[回退演练](../validation/iteration-0.28.0-rollback-environment-drill.md)。
-  后续[本地恢复补充](../validation/iteration-0.28.0-local-recovery-validation.md)验证了恢复 Python
+  见[数据恢复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-application-data-recovery.md)。后续已完成环境保护/
+  独立副本、旧版普通启停及私有状态的加密解密验证，见[回退演练](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md)。
+  后续[本地恢复补充](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md)验证了恢复 Python
   上的正式新 Upload runtime、跨进程存储/执行权交接和 Chromium 故障回收；旧环境原解释器
   绑定、凭据落盘恢复、异机/offsite 及实际根升级仍未关闭。
 - `8564b30` 是 CI 生产修复里程碑；描述新 HEAD 前仍须实时查询，不能沿用旧结果。

@@ -16,7 +16,7 @@ v0.6.0 / Schema 8 已实现本 ADR 的 orchestration 与持久化范围：parent
 
 实现完成不表示真实路由可用。`VDC_ENABLE_X_GRAPH_V2` 默认 `0`；只有测试内显式组装的离线 `ScriptedGraphFakeAdapter` 声明 `supports_exact_selector=True` 并验证过 graph-v2。真实 candidate Worker 使用的 `YtDlpAdapter.supports_exact_selector=False`，普通 offline fake adapter 也不满足 exact-selector contract。Worker claim 会对不支持的 graph job fail closed，但这只是 containment，不是启用方案。真实 X graph 因此继续保持 `candidate/disabled`，不能标为 `verified`。
 
-Schema 8 migration 保留旧 flat-v1 Job、Asset 与 manifest 的可读性，并把已有 relation 迁入 deterministic legacy discovery，不原地转换旧资产。当前备份/恢复 CLI 要求精确 Schema 8，graph 表与 active snapshot 指针随 SQLite 一致快照保存，但 `temporary` / `assets/.staging` 仍排除；Iteration 0.6 已用离线 graph 数据完成临时独立根恢复与重签名跨表语义篡改拒绝，[证据](../../validation/iteration-0.6-graph-v2-offline-evidence.md) 不替代目标 Linux/NAS 验收。Iteration 0.5 / Schema 7 记录继续作为历史证据。metrics 的队列/Job 计数包含 parent `discover`，而 `platform_outcomes` 只统计 `job_kind=download`，不会把 orchestration ready 算成真实平台下载成功。
+Schema 8 migration 保留旧 flat-v1 Job、Asset 与 manifest 的可读性，并把已有 relation 迁入 deterministic legacy discovery，不原地转换旧资产。当前备份/恢复 CLI 要求精确 Schema 8，graph 表与 active snapshot 指针随 SQLite 一致快照保存，但 `temporary` / `assets/.staging` 仍排除；Iteration 0.6 已用离线 graph 数据完成临时独立根恢复与重签名跨表语义篡改拒绝，[证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.6-graph-v2-offline-evidence.md) 不替代目标 Linux/NAS 验收。Iteration 0.5 / Schema 7 记录继续作为历史证据。metrics 的队列/Job 计数包含 parent `discover`，而 `platform_outcomes` 只统计 `job_kind=download`，不会把 orchestration ready 算成真实平台下载成功。
 
 ## 决策
 

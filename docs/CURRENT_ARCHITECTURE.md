@@ -153,7 +153,7 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 本分支已修复下文第 9 节的前两条失败路径，并收敛两类 adapter 控制记录的 JSONL 解码。
 测试维护 `3e482f0` 恢复标准收集，平台维护 `ac3532b` 消除 Linux fixture 失败；
 Windows SQLite sidecar 竞争修复 `8564b30` 的四格 CI 已全部通过。测试收集和 skip 计数
-没有缩减，详见[CI 合同维护记录](../validation/iteration-0.28.0-ci-contract-maintenance.md)。
+没有缩减，详见[CI 合同维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md)。
 剩余复杂度按具体收益继续精简，不能把 CI 通过解释成不存在架构债务或真实平台已验收。
 
 ## 4. 数据所有权与存储布局
@@ -277,7 +277,7 @@ stateDiagram-v2
 `unknown` 不能直接 retry。操作者必须先读取 receipt，再到对应平台后台核对；只有固定
 `not_accepted` 结论落库后才能建立新的待确认草稿。任何没有 receipt 的旧 failed/canceled job 都
 不能根据可变 job 字段推断为“从未 dispatch”。完整合同见
-[Upload Schema 4 attempt receipt 记录](../validation/iteration-0.28.0-upload-attempt-receipts.md)。
+[Upload Schema 4 attempt receipt 记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)。
 
 ## 6. 执行环境与外部边界
 
@@ -337,53 +337,53 @@ stateDiagram-v2
    [`WorkflowManager.get()`](../src/video_download_control/workflows/manager.py) 在 `Thread.start()` 前发布
    `_service`、`_worker_active` 和 `_thread`；`start()` 抛错后可能留下“有 service、无 worker”的
    组合，后续 `stop()` 还可能 join 未启动线程。现在未成功启动时回滚；已真实启动后的中断
-   保留 owner。保留 lazy single-owner 与永久 stop 语义，见[独立记录](../validation/iteration-0.28.0-workflow-start-rollback.md)。
+   保留 owner。保留 lazy single-owner 与永久 stop 语义，见[独立记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-start-rollback.md)。
 2. **本分支已修复：媒体构造失败清理保留原始错误。**
    Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径此前直接调用 `handle.close()`；
    close 的 `OSError` 曾覆盖更有意义的 `asset_changed` 或 manifest 错误。现在共用基础受管文件
-   的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](../validation/iteration-0.28.0-media-cleanup-errors.md)。
-   辅助素材的校验/构造/读取/发送失败也已接入同一保护，见[辅助清理记录](../validation/iteration-0.28.0-auxiliary-cleanup-errors.md)。
-   字幕消费端的后续读取同样保留主异常，正常关闭自身失败仍传播，见[字幕清理记录](../validation/iteration-0.28.0-caption-cleanup-errors.md)。
+   的异常清理规则，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射，见[独立记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-media-cleanup-errors.md)。
+   辅助素材的校验/构造/读取/发送失败也已接入同一保护，见[辅助清理记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-auxiliary-cleanup-errors.md)。
+   字幕消费端的后续读取同样保留主异常，正常关闭自身失败仍传播，见[字幕清理记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-caption-cleanup-errors.md)。
 3. **本分支已补齐 Windows 上传 source 消费期间的持有。** Upload 校验 reader 持有至 backend
    返回，普通并发写入/替换/删除被拒绝；Biliup 对真实硬链接/复制暂存再次持有并复核冻结摘要。
    Backend 统一区分执行前失败与执行后结果，清理不再降级可信结果或 unknown。见
-   [源交接记录](../validation/iteration-0.28.0-upload-source-handoff.md)。这不是任意同机变更或真实
+   [源交接记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-source-handoff.md)。这不是任意同机变更或真实
    平台接受的证明；非 Windows 保留原匹配读取，receipt 不是平台签名证据。
 4. **规则 Locality 仍需持续检查。** 上传 retry 前后结果应用与取消封面分流后的公共尾段
-   已收敛，见[重试与取消记录](../validation/iteration-0.28.0-workflow-retry-cancel-tails.md)。
+   已收敛，见[重试与取消记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-retry-cancel-tails.md)。
    Editing AI retry forest 已统一归 Editing 校验，见
-   [重试图所有权记录](../validation/iteration-0.28.0-editing-ai-retry-ownership.md)。Download 素材读取、
+   [重试图所有权记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-ai-retry-ownership.md)。Download 素材读取、
    两类 JSONL control record 的传输解码和 Upload receipt 状态规则已集中，继续保留这些边界。
-   Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](../validation/iteration-0.28.0-workflow-request-construction.md)。
+   Workflow 请求键与冻结投稿字段已在现有 contracts 中统一，见[身份构造记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-request-construction.md)。
    封面格式与平台规则也已集中，关闭了 Bilibili 竖图在备份中漏检的已复现分歧，见
-   [封面所有权记录](../validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
+   [封面所有权记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-cover-ownership.md)。前端空固定日期
    可以被预设保存成不定时的分歧也已修复，日期与文本/数值规则改为共同维护，见
-   [共享校验记录](../validation/iteration-0.28.0-workflow-shared-validation.md)。两页现在共同引用
+   [共享校验记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-shared-validation.md)。两页现在共同引用
    `uploads.web_rules` 的纯文本、标签和排程函数；DOM、能力输入、确认与冻结锚点仍归页面。
-   strict/CSP、发行依赖与当前验证边界见[跨页纯规则记录](../validation/iteration-0.28.0-cross-page-upload-rules.md)。
+   strict/CSP、发行依赖与当前验证边界见[跨页纯规则记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-cross-page-upload-rules.md)。
    备份的公共文件操作已迁入独立 Module；测试入口与当前交接继续收尾。
    抽取前已修复复制失败删除非本次目标、descriptor 包装失败泄漏和关闭覆盖主异常的路径，见
-   [备份文件所有权记录](../validation/iteration-0.28.0-backup-file-ownership.md)；两域现在共用公开
+   [备份文件所有权记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-file-ownership.md)；两域现在共用公开
    `backup_files`，继续保留各自事务、锁与格式。
    Editing 复制现与备份共用 `managed_files` 的目标所有权清理，来源导入和成品登记的强制
-   碰撞验证保留既有媒体，见[Editing 复制记录](../validation/iteration-0.28.0-editing-copy-ownership.md)。
+   碰撞验证保留既有媒体，见[Editing 复制记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-copy-ownership.md)。
    Upload 生命周期已移出 HTTP，由公开 UploadManager 接收 factory；未启动线程、启动后中断、
-   recover/stop 竞争和系统锁交接均已验证，见[生命周期记录](../validation/iteration-0.28.0-upload-manager-ownership.md)。
+   recover/stop 竞争和系统锁交接均已验证，见[生命周期记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-manager-ownership.md)。
    Editing 成品的纯元数据校验已前移到复制前，复制后立即加入共同清理清单，关闭登记前
-   孤儿路径，见[登记清理记录](../validation/iteration-0.28.0-editing-registration-cleanup.md)。
+   孤儿路径，见[登记清理记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-registration-cleanup.md)。
    备份锁与普通 reader 现共用公开 raw descriptor 交接；SQLite 每个连接取得后立即进入
-   关闭范围，保留主异常并回收另一个连接，见[资源回收记录](../validation/iteration-0.28.0-backup-resource-handoff.md)。
+   关闭范围，保留主异常并回收另一个连接，见[资源回收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-resource-handoff.md)。
    公共备份迁移删除 55 处跨域私有调用及 3 个浅结构，39 项故障反馈通过；旧 helper import
-   已由批准的维护修复，历史迁移证据见[公共备份文件记录](../validation/iteration-0.28.0-public-backup-files.md)。
+   已由批准的维护修复，历史迁移证据见[公共备份文件记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-public-backup-files.md)。
    Editing render retry forest 现也由公开解析与发现式取消共用，Workflow 删除两个重复
    定义；33 组真实 SQLite 对照和取消专项合同通过，speech checkpoint 的更强缓存/授权
-   合同保留。见[render 图所有权](../validation/iteration-0.28.0-editing-render-retry-ownership.md)。
+   合同保留。见[render 图所有权](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-render-retry-ownership.md)。
 5. **实际应用根与发行证据仍有独立边界。** 2026-09-10 的实际 app root 只完成 Upload
    Schema 1→3；Schema 4 尚未在该实根迁移/审计。`8564b30` 的四格离线 CI 已恢复；
    包外 receipt 仍必须把最终提交、制品、source/wheel 安装和同提交 CI 绑定，历史安装
    不能跨提交复用。发行清单包含受检必读文档和链接，构建前执行文档完整性检查，
    通用 archive 校验保留制品自身合同，见
-   [发行文档分责](../validation/iteration-0.28.0-release-documentation-boundary.md)。
+   [发行文档分责](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-documentation-boundary.md)。
 
 推荐顺序：本分支已完成第 1、2 项小修，继续处理已确定的职责和规则重复；收到外部测试反馈时优先
 复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有
@@ -396,13 +396,13 @@ stateDiagram-v2
 - 当前验证索引：[`validation/README.md`](../validation/README.md)
 - Editorial Glass：[`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md)
 - Workflow、编辑和上传操作：[`RUNBOOK.md`](RUNBOOK.md)
-- 来源封面：[研究与导入](../validation/iteration-0.28.0-source-cover-research-and-import.md)、
-  [Workflow 偏好](../validation/iteration-0.28.0-workflow-source-cover-preference.md)
-- Upload Schema 4：[attempt receipt 验收](../validation/iteration-0.28.0-upload-attempt-receipts.md)
-- 架构收敛分项：[HTTP](../validation/iteration-0.28.0-download-http-boundary.md)、
-  [EditingManager](../validation/iteration-0.28.0-editing-manager-boundary.md)、
-  [受管文件读取](../validation/iteration-0.28.0-managed-file-read.md)、
-  [Workflow snapshot](../validation/iteration-0.28.0-upload-snapshot-observation.md)
+- 来源封面：[研究与导入](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)、
+  [Workflow 偏好](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)
+- Upload Schema 4：[attempt receipt 验收](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)
+- 架构收敛分项：[HTTP](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-download-http-boundary.md)、
+  [EditingManager](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-manager-boundary.md)、
+  [受管文件读取](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-managed-file-read.md)、
+  [Workflow snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-snapshot-observation.md)
 
 文档中的图表示进程、所有权和主要调用关系，不表示节点是独立部署服务，也不表示图中出现的外部
 平台已经通过真实验收。

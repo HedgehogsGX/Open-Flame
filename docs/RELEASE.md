@@ -13,10 +13,15 @@ py -3 -I .\scripts\release.py check-source
 ```
 
 它检查明确源码清单、身份和 docs/validation 中受检的字面 Markdown 文件链接。
+新发行只携带 `validation/README.md`、两份 Stage 0 CSV 模板和 Linux 操作指南。
+118 份历史报告保留在 Git，通过固定提交链接访问；不随源码 ZIP 或 sdist 递归分发。
+`release-files.txt` 与 Hatch 的精确 force-include 同步限定这一范围，新增历史报告被
+`historical_validation_in_release` 拒绝；普通本地文档缺项仍被拒绝。历史制品的 `verify`
+继续按其原清单验证，避免把新的分发策略反向套用于旧包。
 `build` 会在创建输出和调用工具前执行同一文档检查；缺失文档以
 `unlisted_documentation_link` 拒绝。通用 `verify` 仍按制品自身声明的清单与身份合同
 检查，不要求旧制品补齐当前 checkout 的历史文档。边界及检查范围见
-[文档完整性记录](../validation/iteration-0.28.0-release-documentation-boundary.md)。
+[文档完整性记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-documentation-boundary.md)。
 
 在源码根目录、使用已安装的 Python 3.12+。不需要 Git、uv、已有项目虚拟环境或 `validation/local` 中的旧 verifier。以 PowerShell 为例，输出路径必须是**尚不存在**的绝对目录，其父目录应已存在：
 
