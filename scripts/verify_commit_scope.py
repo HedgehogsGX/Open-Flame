@@ -38,6 +38,12 @@ APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S = frozenset({
     "7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1",
 })
 
+# Frozen cover completion and diagnostic writer test maintenance.
+APPROVED_ASYNC_TEST_MAINTENANCE_PATCH_SHA256S = frozenset({
+    "848b90eda9f0e84d1f1071602c6f45d8a695a36ea73a11eb53c1de60c4944f15",
+    "3ab252285d0d0cde29e33a78d4bde2329823e989d3489688fd9141e167bfd143",
+})
+
 def _is_test_artifact(value: str) -> bool:
     path = PurePosixPath(value.replace("\\", "/"))
     parts = {part.casefold() for part in path.parts}
@@ -96,6 +102,7 @@ def _approved_test_maintenance(diff_args: Sequence[str], paths: Sequence[str]) -
     return (
         digest == APPROVED_TEST_MAINTENANCE_PATCH_SHA256
         or digest in APPROVED_PLATFORM_MAINTENANCE_PATCH_SHA256S
+        or digest in APPROVED_ASYNC_TEST_MAINTENANCE_PATCH_SHA256S
     )
 
 

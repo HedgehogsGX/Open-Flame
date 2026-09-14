@@ -10,6 +10,8 @@ results belong outside Git or under ignored `validation/local/`.
 
 ## Current status
 
+- Exact test maintenance: [cover completion waits, diagnostic child lock budget, unchanged assertions and 73-test regression](iteration-0.28.0-async-test-maintenance.md).
+- Local recovery supplements: [cross-process locks, restored-Python runtime rebuild and actual Chromium process cleanup](iteration-0.28.0-local-recovery-validation.md).
 - Rollback preparation: [old-source environment copies, normal startup/stop, schema compatibility and encrypted private-state verification](iteration-0.28.0-rollback-environment-drill.md).
 - Main merge gate: [exact proposal, observed permission boundary and outstanding remote verification](../docs/MAIN_MERGE_GATE.md).
 - Application data: [observed Download/Upload protection, independent restore, normal startup and original-root preservation](iteration-0.28.0-application-data-recovery.md).

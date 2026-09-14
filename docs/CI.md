@@ -10,19 +10,22 @@
 
 ## 当前托管运行状态
 
-2026-09-14 重新查询 GitHub 后确认，提交
-[`ceb77ece167e4ab4e6f18a720e8ebe8cc0804d2e`](https://github.com/HedgehogsGX/Open-Flame/commit/ceb77ece167e4ab4e6f18a720e8ebe8cc0804d2e)
-的 [push run 34774421941](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34774421941) 与
-[PR run 34774423528](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34774423528)
-均已 completed，四格均为 `success`。
+2026-09-14 维护前核对：提交
+[`0dfcf82b7896e2a61b1201f3f974a5f7adf3dcdd`](https://github.com/HedgehogsGX/Open-Flame/commit/0dfcf82b7896e2a61b1201f3f974a5f7adf3dcdd)
+的 [push run 34777870858](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34777870858)
+四格 success；[PR run 34777873312](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34777873312)
+的 Windows / CPython 3.13.14 在诊断日志 rotate=True 并发用例失败，其他三格 success。
+两套 run 均已 completed。原日志缺少子进程 stderr，确切 hosted 根因未被证明。
 
 此前 `d970bce` push 的 Bilibili 封面失败、`9822454` PR 的视频号封面失败保留在
 [原记录](../validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。在暂停 backend 的
 隔离探针中，三个现有封面用例均可确定性复现过早检查删除；backend 列表已有记录不能证明
-任务已经提交或后续清理完成。新的 v2 方案只在三个函数各增加一行 submitted 等待，
-保留所有原断言；仅内存替换三个函数后原模块 40 项通过。精确门禁正反向验证通过，
-真实测试、AGENTS 例外和范围门禁尚未修改。绿色运行不能消除这项竞争，v2 仍待明确批准。
-PR #2 仍未合并；新提交必须查询自己的检查结果。此前签名和隔离验收见
+任务已经提交或后续清理完成。本次按用户提交指令应用 v3：三个函数各增加一行 submitted
+等待，另一个诊断日志用例只设置子进程锁预算并补充断言详情。原断言条件、独立超时测试、
+收集范围和生产默认预算保持；真实两模块回归 73 项通过，精确范围与摘要见
+[维护记录](../validation/iteration-0.28.0-async-test-maintenance.md)。本次维护提交的 CI
+以 PR 同提交检查及交付记录为准，上述维护前结果不自动覆盖它。
+PR #2 仍未合并。此前签名和隔离验收见
 [隔离验收记录](../validation/iteration-0.28.0-release-readiness-drill.md)；此前 `7575773` 的
 安装 receipt 与合并门禁准备见[发布准备基线](../validation/iteration-0.28.0-release-readiness-baseline.md)。
 

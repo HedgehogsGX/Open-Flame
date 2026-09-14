@@ -9,7 +9,7 @@
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
 当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
-重整架构并解决完整 CI；**最近核对的 `ceb77ec` push/PR 四格均通过，封面测试的确定性等待竞争仍待限定维护，未合并 main**。起点为远端 main `d481326`。已分别
+重整架构并解决完整 CI；**v3 精确测试维护已应用，本地 73 项通过；新提交的 CI 以 PR 同提交检查为准，未合并 main**。起点为远端 main `d481326`。已分别
 签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
 Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
 下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
@@ -156,6 +156,8 @@ Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，�
 
 | 范围 | 当前记录 |
 | --- | --- |
+| 异步测试维护 | [三个封面完成等待、诊断日志并发预算与精确差分门禁](validation/iteration-0.28.0-async-test-maintenance.md) |
+| 本地恢复补充 | [跨进程锁/恢复、正式运行时重建与真实 Chromium 进程回收](validation/iteration-0.28.0-local-recovery-validation.md) |
 | 当前数据保护与日志 | [Download/Upload 独立备份恢复及副本启动](validation/iteration-0.28.0-application-data-recovery.md)、[8 个合法路由日志模板修复](validation/iteration-0.28.0-runtime-route-logging.md) |
 | 环境回退与私有保护 | [旧版环境、Schema 3 普通启停和 DPAPI 加密验证](validation/iteration-0.28.0-rollback-environment-drill.md) |
 | main 门禁 | [精确配置提案、权限边界与远端验收步骤](docs/MAIN_MERGE_GATE.md) |
@@ -206,10 +208,10 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    后续已完成环境保护及独立副本、旧 `97929f6` 普通启停、私有状态的 DPAPI 加密和独立进程
    解密核验，见[回退演练](validation/iteration-0.28.0-rollback-environment-drill.md)。
    Upload venv 仍依赖原绝对路径解释器；真实凭据落盘恢复、异机/offsite 和实际根升级未执行。
-4. **封面测试等待竞争仍待处理，合并门禁尚未配置。** 最近核对 `ceb77ec` 的 push/PR
-   四格均 success；这不消除 `d970bce` Bilibili 和 `9822454` 视频号失败及三个用例的
-   确定性竞争证据。三行等待 v2 已在隔离环境验证 40 项通过，尚未批准或应用，见
-   [当前 CI](docs/CI.md)。main 规则清单仍为空，当前 API 身份未显示 admin 权限；
+4. **精确测试维护已应用，合并门禁尚未配置。** 维护前 `0dfcf82` push 四格 success，PR 的
+   Windows 3.13 诊断日志并发用例失败。v3 已修正三个封面用例的完成等待，并限定诊断日志
+   用例子进程预算、补充失败详情，实际两模块 73 项通过，见[维护记录](validation/iteration-0.28.0-async-test-maintenance.md)。
+   新提交须核对自己的 CI。main 规则清单仍为空，当前 API 身份未显示 admin 权限；
    [门禁提案](docs/MAIN_MERGE_GATE.md)已准备，配置、真实阻断验证和合并仍各自待办。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
@@ -234,10 +236,12 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    HEAD/PR/CI。普通启停、四页浏览器与旧 Upload 数据副本迁移/独立恢复已完成限定验证；
    上传剩余空间阈值已贯通启动、服务、API 和页面；重启后残留的连接错误与旧 CSRF 已修复。
    `9822454` 固定合成存储负载已完成 600.77 秒/300 轮及正常停机。
-   下一步处理已复现的封面测试等待竞争，再核对新提交 CI、补充其余恢复负载与真实业务；
+   下一步核对本次精确维护提交的 CI，再按已获准范围继续实际根维护与真实业务；
    总配额和跨进程空间预订仍未实现。
    当前实际根的 Download/Upload 业务数据保护与独立恢复、同机旧版环境回退及加密私有状态
-   验证已完成限定检查；原路径依赖、凭据落盘恢复、门禁配置及实际根维护仍分别待办。
+   验证已完成限定检查；恢复解释器正式重建、跨进程恢复和 Chromium 回收补充见
+   [本地恢复记录](validation/iteration-0.28.0-local-recovery-validation.md)。旧环境原路径依赖、
+   凭据落盘恢复、门禁配置及实际根维护仍分别待办。
    当前 upload backup create 只接受 Schema 4；
    原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。
    外部反馈出现时优先复现。已批准并应用的测试差分不重复审批，也不扩大授权范围；

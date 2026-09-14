@@ -691,6 +691,7 @@ def test_bilibili_cover_schedule_and_options_reach_upload_request(upload_service
 
     upload_service.confirm(job["id"])
     _wait_until(lambda: len(upload_service.backend.uploads) == 1)
+    _wait_until(lambda: upload_service.job(job["id"])["state"] == "submitted")
     request = upload_service.backend.uploads[0]
     assert request.platform == "bilibili"
     assert request.title == "B站参数标题"
@@ -735,6 +736,7 @@ def test_verified_cover_bytes_are_staged_before_the_backend_reopens_them(tmp_pat
 
         service.confirm(job["id"])
         _wait_until(lambda: len(backend.uploads) == 1)
+        _wait_until(lambda: service.job(job["id"])["state"] == "submitted")
 
         assert backend.cover_payloads[0][0] == payload
         assert backend.uploads[0].cover_landscape_path != backend.managed_path
@@ -946,6 +948,7 @@ def test_tencent_dual_cover_ratio_short_title_and_content_label(upload_service, 
 
     upload_service.confirm(job["id"])
     _wait_until(lambda: len(upload_service.backend.uploads) == 1)
+    _wait_until(lambda: upload_service.job(job["id"])["state"] == "submitted")
     request = upload_service.backend.uploads[0]
     assert upload_service.backend.cover_payloads[0] == (
         landscape_payload, portrait_payload,

@@ -42,3 +42,27 @@
 不授权此范围之外的测试修改。完成本轮 CI 维护后恢复一般测试策略。
 本次冻结增量差分 SHA-256：`b8b8a60ac0508bba00ef9fb2e5fb95c595da9e26f9e46b846a8aa88460e60679`；累计 PR 差分 SHA-256：`7dedb2a7d5b5c5d6638097669c62c3e863cdbdb596b77ea9854c00e1bf2a2de1`。
 门禁只接受已固定摘要；同范围修正仍须同步摘要与验证证据，不能改成通用路径豁免。
+
+### 封面与诊断日志测试维护例外（2026-09-14 本次提交）
+
+用户在收到完整 v3 方案与范围说明后要求“commit本次改动并pr”，据此应用并提交该精确方案。
+
+本次精确维护限于两个既有测试文件、四个既有函数：
+
+- `tests/test_upload_platform_parameters.py` 的
+  `test_bilibili_cover_schedule_and_options_reach_upload_request`、
+  `test_verified_cover_bytes_are_staged_before_the_backend_reopens_them`、
+  `test_tencent_dual_cover_ratio_short_title_and_content_label`：
+  各增加一条本 job 进入 submitted 的等待，保留全部原断言。
+- `tests/test_startup_diagnostic_persistence.py` 的
+  `test_parallel_process_writers_have_complete_noninterleaved_records`：
+  仅在该用例子进程设定 10 秒锁等待预算，并给原成功断言追加子进程退出码/stderr。
+  生产 1 秒上限及独立 busy-writer 超时测试不变。
+
+增量完整测试差分 SHA-256：
+`848b90eda9f0e84d1f1071602c6f45d8a695a36ea73a11eb53c1de60c4944f15`。
+累计 PR 完整测试差分 SHA-256：
+`3ab252285d0d0cde29e33a78d4bde2329823e989d3489688fd9141e167bfd143`。
+
+门禁仅增加这两个固定摘要；不开放路径豁免，不新增 skip、不改收集范围、不放宽原断言条件，
+也不授权其他测试修改。此前未应用的封面 v2 提案由本次完整 v3 方案接续，不再分开应用。
