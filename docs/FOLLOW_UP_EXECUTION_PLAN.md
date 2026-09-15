@@ -1,90 +1,26 @@
 # Open-Flame 后续执行计划
 
-2026-09-16 当前入口：Upload 旧库迁移的失败清理现在保留首个错误，既有 Schema/API
-错误映射与成功关闭语义保持，见[当前验收](../validation/README.md#upload-migration-error-ownership-2026-09-16)。该修复不改变
-迁移 SQL、锁、Schema 或其他域；旧连接摘要收敛为固定提交链接，完整材料留在原 evidence。
-基线 `0ab7c75` 的八项 CI 均首轮 success；新提交仍须独立完成回归、CI、构建和安装。
-继续按已复现问题推进六类核心职责与 CLI 分层，真实平台验收沿用下方输入和授权边界。
+2026-09-16 当前入口：Upload Schema 锁已把准备与业务段纳入同一资源所有权范围，
+中断与二次清理故障的同组反馈 **9/22 → 22/22**，见[当前验收](../validation/README.md#upload-schema-lock-ownership-2026-09-16)。
+本切片 Windows Python 3.13.14 / Node 22.23.2 完整现有回归 2442 passed、16 skipped；
+随后按同一 clean commit 完成 CI、冻结构建和独立安装。
 
-2026-09-15 阶段记录：工具链文件的 hash/snapshot
-复用同句柄、有界读取和结束身份复核；代理策略加载归安全层，CLI 只保留参数转交。
-`6885764` push/PR 八格已全部首轮 success，新读取修复须核对自己的验证，见
-[本轮记录](../validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。此前恢复/新租约
-时钟、Adapter 控制文件和有界 DNS 见[生命周期记录](../validation/README.md#lifecycle-ownership-repair-2026-09-15)。
-更早素材库存、证据读取、运行状态和重试合同见
-[上一轮记录](../validation/README.md#core-ownership-repair-2026-09-15)。
-[PR #2 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057) 的测试门禁与
-发行清理已处理，详见[评论处理记录](../validation/README.md#pr-2-review-follow-up-2026-09-15)。
-YT 尚缺四个失败用例的 URL、错误及执行版本，未宣称已复现或修复。取得输入后先保留
-原始失败，再进行受控修复和同一批样本复验；真实上传、账号操作和原应用根维护仍按各自范围执行。
+基线 `8819190` 的 Node 10 秒等待在 push Windows 3.12 首轮和唯一复跑均失败，最终
+7/8 success，没有成功 receipt。相同 Node 22.23.2 / Python 3.12.10 的本地完整套件通过，
+仍未确认 hosted 根因；原始失败、版本更正和本地对照保留在 [PR #2](https://github.com/HedgehogsGX/Open-Flame/pull/2)。
+本轮锁修复不作为该超时的解释，新提交须核对自己的结果。
 
-2026-09-14 阶段记录：v3 精确测试维护已应用，真实两模块回归 73 项通过，见
-[维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md)。维护前 `0dfcf82` push 四格
-通过，PR 的 Windows 3.13 诊断日志并发用例失败；新提交须读取自己的 hosted 检查。
-此前 `9822454` 固定合成存储负载 600.77 秒/300 轮及正常停机通过，见
-[负载与 CI 后续](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md)。
-`1540a7e` 的隔离普通启停、四页浏览器、旧 Upload 数据副本迁移与独立恢复已完成限定验证，
-见[隔离验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md)。
-`7575773` 的 source/wheel 安装 receipt 仍按[原基线](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md)
-限定。PR #2 未合并，main 保护尚未配置；原应用根升级、全应用恢复、其余故障/负载矩阵和真实业务
-仍待验收。上传剩余空间阈值配置与写入门槛已完成限定验证，见
-[容量记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-storage-threshold.md)；重启观察到的上传页连接错误
-与旧会话已[独立修复](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-poll-reconnection.md)。
-下一步核对本次维护提交 CI，再按已获准范围继续实际根维护与真实业务验收。
-后续 `d970bce` 的当前 Download/Upload 业务数据保护、独立恢复和恢复副本启停已完成限定检查，
-见[数据恢复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-application-data-recovery.md)。后续完成旧版环境
-保护/独立副本、普通启停和私有状态加密解密验证，见[回退演练](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md)；
-Upload 原解释器绑定保留，真实凭据落盘恢复及原根升级仍未执行。
-main 的[精确门禁提案](MAIN_MERGE_GATE.md)已准备，当前 API 身份未显示管理权限。
-恢复检查发现的 8 个合法路由日志拒写已[修复](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-runtime-route-logging.md)。
-跨进程 SQLite/执行权交接、恢复 Python 上的正式 Upload 重建和 Chromium 故障回收已完成
-限定验证，见[本地恢复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md)。
-测试维护与生产修复经过见[CI 合同维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md)。
-下方旧阶段的失败、测试数量、未生成 receipt 等表述只绑定各自历史源码，不代表本次基线。
+继续按六类核心职责与薄 CLI 处理可复现问题；四域各自拥有状态、连接、事务与运行时。
+提取逻辑必须删除实际重复，并逐项保留恢复、取消、确认和 capability 合同。规则归属见
+[当前架构](CURRENT_ARCHITECTURE.md)，身份和唯一下一入口见 [HANDOFF](../HANDOFF.md)。
 
-路线制定：2026-09-05；进度更新：2026-09-14。本文保留工作包、验收门槛与依赖顺序；当前源码身份、能力边界、风险和唯一下一入口以 [HANDOFF](../HANDOFF.md) 为准，逐项结果以 [validation 索引](../validation/README.md) 链接的独立 evidence 为准。当前开发版本为 0.28.0：Download/Editing/Upload/Workflow Schema 分别为 11/4/4/3，Workflow preset Schema 为 2，上传备份格式为 3；首批上传平台仍限 Bilibili、抖音和视频号。历次五件制品与包外 receipt 只证明其中绑定的冻结构建，不跨提交复用；真实 OpenAI、真人试听、三平台发布与目标 Linux/Docker 验收均未完成。
+[PR 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057) 的测试门禁与发行
+清理见[处理记录](../validation/README.md#pr-2-review-follow-up-2026-09-15)。YT 仍缺四个失败
+URL、错误及执行版本；真实上传、账号操作、OpenAI 和原应用根维护沿用各自输入与授权边界。
 
-架构精简 S1–S8 已按可独立回退的小切片完成：HTTP guard，公开 profile/metadata/identity 契约，AI/Upload/Edit snapshot 解释，verified media response，EditingManager，受管文件身份/读取，以及 Workflow 上传表单与 recipe 分责均已收敛；受管读取又补齐单遍有界不可变字节 snapshot，使 AI WAV 与 Upload cover 复用同一“读取字节即摘要”实现，同时保留 AI 的增强文件属性/规范路径身份和各域错误码。2026-09-11 只对新增 bounded-byte snapshot 与受影响的 AI/Upload 路径执行增量复验；未重跑的 S6b 检查仍只绑定 2026-09-10 基线。各域权限、事务、错误、确认与 capability 边界保持。HANDOFF 现只保留当前身份、能力、风险与下一入口，validation README 只做证据索引；历史结果继续留在各自 evidence 和 Git 历史。仓库 hook 与 hosted CI 已复核为共用 scripts/verify_commit_scope.py，分别检查 staged diff 与事件 merge-base 净差，允许只删除旧测试。下一入口统一为接收外部测试反馈、修复可复现问题，再固定精确 clean candidate；真实 OpenAI、真人试听与三平台发布仍需对具体动作另行明确授权。WorkflowStore 或更短 handler 只在能够删除现有重复且故障恢复语义可逐项证明时再提取。来源封面偏好沿用该评审的核心判断：保持本地模块化单体，以 Download 的窄只读 resolver 接入既有 Workflow/Upload 边界，不复制下载状态、不增加跨域数据库或运行服务。
-
-2026-09-11 的发布后轻量切片新增可选来源字幕优先策略：Workflow 按 editing project 中的
-source asset 枚举已登记 ready caption，只对唯一匹配的 SRT/WebVTT 进行 2 MiB 有界读取和
-完整 identity/hash 复核，再通过 Editing Schema 4 既有 timeline/requests 导入为待审核
-transcription。批准后复用既有 translation、dubbing、render、upload 路径；不适用时才回退
-已冻结授权的 AI transcription。该切片没有增加 Schema、服务、runtime、依赖或通用抽象，
-详见[来源字幕优先复用证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-caption-reuse.md)。
-
-同日的来源封面偏好也是显式 opt-in，并要求 recipe 保留生成封面 fallback。Workflow 只按冻结
-`download_asset_id` 接受同一 ready original 的唯一 registered thumbnail，经受管 resolver 与
-Upload `expected_sha256` 双层复核后，只有兼容全部所选平台封面槽才采用；否则使用生成封面。
-Workflow 先纯读取选定确定性受管 ID 并 CAS 写入 `upload_cover_id`，之后才允许 Upload 持久写入；
-已有请求从不可变 jobs 的共同封面槽恢复，重放与取消只以元数据身份收回任务。尚无请求时取消会
-先原子写入专用空 tombstone，重启不再读取可变 Editing 成品或 Download 封面登记，并继续取消
-前序分段 jobs；sentinel digest 异常时失败关闭。
-多分段、崩溃重启和响应重放因此保持同一选择。
-该切片未增加服务、数据库、Schema、runtime、依赖或 tracked tests，见
-[Workflow 来源封面偏好证据](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)。
-
-后续的单图身份增量保留原两字段下载 mapping，并新增第二个 attempt-private 四字段
-`after_move` 控制记录。它只把 yt-dlp 选中 thumbnail 的最终路径绑定到 original，再与目录中
-唯一 classified thumbnail 核对；模板未显式序列化 thumbnail URL、headers、query 字段或完整
-候选列表，原始 identifier 内容仅做有界校验后丢弃，也不扩展公共 DTO、Schema、服务或依赖。
-Candidate/Local Worker CLI 自行创建的默认 `SecureSubprocessRunner` 要求第二记录非空，注入式
-旧 runner 的空文件只能保持无证明兼容。命令继续只有一个 `--write-thumbnail` 和一个最终
-`--paths` 目录；没有真实 Bilibili/Douyin 样本前，不能把该离线证明解释为平台封面可用、
-最高质量、`origin_cover` 或 Workflow/上传后台已采用。
-
-同日 Upload Schema 4 为每个已领取 job 增加唯一 attempt receipt，并把 `reserved`、
-`dispatch_may_have_started`、适配器返回与最终 job 状态放在明确的持久化边界。receipt 绑定
-request/job 摘要、账号 session revision、source/cover SHA-256、product build、当前追加式允许表
-中的 adapter identity 及固定 evidence。`unknown` 只允许在读取 receipt、完成对应平台后台核对并
-勾选确认后，以 revision CAS 提交固定 `not_accepted`、publish 的
-`submission_acknowledged` 或视频号草稿的 `draft_saved`；仍不确定就保持 unknown，只有
-`not_accepted` 才允许进入普通显式 retry。上传备份格式 3 保存并审计这些 receipt；严格通过的
-格式 1 / Schema 2 和格式 2 / Schema 3 只在 staging 中迁移，不补造旧 receipt。该 receipt 是
-本地工具观察，不是平台签名回执、作品 ID、审核、定时执行或公开可见证明。当前实际 app root
-只留有 2026-09-10 的 Schema 1→3 迁移记录，尚未执行或审计 Schema 4 迁移。任何没有 receipt
-的 job 都不能证明 dispatch 边界，因此必须从受管 source 手工重建；`canceled / canceled`
-同样禁止 retry，可变 job 状态不能替代持久 receipt。
+路线制定于 2026-09-05；以下工作包保留原阶段门槛。历史失败、测试数与 receipt 状态仅绑定
+各自源码，不代表当前提交。逐轮经过、旧恢复演练及来源字幕/封面/receipt 细节移至
+[冻结计划](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/docs/FOLLOW_UP_EXECUTION_PLAN.md)，当前能力与风险仍在 HANDOFF。
 
 ## 1. 目标、边界与完成定义
 

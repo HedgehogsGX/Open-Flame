@@ -1,81 +1,39 @@
 # Open-Flame 当前开发交接
 
 > 最后更新：2026-09-16（Australia/Adelaide）
-> 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
-> [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
+> 当前身份、能力、风险与下一入口保留在本文；逐项结果见
+> [`validation/`](validation/README.md)，历史结果只证明各自冻结构建。
 
-新开发任务可直接复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、
-数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
-提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
+新任务可复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、数据所有权与
+跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。继续前重新核对
+HEAD、远端 main、Schema、CI 与签名。
 
-2026-09-16 当前修复 Upload 旧库迁移的连接清理：回滚与关闭的二次错误保留原始迁移/
-业务/中断错误，恢复既有 `upload_schema_unsupported` HTTP 409；成功迁移后的关闭错误
-仍可见。24 条迁移声明、事务顺序与锁保持，移除冗余 committed 标志。同组反馈从 19/32
-提升到 32/32，完整现有回归 2442 passed、16 skipped，见[当前验收](validation/README.md#upload-migration-error-ownership-2026-09-16)。
-此前各域普通连接清理见[冻结记录](validation/README.md#domain-connection-ownership-2026-09-16)。
+本轮修复 Upload Schema 初始化的锁所有权：打开后、进入业务段前的中断也会立即尝试
+解锁和关闭；调用方保留异常 traceback 时不再阻塞下一次初始化。准备阶段沿用既有
+Schema 错误映射，业务段保留原始异常；清理失败不覆盖主异常，成功路径保留最先发生的
+清理错误。原生锁、路径复核、轮询时限和 SQL 不变，同一组反馈 **9/22 → 22/22**，见
+[当前验收](validation/README.md#upload-schema-lock-ownership-2026-09-16)。Windows Python 3.13.14 /
+Node 22.23.2 完整现有回归 2442 passed、16 skipped；新提交 CI 与安装仍须单独绑定。
 
-同日上一轮修复 Download 数据库连接所有权与 graph fake 的回调合同：普通连接、WAL
-初始化和 Schema 8 专用迁移共用路径复核及关闭规则；设置、业务、提交或中断失败时保留
-原始错误并尝试回滚/关闭，成功路径的关闭失败仍可见。graph fake 不再把 Worker 进度回调
-的存储错误转换为 AdapterFailure，Worker 能按原异常暂停队列。Schema 声明、迁移 SQL、
-WAL 重试预算和真实适配器能力保持，见[本轮验收](validation/README.md#database-and-graph-callback-ownership-2026-09-16)。
+基线 `8819190` 已修复旧库迁移的错误归属，但其 CI 最终为 **7/8 success**：push
+Windows 3.12 的 Node 10 秒等待在首轮及唯一一次原样复跑均失败，原因未确认，成功 receipt
+未生成。PR Windows 3.12 首轮通过；补做的本地 Python 3.12.10 / Node 22.23.2 完整套件
+2442 passed、16 skipped 也未复现。两次原始日志、版本更正与失败交付记录保留在 ignored
+`validation/local/upload-migration-ownership-20260916/` 和 [PR #2](https://github.com/HedgehogsGX/Open-Flame/pull/2)。
+本次锁修复不解释该 Node 超时；新提交必须读取自己的 CI、构建和安装结果。
 
-2026-09-15 修复工具链与代理策略的实际读取：工具链文件的 hash/snapshot 共用受管
-读取及结束身份复核，拒绝同长修改与超出预检大小的增长；代理策略加载归安全层，CLI
-只传参数，并在读取前后复核身份、单链接与 POSIX 只读属性。各自保留版本、尺寸、错误
-和文件类型合同，见[本轮验收](validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。
-此前 Worker 恢复/新租约时钟、Adapter 主异常与控制文件所有权、有界 DNS 生命周期的
-修复见[上一轮记录](validation/README.md#lifecycle-ownership-repair-2026-09-15)。
-此前的素材库存、证据读取、运行状态 DTO 分离与重试合同修复见
-[上一轮记录](validation/README.md#core-ownership-repair-2026-09-15)。未新增 Module 文件、
-数据库、公开命令、依赖或 tracked 自动化测试；临时反馈统一保存在忽略目录。
+已读取 [PR 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。通用测试
+摘要豁免已撤除，新增/改动 staged tests 一律拦截；仅保留固定已提交历史的范围校验，base
+前移即失效。118 份历史报告留在 Git 并退出发行清单，发行载荷保留索引、模板与操作指南。
+旧 CI 失败和复跑经过继续保留，不能用后续通过倒推它们的根因。
 
-已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
-本轮基线 `0ab7c75` 的 push/PR 八项均首轮 success；本次修复继续绑定自己的 CI 与制品。
-更早 `905ee46` 的账号 ready 超时及一次原样复跑仍保留，首轮根因未确认。
-更早 `9989aaf` 的 PR Windows 3.12 首轮时序断言失败和单次复跑仍保留在 PR 中，不将
-复跑解释为已修复偶发测试；后续源码继续读取自己的 CI。
-旧测试补丁的通用摘要豁免已撤除，暂存测试一律拦截；仅保留本 PR 固定已提交历史的
-范围校验，base 前移即失效。发行清单移出 118 份历史报告，保留固定提交链接、索引、
-两份 Stage 0 模板及 Linux 操作指南。当前修复验证与剩余评论见 [验收索引](validation/README.md)。
-用户反馈 YT 10 个用例通过 6 个，尚未提供四个失败 URL、错误及执行版本；当前 PR 评论
-也没有这些用例。下一步以实际失败输入复现，不能据成功比例推定 extractor 或下载根因。
+用户反馈 **YT 6/10**；四个失败 URL、原始错误和执行版本仍缺失，PR 评论没有这些样本。
+收到输入后先复现，再用同一批样本复验；本地文件与锁修复不证明真实通过率提高。
 
-当前任务在 `codex/architecture-reset-ci` 独立 worktree 进行，目标是按六类核心职责加 CLI
-重整架构并解决完整 CI；**历史限定测试维护和 CI 恢复已完成；本轮新提交的 CI 以 PR 同提交检查为准，未合并 main**。起点为远端 main `d481326`。已分别
-签名提交 Workflow 启动回滚、媒体主异常保留、adapter 控制记录解码、Worker/CLI 分责、
-Upload receipt 纯合同和 Download 素材读取分责。字幕清理遗漏与发行文档分责的补充进展见
-下方记录。Workflow 请求键与冻结投稿字段、Upload 封面规则也已统一；AI 重试图已归 Editing
-统一校验。Workflow 重试结果与取消公共尾段也已收敛；后续精简按具体收益分段，
-不把所有业务规则机械合并。最终交付以同一提交的 CI、制品和包外 receipt 为准。
-Workflow 前端纯校验已收敛，并修复空固定日期被预设保存成不定时的分歧。
-备份复制的目标所有权、三个读取入口的 descriptor 交接及关闭失败保留主异常已修复，
-公共备份文件操作现由两域共同使用独立 `backup_files` Module。
-Editing 复制也已补齐目标创建权与失败清理，并与备份共用受管文件清理规则，见
-[复制所有权记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-copy-ownership.md)。Upload 生命周期已移到
-公开 UploadManager，由 HTTP、Workflow 与退出清理共用；启动回滚、恢复/关闭竞争及系统锁
-交接均已补齐，见[生命周期记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-manager-ownership.md)。
-Editing 成品元数据校验已前移，复制后立即登记清理责任，见
-[成品登记清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-registration-cleanup.md)。备份锁 descriptor
-与 SQLite 连接交接也已补齐，见[资源回收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-resource-handoff.md)。
-公共备份迁移、39 项故障反馈及当时的测试入口阻断见
-[公共备份文件记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-public-backup-files.md)。render 重试树现也由
-Editing 公开解析，Workflow 删除两个重复定义；一致读、取消写事务、后继与 unknown
-保护见[render 图所有权记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-render-retry-ownership.md)。
-Windows 上传源 reader 现持有至 backend 消费结束，Biliup 硬链接/复制暂存均核对冻结摘要；
-执行后清理保留可信结果或 unknown，见[源文件交接](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-source-handoff.md)。
-LocalApp/LocalWorker 路径 parser 与 Worker JSON 输出也已共用既有 CLI support，见
-[CLI 小重复收敛](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-cli-shared-parsing-output.md)。
-Upload / Workflow 的跨页文本、标签与排程规则已共用，strict directive 和发行登记
-已补齐，见[跨页纯规则记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-cross-page-upload-rules.md)。
-Upload 人工核对控件已移除冗余渲染缓存字段，勾选/取消勾选后的轮询保留原节点，见
-[控件保留与完整隔离回归](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-reconciliation-node-retention.md)。
-用户批准的限定测试维护已提交为 `3e482f0`；本次继续修复指令对应的平台维护已提交为
-`ac3532b`。生产修复 `8564b30` 补齐 Windows SQLite sidecar 的打开、读取及删除竞争窗口，
-[四格 hosted CI](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34762892893) 全部通过：Windows 每组 2442 passed / 16 skipped，
-Ubuntu 每组 2321 passed / 137 skipped。测试收集和跳过计数保持，详见
-[CI 合同维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md)。
-其他测试改动仍受原门禁和具体授权范围限制；历史通过不能覆盖后续提交。
+开发分支为 `codex/architecture-reset-ci`，起点 main `d481326`，尚未合并。六类核心职责加
+薄 CLI、四域独立数据库/运行时、CAS、lease、checkpoint、unknown 与逐项确认继续保持。
+本轮同时收敛交接、计划及架构中的重复流水记录；完整历史见[冻结交接](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/HANDOFF.md)，
+各切片验证仍由[验收索引](validation/README.md)定位。
 
 ## 当前源码身份
 

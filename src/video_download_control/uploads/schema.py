@@ -548,65 +548,70 @@ def _exclusive_schema_access(path: Path):
     handle = None
     acquired = False
     try:
-        deadline = time.monotonic() + _PUBLISH_LINK_TIMEOUT_SECONDS
-        while True:
-            try:
-                before = _require_plain_database(path)
-                break
-            except UploadSchemaError:
-                info = path.lstat()
-                publisher = False
-                if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
-                    for candidate in path.parent.glob(f".{path.name}.*.tmp"):
-                        try:
-                            linked = candidate.lstat()
-                        except OSError:
-                            continue
-                        if (linked.st_dev, linked.st_ino) == (info.st_dev, info.st_ino):
-                            publisher = True
-                            break
-                    if not publisher:
-                        try:
-                            before = _require_plain_database(path)
-                        except UploadSchemaError:
-                            pass
-                        else:
-                            break
-                if not publisher or time.monotonic() >= deadline:
-                    raise
-                time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
-        handle = path.open("rb")
-        opened = os.fstat(handle.fileno())
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise UploadSchemaError
-        deadline = time.monotonic() + _SCHEMA_LOCK_TIMEOUT_SECONDS
-        while True:
-            try:
-                _try_lock_schema_file(handle)
-                acquired = True
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise UploadSchemaError from None
-                time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
-        current = _require_plain_database(path)
-        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-            raise UploadSchemaError
-    except (OSError, UploadSchemaError):
-        if acquired and handle is not None:
-            try:
-                _unlock_schema_file(handle)
-            except OSError:
-                pass
-        if handle is not None:
-            handle.close()
-        raise UploadSchemaError from None
-    try:
+        try:
+            deadline = time.monotonic() + _PUBLISH_LINK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    before = _require_plain_database(path)
+                    break
+                except UploadSchemaError:
+                    info = path.lstat()
+                    publisher = False
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+                        for candidate in path.parent.glob(f".{path.name}.*.tmp"):
+                            try:
+                                linked = candidate.lstat()
+                            except OSError:
+                                continue
+                            if (linked.st_dev, linked.st_ino) == (info.st_dev, info.st_ino):
+                                publisher = True
+                                break
+                        if not publisher:
+                            try:
+                                before = _require_plain_database(path)
+                            except UploadSchemaError:
+                                pass
+                            else:
+                                break
+                    if not publisher or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
+            handle = path.open("rb")
+            opened = os.fstat(handle.fileno())
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise UploadSchemaError
+            deadline = time.monotonic() + _SCHEMA_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    _try_lock_schema_file(handle)
+                    acquired = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise UploadSchemaError from None
+                    time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
+            current = _require_plain_database(path)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise UploadSchemaError
+        except (OSError, UploadSchemaError):
+            raise UploadSchemaError from None
         yield
-    finally:
+    except BaseException:
+        if acquired and handle is not None:
+            with suppress(BaseException):
+                _unlock_schema_file(handle)
+        if handle is not None:
+            with suppress(BaseException):
+                handle.close()
+        raise
+    else:
         try:
             _unlock_schema_file(handle)
-        finally:
+        except BaseException:
+            with suppress(BaseException):
+                handle.close()
+            raise
+        else:
             handle.close()
 
 

@@ -13,28 +13,43 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Upload schema lock ownership (2026-09-16)
+
+Upload's existing Schema lock owner now covers acquisition and the yielded body.
+Interruptions before yield release the descriptor/lock immediately even while
+the caller retains the exception. Setup retains its existing Schema error
+mapping; body errors retain their original identity. Failure cleanup separately
+attempts unlock and close without replacing the primary error; successful
+cleanup preserves the first unlock or close failure.
+
+The same native-lock/SQLite feedback improves **9/22 to 22/22**. Every after case
+permits immediate native reacquisition and a new public ensure call, with
+identical database bytes, Schema 4 and integrity ok. The controls retain the
+exception and handle; injected close errors follow native disposal, and an
+injected unlock error relies on real close to release the lock. They do not
+prove recovery from permanently failing OS close or arbitrary process failure.
+Polling, timeouts, path identities and schema/SQL declarations are unchanged.
+Independent review confirms six AST invariants and two public ensure/service
+controls without observing the original handle or releasing the retained error.
+Full existing Windows CPython 3.13.14 / Node 22.23.2 regression passes **2442
+tests, 16 existing skips** in 379.17 console seconds. Current-head CI, frozen
+artifacts and independent installs are recorded separately.
+
+Only one production module and existing documents change. No tracked tests,
+CI, dependency, public command or source inventory change. Local scripts,
+baseline/after feedback and independent review remain ignored under
+`validation/local/upload-initialization-candidate-20260916/`.
+
 ## Upload migration error ownership (2026-09-16)
 
-Upload legacy migration now preserves its first schema/business/interruption
-error through independent rollback and close attempts. Successful-path close
-errors remain visible. The redundant committed flag is removed; all 24 migration
-declarations, ordered transaction body, path validation and locks are unchanged.
-
-Same real-SQLite feedback: **19/32 to 32/32**, including direct Schema 1/2/3
-upgrades, native DDL/PRAGMA/commit/rollback failures and actual service/HTTP
-calls. Failed migrations retain original database bytes and account/source rows;
-HTTP again returns 409 `upload_schema_unsupported`. Close faults follow native
-disposal, so these controls do not prove recovery from permanently failing OS
-close or cancellation after a durable commit.
-
-Complete existing Windows CPython 3.13.14 regression: **2442 passed, 16 skipped**,
-zero failures/errors, 353.502 JUnit seconds. No tracked test, CI, Schema,
-dependency, public command or source-inventory change. Current-commit CI and
-independent frozen installs are recorded in the PR; raw evidence stays in ignored
-`validation/local/upload-migration-ownership-20260916/`. The initial feedback
-harness's cross-thread cleanup mistake is separately retained and not counted
-as production feedback. YT's four failed inputs and real-platform acceptance
-remain outstanding.
+Completed at `8819190`: migration failure cleanup preserves its original
+error and HTTP 409 mapping; native SQLite feedback improved 19/32 to 32/32.
+The [frozen record](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/validation/README.md#upload-migration-error-ownership-2026-09-16)
+retains its full local/build/install evidence. That commit's final CI is **7/8**:
+push Windows 3.12 hit the same Node 10-second timeout twice. Its successful
+receipt was not created; both failures and the corrected Node-version controls
+are retained in PR #2 and ignored `upload-migration-ownership-20260916/`.
+This lock repair does not establish the hosted Node timeout's cause.
 
 ## Domain connection ownership (2026-09-16)
 
