@@ -130,7 +130,7 @@ def test_new_schema_is_exact_and_active_account_names_are_unique(tmp_path):
 
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT version FROM metadata").fetchone() == (SCHEMA_VERSION,)
-        assert SCHEMA_VERSION == 3
+        assert SCHEMA_VERSION == 4
         account_columns = [row[1] for row in db.execute("PRAGMA table_xinfo(accounts)")]
         source_columns = [row[1] for row in db.execute("PRAGMA table_xinfo(sources)")]
         assert account_columns[-2:] == ["lifecycle_state", "disconnected_at"]
@@ -147,7 +147,7 @@ def test_new_schema_is_exact_and_active_account_names_are_unique(tmp_path):
             "jobs_source_state",
             "jobs_cover_landscape_state",
             "jobs_cover_portrait_state",
-            "operations_account_state",
+            "operations_account_state", "upload_attempts_request_state",
         }
         db.execute(
             "INSERT INTO accounts(id,platform,name,created_at) VALUES(?,?,?,?)",

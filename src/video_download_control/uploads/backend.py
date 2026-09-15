@@ -19,6 +19,15 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from threading import Event, Lock
 
+from ..managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    close_binary_on_error,
+    file_signature,
+    hash_open_binary,
+    open_matching_binary,
+    open_windows_shared_read_binary,
+)
 from ..windows_job import WindowsKillOnCloseJob
 from .contracts import (
     UPLOAD_EVIDENCE_KINDS,
@@ -40,6 +49,7 @@ from .runtime_setup import (
 
 
 _ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _PLATFORMS = frozenset({"bilibili", "douyin", "tencent"})
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 _SCHEDULE_LEAD_SECONDS = {
@@ -144,6 +154,7 @@ def _windows_local_data() -> Path:
 
 @contextmanager
 def _biliup_media(operation: Path, payload: dict):
+    source_size = Path(payload["file_path"]).stat().st_size
     media = operation / ("media" + Path(payload["file_path"]).suffix.lower())
     try:
         os.link(payload["file_path"], media)
@@ -152,19 +163,26 @@ def _biliup_media(operation: Path, payload: dict):
     checkpoint = _windows_local_data() / _biliup_checkpoint_name(media) if os.name == "nt" else None
     if checkpoint is not None and checkpoint.exists():
         raise ValueError("checkpoint_collision")
-    try:
-        yield {**payload, "file_path": str(media)}
-    finally:
-        # dirs::data_local_dir uses Windows Known Folders, not just LOCALAPPDATA.
-        # Delete only this previously absent, operation-specific checkpoint.
-        if checkpoint is not None:
-            for attempt in range(40):
-                try:
-                    checkpoint.unlink(missing_ok=True)
-                    break
-                except OSError:
-                    if attempt < 39:
-                        time.sleep(.05)
+    opener = open_windows_shared_read_binary if os.name == "nt" else open_matching_binary
+    opened = opener(media, expected=file_signature(media.lstat()))
+    with close_binary_on_error(opened.handle):
+        hashed = hash_open_binary(opened.handle, maximum=source_size)
+        if hashed.size != source_size or hashed.hexdigest != payload["source_sha256"]:
+            raise ValueError("source_changed")
+        try:
+            yield {**payload, "file_path": str(media)}
+        finally:
+            # dirs::data_local_dir uses Windows Known Folders, not just LOCALAPPDATA.
+            # Delete only this previously absent, operation-specific checkpoint.
+            if checkpoint is not None:
+                for attempt in range(40):
+                    try:
+                        checkpoint.unlink(missing_ok=True)
+                        break
+                    except OSError:
+                        if attempt < 39:
+                            time.sleep(.05)
+    opened.handle.close()
 
 
 class SauBackend:
@@ -297,6 +315,8 @@ class SauBackend:
                 or not request.file_path.is_absolute()
                 or not request.file_path.is_file()):
             return BackendResult("failed", "media_missing")
+        if not isinstance(request.source_sha256, str) or not _SHA256.fullmatch(request.source_sha256):
+            return BackendResult("failed", "source_changed")
         if (
             request.mode == "publish"
             and request.platform in _SCHEDULE_LEAD_SECONDS
@@ -425,6 +445,8 @@ class SauBackend:
             return BackendResult("failed", state["code"])
         if action == "login" and platform == "bilibili" and os.name != "nt":
             return BackendResult("failed", "login_terminal_unavailable")
+        execution_started = False
+        result = None
         try:
             private = self.root / "private"
             _private_directory(private)
@@ -453,6 +475,7 @@ class SauBackend:
                     data["payload"] = upload_payload
                     data["browser_path"] = str(browser) if browser else None
                     request_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                    execution_started = True
                     result = self._execute(
                         operation,
                         action,
@@ -462,12 +485,15 @@ class SauBackend:
                         on_update,
                         mode=payload.get("mode") if action == "upload" else None,
                     )
-                if action == "upload":
-                    expected = "draft_saved" if payload.get("mode") == "draft" else "submitted"
-                    if result.status in {"ready", "submitted", "draft_saved"} and result.status != expected:
-                        return BackendResult("unknown", "upstream_result_unknown")
+                    if action == "upload":
+                        expected = "draft_saved" if payload.get("mode") == "draft" else "submitted"
+                        if result.status in {"ready", "submitted", "draft_saved"} and result.status != expected:
+                            result = BackendResult("unknown", "upstream_result_unknown")
                 return result
-        except (OSError, ValueError):
+        except (OSError, ValueError, ManagedFileChanged, ManagedFileSizeExceeded):
+            if action == "upload" and execution_started:
+                # Cleanup cannot turn an observed result into a safe failure.
+                return result if result is not None else BackendResult("unknown", "upstream_result_unknown")
             return BackendResult("failed", "backend_failed")
 
     def _execute(self, operation: Path, action: str, platform: str,

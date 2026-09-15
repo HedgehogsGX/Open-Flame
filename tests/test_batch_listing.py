@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,7 +14,7 @@ def test_batch_listing_is_bounded_recent_first_and_contains_no_urls(
     tmp_path: Path,
 ) -> None:
     data_root = tmp_path / "data"
-    with TestClient(
+    with download_client(
         create_app(
             Settings(
                 data_root=data_root,
@@ -40,7 +42,7 @@ def test_batch_listing_is_bounded_recent_first_and_contains_no_urls(
 
 def test_batch_listing_limit_is_validated(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
-    with TestClient(
+    with download_client(
         create_app(
             Settings(
                 data_root=data_root,

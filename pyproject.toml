@@ -42,11 +42,13 @@ video-download-local-app = "video_download_control.local_app_cli:main"
 packages = ["src/video_download_control"]
 
 [tool.hatch.build.targets.sdist]
-# This audit record contains the final sdist digest. Excluding only that record
-# prevents a self-referential archive while keeping the rest of validation/ in
-# the source distribution. Runtime/build trees are explicit exclusions because
+# Historical validation reports stay in Git. Only the explicit index, templates
+# and operator guide below enter an sdist, including direct Hatch builds.
+# File selection narrows the distribution without replacing the audited
+# safety exclusions. Runtime/build trees are explicit exclusions because
 # nested negated .env.example rules can otherwise re-include files from an
 # ignored parent directory in some archive builders.
+include = ["/**", "!/validation/**"]
 exclude = [
   "/tests/**",
   "/validation/apache-2.0-license-migration-evidence.md",
@@ -62,6 +64,12 @@ exclude = [
   "/.pytest_cache/**",
   "/**/__pycache__/**",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+"validation/README.md" = "validation/README.md"
+"validation/linux-docker-acceptance.md" = "validation/linux-docker-acceptance.md"
+"validation/results.template.csv" = "validation/results.template.csv"
+"validation/sample_manifest.template.csv" = "validation/sample_manifest.template.csv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

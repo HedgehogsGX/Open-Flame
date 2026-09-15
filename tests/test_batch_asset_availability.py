@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -41,7 +43,7 @@ def test_duplicate_batch_can_download_existing_ready_asset_without_new_job(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(
             client, ["https://www.youtube.com/watch?v=duplicate-ready-asset"]
         )
@@ -83,7 +85,7 @@ def test_active_batch_assets_api_returns_completed_media_without_promoting_batch
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         batch = _create_batch(
             client,
             [
@@ -112,7 +114,7 @@ def test_duplicate_input_chain_returns_each_original_asset_once(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(client, ["https://youtu.be/duplicate-chain"])
         worker = _worker(app, settings)
         result = worker.run_once()
@@ -154,7 +156,7 @@ def test_duplicate_of_nonready_owner_has_no_asset_and_does_not_change_status(
     settings: Settings, owner_status: str,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(client, ["https://youtu.be/nonready-owner"])
         duplicate = _create_batch(client, ["https://youtu.be/nonready-owner"])
         if owner_status == "canceled":
@@ -182,7 +184,7 @@ def test_duplicate_of_nonready_owner_has_no_asset_and_does_not_change_status(
 
 
 def test_assets_of_a_nonexistent_batch_remain_not_found(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         response = client.get(f"/api/v1/batches/{uuid4()}/assets")
     assert response.status_code == 404
     assert response.json() == {"detail": "批次不存在"}
@@ -192,7 +194,7 @@ def test_live_duplicate_exposes_original_when_it_finishes_without_new_download(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(client, ["https://youtu.be/live-owner-completes"])
         duplicate = _create_batch(client, ["https://youtu.be/live-owner-completes"])
         before = client.get(f"/api/v1/batches/{duplicate['id']}/assets")
@@ -244,7 +246,7 @@ def test_invalid_duplicate_reference_returns_no_asset_without_mutation_or_loop(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, invalid_edge: str,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(client, ["https://youtu.be/reference-original"])
         worker = _worker(app, settings)
         result = worker.run_once()
@@ -289,7 +291,7 @@ def test_duplicate_keeps_its_original_owner_not_a_later_ready_job_for_same_sourc
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         original = _create_batch(client, ["https://youtu.be/owner-not-source"])
         duplicate = _create_batch(client, ["https://youtu.be/owner-not-source"])
         canceled = client.post(f"/api/v1/jobs/{original['jobs'][0]['id']}/cancel")

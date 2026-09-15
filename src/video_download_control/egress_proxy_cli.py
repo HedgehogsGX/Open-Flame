@@ -3,11 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
-import stat
 import sys
 from pathlib import Path
 
+from .security.egress import load_allowed_hosts
 from .security.forward_proxy import (
     ControlledForwardProxy,
     ForwardProxyLimits,
@@ -46,55 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load_allowed_hosts(args: argparse.Namespace) -> tuple[str, ...]:
-    hosts = list(args.allowed_host)
-    policy_path = args.allowed_host_file
-    if policy_path is not None:
-        if not policy_path.is_absolute():
-            raise ValueError("allowed-host file path must be absolute")
-        try:
-            info = policy_path.lstat()
-            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            attributes = getattr(info, "st_file_attributes", 0)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or stat.S_ISLNK(info.st_mode)
-                or (reparse and attributes & reparse)
-                or info.st_nlink != 1
-                or info.st_size > 16 * 1024
-                or (os.name == "posix" and info.st_mode & 0o222)
-            ):
-                raise ValueError("allowed-host file is not a bounded plain file")
-            with policy_path.open("rb") as handle:
-                opened = os.fstat(handle.fileno())
-                if (
-                    opened.st_dev != info.st_dev
-                    or opened.st_ino != info.st_ino
-                    or opened.st_size != info.st_size
-                    or opened.st_mtime_ns != info.st_mtime_ns
-                ):
-                    raise ValueError("allowed-host file changed before reading")
-                payload = handle.read(16 * 1024 + 1)
-                after = os.fstat(handle.fileno())
-            if len(payload) > 16 * 1024 or (
-                after.st_dev != opened.st_dev
-                or after.st_ino != opened.st_ino
-                or after.st_size != opened.st_size
-                or after.st_mtime_ns != opened.st_mtime_ns
-            ):
-                raise ValueError("allowed-host file changed while reading")
-            text = payload.decode("utf-8", errors="strict")
-        except (OSError, UnicodeError) as exc:
-            raise ValueError("allowed-host file could not be read safely") from exc
-        hosts.extend(
-            line
-            for raw_line in text.splitlines()
-            if (line := raw_line.strip()) and not line.startswith("#")
-        )
-    if not hosts or len(hosts) > 128:
-        raise ValueError("one to 128 allowed hosts are required")
-    if len(set(hosts)) != len(hosts):
-        raise ValueError("allowed hosts must be unique")
-    return tuple(hosts)
+    return load_allowed_hosts(args.allowed_host, policy_path=args.allowed_host_file)
 
 
 def _emit_audit(event: ProxyAuditEvent) -> None:

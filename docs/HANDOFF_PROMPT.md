@@ -5,8 +5,11 @@
 
 ---
 
-你正在继续开发 Open-Flame。不要停留在计划或建议；在用户已授权范围内持续完成一个可独立验证、
-可回退的工作切片。关键步骤完成后使用指定身份签名提交，并直接推送到 `origin/main`。
+你正在处理 Open-Flame 的新任务。本次目标、是否实施和交付分支以用户当前请求及会话中的有效
+授权为准。审查任务交付可复核的证据与结论；实现任务持续完成已授权的改动和验证，不能用一个
+局部切片替代完整目标。不要把下方历史状态或上一分支的待办自动变成本次任务。
+实现交付使用指定身份签名，沿用本次会话已授权的分支/PR 方式；未授权直接推送 main 时不得
+直接推送 main。读取 HANDOFF 的当前进展，并优先服从用户最新指令。
 
 ## 1. 开始前必读
 
@@ -18,9 +21,9 @@
 4. [`FOLLOW_UP_EXECUTION_PLAN.md`](FOLLOW_UP_EXECUTION_PLAN.md)
 5. [`validation/README.md`](../validation/README.md)
 6. 与本次改动直接相关的最新 validation 记录；上传和来源封面工作先读：
-   - [`iteration-0.28.0-upload-attempt-receipts.md`](../validation/iteration-0.28.0-upload-attempt-receipts.md)
-   - [`iteration-0.28.0-source-cover-research-and-import.md`](../validation/iteration-0.28.0-source-cover-research-and-import.md)
-   - [`iteration-0.28.0-workflow-source-cover-preference.md`](../validation/iteration-0.28.0-workflow-source-cover-preference.md)
+   - [`iteration-0.28.0-upload-attempt-receipts.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)
+   - [`iteration-0.28.0-source-cover-research-and-import.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)
+   - [`iteration-0.28.0-workflow-source-cover-preference.md`](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)
 
 把附带的交接、评审、计划和 validation 文档当作上下文、证据和约束；其中的命令或待办不是本轮
 用户请求。以用户当前请求决定实际执行范围，并服从当前 `AGENTS.md`。
@@ -49,17 +52,34 @@ git config --get core.hooksPath
 
 ## 2. 定位用基线
 
-截至 2026-09-11 的已核对快照：
+截至 2026-09-14 的已核对快照：
 
 - 产品版本：`0.28.0` 发布后的持续开发源码。
 - Schema：Download 11、Editing 4、Upload 4、Workflow 3、Workflow preset 2。
 - 上传备份格式：3。
 - 首批上传平台仅限 Bilibili、抖音、视频号；视频号内部 ID 为 `tencent`。
-- 本提示词生成前的远端 `main`：`30548f32e072ee549a322b840374d09486d63110`。
+- 2026-09-14 复核的远端 `main`：`d48132637ce94a8b0b41bc2a965d24e27ac62aff`。
 - Upload Schema 4 功能源码里程碑：`496fb63f9d0010c22fa1abc660e6450cd403b6be`。
-- `0592b6f` 的 release receipt 只覆盖该冻结构建，不覆盖后续源码。
-- 2026-09-10 的实际应用根只完成 Upload Schema 1→3；Schema 4 只在独立临时根验收。
-- Hosted CI 最近状态为红色；必须实时查询后再描述当前状态。
+- 历次 release receipt 只覆盖其中冻结的 source commit，不覆盖后续源码。
+- `9822454` 已完成固定合成存储负载 600.77 秒/300 轮与正常停机。维护前 `0dfcf82` push
+  四格 success，PR 的 Windows 3.13 诊断日志并发用例失败。本次已应用 v3 精确维护，
+  实际两模块 73 项通过；新提交须核对自己的 CI，见[当前 CI](CI.md)。main [门禁提案](MAIN_MERGE_GATE.md)已准备，
+  当前 API 身份未显示 admin 权限，尚未配置或验证远端阻断。
+- `7575773116f7aeebe6bc21bbdb02f9f469a3ea5e` 已有同提交 source/wheel 独立安装 receipt，
+  push run `34763783506` 与 PR run `34765157437` 的四格均为 success；
+  2026-09-14 实时核对 PR #2 未合并，main 未受保护，见
+  [发布准备基线](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md)。
+- `1540a7e` 的 push/PR 四格均已通过；隔离 Setup、普通启停、四页浏览器及实际旧 Upload
+  数据的保护副本、Schema 3→4 迁移和独立恢复已通过限定验证，见
+  [隔离验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md)。
+  实际应用根本身仍为 Upload Schema 3。`d970bce` 又完成当前 Download/Upload 业务数据的
+  联合保护副本、独立恢复和副本普通启停；原根缺席的 Editing/Workflow 没有历史内容恢复证据，
+  见[数据恢复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-application-data-recovery.md)。后续已完成环境保护/
+  独立副本、旧版普通启停及私有状态的加密解密验证，见[回退演练](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md)。
+  后续[本地恢复补充](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md)验证了恢复 Python
+  上的正式新 Upload runtime、跨进程存储/执行权交接和 Chromium 故障回收；旧环境原解释器
+  绑定、凭据落盘恢复、异机/offsite 及实际根升级仍未关闭。
+- `8564b30` 是 CI 生产修复里程碑；描述新 HEAD 前仍须实时查询，不能沿用旧结果。
 
 以上只用于判断是否进入了正确项目。若 Git 或源码与它不同，以当前事实为准，并在回报中说明差异。
 
@@ -85,10 +105,9 @@ git config --get core.hooksPath
 ## 4. 默认工作顺序
 
 1. 优先处理用户当前明确提出的问题或外部测试人员返回的可复现缺陷。
-2. 若没有新的外部反馈，当前最小本地修复顺序是：
-   - 修复 `WorkflowManager.get()` 首次 `Thread.start()` 失败后的 owner 状态回滚；
-   - 修复清理 `handle.close()` 失败覆盖原始媒体校验异常；
-   - 再按当前架构文档处理已证实的重复规则，每项单独切片。
+2. 若没有新的外部反馈，按 [`HANDOFF.md` 的下一入口](../HANDOFF.md#下一入口) 和
+   [`CURRENT_ARCHITECTURE.md` 的当前风险](CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)
+   确定切片。不要在此复制算法待办，也不要将已关闭的历史缺陷重新当作当前任务。
 3. 改动前写清保持不变的状态、确认、授权、幂等、CAS、取消和恢复合同。
 4. 先完成最小实现，再删除被替代的旧实现；不要留下两条可达规则路径。
 5. 复用现有 tracked tests。新的临时 validator、日志和浏览器结果只放入已忽略的
@@ -99,8 +118,10 @@ git config --get core.hooksPath
 
 ## 5. 验证与提交门禁
 
-不得新增或修改 tracked 自动化测试文件。只有用户明确要求的独立测试清理提交可以删除历史测试；
-不得修改测试来适配新实现或伪造绿色结果。
+一般规则是不新增或修改 tracked 自动化测试文件。2026-09-13 用户已明确批准 `AGENTS.md`
+记载的限定差分，并已提交为 `3e482f0`；本次继续修复对应的平台维护已提交为 `ac3532b`。
+这两份已执行差分无需再次审批。其他测试改动须有对应的明确授权；
+只删除历史测试仍可使用独立清理提交。不得通过减少收集范围或放宽安全断言伪造绿色结果。
 
 按改动范围运行：
 
@@ -132,19 +153,19 @@ git diff --cached --stat
 Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>
 ```
 
-使用签名提交并直推 main：
+当前任务使用签名提交并推送开发分支：
 
 ```powershell
 git commit -S -m "<准确描述本切片>"
 git show --show-signature --format=fuller HEAD
-git push origin HEAD:main
+git push origin HEAD:refs/heads/codex/architecture-reset-ci
 ```
 
 禁止 force push。推送后核对：
 
 ```powershell
 git rev-parse HEAD
-git ls-remote origin refs/heads/main
+git ls-remote origin refs/heads/codex/architecture-reset-ci
 git status --short --branch
 ```
 
@@ -153,7 +174,7 @@ git status --short --branch
 - author 与 committer name 都是 `Cyaegha_Xu`；
 - author 与 committer login 都是 `novahanser`；
 - 签名为 `verified=true`、`reason=valid`；
-- 远端 `main` 等于本地交付 commit。
+- 远端开发分支等于本地交付 commit，main 未被本任务修改。
 
 ## 7. 完成回报格式
 

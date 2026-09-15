@@ -10,17 +10,37 @@ from __future__ import annotations
 import math
 import re
 import time
+from dataclasses import dataclass
 from multiprocessing import get_context
-
-from .schemas import WorkerRuntimeStatusResponse
+from typing import Literal
 
 
 HEARTBEAT_TIMEOUT_SECONDS = 3.0
 _PHASES = ('starting', 'online', 'stopping', 'stopped', 'check_only')
 
+WorkerRuntimeMode = Literal['managed_direct', 'external_unknown']
+WorkerRuntimeState = Literal[
+    'starting', 'online', 'paused', 'stopping', 'stopped', 'check_only', 'stale', 'unknown'
+]
 
-def unknown_runtime_status(*, detail_code: str = 'external_worker_unobserved') -> WorkerRuntimeStatusResponse:
-    return WorkerRuntimeStatusResponse(
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkerRuntimeObservation:
+    """Supervisor-owned value; HTTP and Workflow consumers choose their projection."""
+
+    mode: WorkerRuntimeMode
+    state: WorkerRuntimeState
+    run_id: str | None = None
+    worker_pid: int | None = None
+    heartbeat_age_seconds: float | None = None
+    heartbeat_timeout_seconds: float
+    network_download_enabled: bool | None = None
+    queue_paused: bool | None = None
+    detail_code: str
+
+
+def unknown_runtime_status(*, detail_code: str = 'external_worker_unobserved') -> WorkerRuntimeObservation:
+    return WorkerRuntimeObservation(
         mode='external_unknown', state='unknown', detail_code=detail_code,
         heartbeat_timeout_seconds=HEARTBEAT_TIMEOUT_SECONDS,
     )
@@ -55,7 +75,7 @@ class ManagedWorkerRuntimeStatus:
         return True
 
     def snapshot(self, *, expected_run_id: str, expected_product_identity: str,
-                 queue_paused: bool = False, now: float | None = None) -> WorkerRuntimeStatusResponse:
+                 queue_paused: bool = False, now: float | None = None) -> WorkerRuntimeObservation:
         if self.run_id != expected_run_id or self.product_identity != expected_product_identity:
             return unknown_runtime_status(detail_code='runtime_identity_mismatch')
         lock = self._shared.get_lock()
@@ -79,7 +99,7 @@ class ManagedWorkerRuntimeStatus:
         state = 'stale' if stale else ('paused' if online and queue_paused else phase)
         if phase == 'online' and not raw_pid:
             return unknown_runtime_status(detail_code='runtime_snapshot_unavailable')
-        return WorkerRuntimeStatusResponse(
+        return WorkerRuntimeObservation(
             mode='managed_direct', state=state,
             run_id=self.run_id, worker_pid=int(raw_pid) if raw_pid else None,
             heartbeat_age_seconds=round(age, 3),

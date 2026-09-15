@@ -8,10 +8,318 @@ records must not be combined into a current release claim.
 Raw URLs, samples, media, cookies, credentials, logs, screenshots and local
 results belong outside Git or under ignored `validation/local/`.
 
+Source ZIPs and sdists retain this index, the two Stage 0 CSV templates and the
+Linux operator guide. The 118 historical reports stay in Git; links below bind
+them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
+access when reading an extracted source package.
+
+## Upload schema lock ownership (2026-09-16)
+
+Upload's existing Schema lock owner now covers acquisition and the yielded body.
+Interruptions before yield release the descriptor/lock immediately even while
+the caller retains the exception. Setup retains its existing Schema error
+mapping; body errors retain their original identity. Failure cleanup separately
+attempts unlock and close without replacing the primary error; successful
+cleanup preserves the first unlock or close failure.
+
+The same native-lock/SQLite feedback improves **9/22 to 22/22**. Every after case
+permits immediate native reacquisition and a new public ensure call, with
+identical database bytes, Schema 4 and integrity ok. The controls retain the
+exception and handle; injected close errors follow native disposal, and an
+injected unlock error relies on real close to release the lock. They do not
+prove recovery from permanently failing OS close or arbitrary process failure.
+Polling, timeouts, path identities and schema/SQL declarations are unchanged.
+Independent review confirms six AST invariants and two public ensure/service
+controls without observing the original handle or releasing the retained error.
+Full existing Windows CPython 3.13.14 / Node 22.23.2 regression passes **2442
+tests, 16 existing skips** in 379.17 console seconds. Current-head CI, frozen
+artifacts and independent installs are recorded separately.
+
+Only one production module and existing documents change. No tracked tests,
+CI, dependency, public command or source inventory change. Local scripts,
+baseline/after feedback and independent review remain ignored under
+`validation/local/upload-initialization-candidate-20260916/`.
+
+## Upload migration error ownership (2026-09-16)
+
+Completed at `8819190`: migration failure cleanup preserves its original
+error and HTTP 409 mapping; native SQLite feedback improved 19/32 to 32/32.
+The [frozen record](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/validation/README.md#upload-migration-error-ownership-2026-09-16)
+retains its full local/build/install evidence. That commit's final CI is **7/8**:
+push Windows 3.12 hit the same Node 10-second timeout twice. Its successful
+receipt was not created; both failures and the corrected Node-version controls
+are retained in PR #2 and ignored `upload-migration-ownership-20260916/`.
+This lock repair does not establish the hosted Node timeout's cause.
+
+## Domain connection ownership (2026-09-16)
+
+Completed at `0ab7c75`: Workflow/Editing/AI ledger and Upload ordinary connection
+ownership, with 45/45 and 22/22 feedback and eight first-attempt CI successes.
+The [complete frozen record](https://github.com/HedgehogsGX/Open-Flame/blob/0ab7c75e6de486a636e860d36591751b00678065/validation/README.md#domain-connection-ownership-2026-09-16)
+and ignored `validation/local/domain-connection-audit-20260916/` retain the
+original failures, complete regression, installs and sealed receipt.
+
+## Database and graph callback ownership (2026-09-16)
+
+Baseline `ec9d2a6` completed all eight push/PR jobs on their first attempt.
+These results, its packages and its ordinary runtime/browser smoke remain
+bound to that baseline; this repair requires its own checks.
+
+- Download `Database` now owns every acquired connection through one private
+  context, including ordinary transactions, WAL setup and the dedicated
+  Schema 8 migration. Path validation runs before initialization writes and
+  before/after each opening. Setup/body/commit/interruption failures retain
+  their original exception while rollback and close are attempted; otherwise
+  successful close errors remain visible. The same real-SQLite ownership
+  feedback improves **3/11 to 11/11**. Independent migration/WAL controls
+  improve **7/13 to 13/13**, preserving Schema 7 data and DDL after a failed
+  Schema 8 rebuild, per-connection PRAGMA settings, and the five-attempt WAL
+  budget/backoffs. Seventeen Schema/SQL declarations and fourteen migration
+  statements remain unchanged apart from removal of the discarded
+  connection's two reset PRAGMAs. Close faults are injected after native close;
+  recorded backoffs do not establish real lock-wait timing or recovery from
+  an OS close that permanently fails.
+- Graph fake's first progress callback previously converted a Worker-owned
+  storage error into `AdapterFailure`, leaving the queue unpaused. Narrow file
+  catches preserve mkdir-before-progress-before-write order and real storage
+  collision mapping, while callback errors reach Worker unchanged. The same
+  direct/real-Worker feedback improves **6/8 to 8/8**, including queue pause.
+  Ordinary fake behavior, graph identities, shared Protocol and the real
+  adapter's disabled exact-selector capability remain unchanged.
+
+Existing migration regression reports **28 passed**; the eight existing
+graph/adapter modules report **196 passed, 0 skipped**. These groups are not an
+aggregate full-suite count. The complete existing Windows CPython 3.13.14 suite
+reports **2442 passed, 16 skipped**, zero failures/errors, in 360.13 seconds.
+CI definition, locked dependencies, compatibility, whitespace and the unchanged
+235-file source inventory pass. Current-commit CI and frozen package/installation
+identity are recorded in the PR. Original failures, scripts, JSON and JUnit
+remain under ignored `validation/local/architecture-boundary-audit-20260916/`.
+Only two production files and existing documentation change; no tracked test,
+public command, Schema or dependency changes and no module file is added.
+This offline repair does not reproduce the user's
+four missing YT samples or establish real-platform acceptance.
+
+## Bounded policy and toolchain reads (2026-09-15)
+
+Baseline `6885764` completed all eight push/PR CI jobs on their first attempt.
+Each Windows job reports 2442 passed / 16 skipped, and Ubuntu 2321 passed /
+137 skipped. Current working-tree repairs require their own validation.
+
+- Toolchain retains artifact/version/hash/size policy while using managed
+  matching-open, bounded hash/snapshot and final identity checks. Previously,
+  same-size modification during hashing could still produce `ready`; a lock
+  growing after size precheck could be accepted beyond its 256 KiB limit.
+  The same expanded feedback improves from **9/16 to 16/16**, covering actual
+  mutation after data/EOF reads, new hard links, growth and primary/close errors.
+  Normal package-manager hard links for the application lock remain accepted;
+  installed artifacts remain single-link. Installed lock, checksum evidence and
+  smoke marker reads use the same boundary and retain their own limits. Cache
+  copies also stop at the locked size plus one sentinel: a growing 20-byte
+  fixture previously read/wrote 65556 bytes before rejection; now it reads 21
+  and writes zero before the same `bundle_invalid` outcome.
+- Security owns `load_allowed_hosts`; proxy CLI delegates argument values.
+  A real hard link added after the first read was accepted by the original CLI
+  loader. The same eight controls improve **7/8 to 8/8**. Ten independent
+  controls cover exact 16 KiB / 128-entry acceptance, combined overflow,
+  order/comments, replacement/mutation, bounded growth and failure before CLI
+  startup. File identity, single-link and POSIX read-only requirements are
+  rechecked through the read; errors still preserve their original cause.
+
+Existing toolchain/API/CLI/local-Worker regression reports **72 passed**;
+proxy/policy/deployment reports **112 passed, 4 skipped**. These groups are not
+an aggregate full-suite count.
+The complete existing Windows CPython 3.13.14 suite reports **2442 passed,
+16 skipped** in 321.26 seconds, with zero failures/errors. CI definition,
+locked dependencies, compatibility, whitespace and the unchanged 235-file source
+inventory pass. Current-commit CI and frozen artifact identity are recorded in
+the PR; neither earlier CI nor earlier packages substitute for those checks.
+The POSIX metadata control uses real chmod/stat on Windows to exercise that
+branch; it is not a target Linux/container or Unix-socket acceptance claim.
+Scripts and original failures remain under ignored
+`validation/local/architecture-completion-audit-20260915/`. No tracked tests,
+Schema, public command or dependency changed; no module file was added. These
+cases do not identify the four missing YT failures or prove platform acceptance.
+
+## Lifecycle ownership repair (2026-09-15)
+
+Baseline `9989aaf` was re-read with eight latest push/PR CI checks successful.
+Its first PR Windows 3.12 failure and one failed-job rerun remain documented in
+the PR; a passing rerun does not repair its timing-sensitive assertion.
+
+- Worker now completes Repository recovery, checks stop, and reads a fresh
+  clock before claiming. The original path consumed a new 60-second lease
+  during slow cleanup and could claim after a stop requested during recovery.
+  Repository retains the recovery observation, expired-job handling, intent
+  ownership and transaction gates. Its convenience claim path keeps its
+  original gate/recovery/claim linearization. Twelve fault/control scenarios and
+  five real-Repository gap races pass, including a newly inserted intent that
+  blocks this claim and is cleaned on the next quiescent cycle.
+- Adapter owns its two attempt-private control records. Failed initialization
+  uses the existing created-file identity cleanup; descriptor and file cleanup
+  preserve the primary failure while successful operations still fail closed
+  on cleanup errors. Both original filepath fields reject JSON null before
+  path construction; legitimate no-thumbnail null pairs remain accepted.
+  The same fault matrix improves from **5/13 to 13/13**.
+- Security owns bounded synchronous/asynchronous DNS. A real loopback proxy
+  reproduced event-loop shutdown blocked after the request timed out, listener
+  closed and proxy tasks completed. Releasing only the stalled DNS fixed the
+  control; the repair exits normally even while DNS remains stalled. Capacity
+  stays occupied until DNS actually returns, async observation is cancellable,
+  and late completion is safe after loop closure. The proxy limits DNS capacity
+  to its connection budget and answers to 64; existing short-link limits remain.
+  Independent cancellation, capacity and shared URL/IP-policy checks pass **22/22**.
+
+Existing targeted modules pass: Adapter/Worker media **164**, Worker lifecycle
+**91**, network policy/proxy/short links **144**, local short-link integration
+**15**. Groups overlap and must not be summed. The shared DNS implementation
+retains the existing default injection name through an import alias, after an
+integration recheck caught its initial removal. No tracked tests, CI, dependency
+locks, Schema, public command, page markup or module inventory changed. Raw
+scripts and logs are under ignored `validation/local/architecture-continuation-20260915/`.
+The full existing Windows CPython 3.13.14 suite reports **2442 passed, 16 skipped**
+in 334.73 seconds. The original platform/tool-bundle skips and collection remain.
+The real loopback DNS shutdown case also exits normally on exact CPython 3.12.10.
+CI definition, locked dependencies, whitespace and the unchanged 235-file source
+inventory pass; current-commit hosted CI and frozen artifacts are recorded in the PR.
+These cases do not identify the user's four missing YT failures or prove real
+platform, Linux-container isolation, or original-root acceptance.
+
+## Core ownership repair (2026-09-15)
+
+Development starts from clean `d7f0c60`. Its
+[push run](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34871536574) and
+[PR run](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34871544112) were
+re-read as completed/success, four jobs each. New commits require their own CI.
+
+- AssetStore owns the complete output inventory, including file identity
+  uniqueness and readable plain directories. Worker retains media identity,
+  owner and ordinal rules. The former walk silently skipped unreadable output;
+  an offline Worker could publish one ready asset while hiding an undeclared
+  sibling. The same fixture now fails validation and registers no asset.
+- Capability evidence input uses existing managed-file matching-open, bounded
+  snapshot and final identity checks. Same-size replacement and mid-read
+  mutation are rejected; growth reads at most 4 MiB plus one sentinel byte.
+  CSV hard links remain allowed; database hard links remain rejected.
+- Supervisor observations are immutable standard-library values. API projects
+  them into HTTP DTOs; Workflow receives a mapping. Nine observation payloads
+  and the public JSON Schema are unchanged, and isolated supervisor import
+  succeeds with HTTP/Pydantic imports blocked.
+- AdapterFailure and RetryContext share the domain numeric contract. RetryPolicy
+  checks representable scheduling from the failure clock without shortening
+  upstream hints. Nonfinite/malformed hints or invalid injected decisions become
+  controlled Worker failures; huge finite delays become terminal policy decisions.
+  No attempt remains running because retry arithmetic escaped failure handling.
+
+Ignored reproductions: inventory **7/10 before, 10/10 after**; capability input
+**7/11 before, 11/11 after**; retry boundaries **3/24 before, 24/24 after**.
+Existing focused regressions passed: runtime **110**, capability **91**,
+inventory **65**, retry **66**. These overlapping groups must not be summed.
+The complete existing suite reports **2442 passed, 16 skipped** in 333.97 seconds.
+The existing platform/bundle skips remain; no tests were changed or deselected.
+An independent comparison preserves all **4,560** valid retry/fallback outcomes
+and the runtime response JSON Schema against the starting commit.
+A real loopback Uvicorn/HTTP smoke exercised six runtime states and the actual
+Workflow preflight gates using isolated local stores, then stopped normally.
+No page markup, Schema, attempt budget, fallback policy, CI workflow or tracked
+test file changed. Raw scripts, logs, JSON and JUnit remain under ignored
+`validation/local/architecture-repair-20260915/`.
+
+These repairs do not reproduce or resolve the user's four missing YouTube
+failure samples. Real-platform acceptance and original application roots remain
+outside this offline development record.
+
+## PR #2 review follow-up (2026-09-15)
+
+Read [the review](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)
+against clean `7b48a9f`, then verified its push and PR runs: all eight jobs are
+completed/success. The comment's failed `0dfcf82` job is historical; its exact
+hosted failure cause remains unproven.
+
+The original gate accepted a previously approved patch newly staged in an
+unrelated repository (exit 0). The same real-Git reproducer now rejects it
+(exit 1). Nine isolated history scenarios pass: existing PR, production-only
+increment, first merge, deletion-only cleanup, new test edits, copied history,
+advanced base and later patch replay. There are no tracked test changes.
+The reusable patch hashes are removed; the remaining bridge binds the original
+base and already-reviewed commit, never a new staged patch. Once the merge base
+advances it expires and its two endpoints/helper can be deleted.
+
+The source inventory falls from 353 to 235 files. Historical report entries fall
+from 118 (699,877 bytes) to zero; the four user/developer entry files remain.
+All rewritten historical links resolve to paths verified in the fixed commit,
+and local documentation targets still have to exist in the shipped inventory.
+Temporary reproductions and detailed results are under ignored
+`validation/local/pr-feedback-20260915-01/`.
+
+Validation: existing release, CI and yt-dlp modules reported **215 passed,
+5 skipped** in 18.39 seconds. The five pre-existing bundle checks skipped
+because the pinned local yt-dlp/media bundles are absent. They did not exercise
+the user's real YouTube cases. CI definition, locked dependency resolution and
+whitespace checks passed. An actual isolated build and archive verification
+passed: source ZIP 235 files, sdist 236 (including PKG-INFO), wheel 175;
+neither source archive contains historical reports or tests. Direct Hatch
+building also excludes report/test sentinels actually present in its isolated
+input. The legacy `7575773` release still verifies; missing local documentation
+and newly listed historical reports are rejected. These are development build
+checks, not a new final installation receipt or platform acceptance.
+
+CI follow-up: `a20adc2` reached the offline suite but its Linux PR job
+[`104065965207`](https://github.com/HedgehogsGX/Open-Flame/actions/runs/34870821699/job/104065965207)
+failed `test_sdist_excludes_self_reference_and_local_runtime_trees` because
+the packaging change replaced the audited exclusion list. The same assertion
+failed locally before correction. The original exclusion list is now retained;
+an additional include filter selects files outside validation, and the four
+explicit force-includes restore its shipped entry files. Existing license,
+release and CI modules pass **122/122** after correction. Actual direct Hatch
+output matches the complete source inventory plus PKG-INFO, with the existing
+historical-report/test sentinels excluded. No test changes or collection edits
+were required. Later hosted results must be read at the corrected commit.
+
+Remaining review boundaries: the repository owner's PR confirmation of prior
+test-maintenance authorization is not supplied by code or by this record;
+real Bilibili upload compatibility, platform acceptance, macOS execution and
+original-root migration remain unverified. User-reported YouTube results are
+6/10; the four failing URLs, errors and execution version have not been supplied
+and are absent from the PR comment. No YouTube fix or improved pass rate is
+claimed from the review changes.
+
 ## Current status
 
-- Development version: `0.28.0`; the current post-release source has no new
-  clean release receipt.
+- Exact test maintenance: [cover completion waits, diagnostic child lock budget, unchanged assertions and 73-test regression](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md).
+- Local recovery supplements: [cross-process locks, restored-Python runtime rebuild and actual Chromium process cleanup](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md).
+- Rollback preparation: [old-source environment copies, normal startup/stop, schema compatibility and encrypted private-state verification](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md).
+- Main merge gate: [exact proposal, observed permission boundary and outstanding remote verification](../docs/MAIN_MERGE_GATE.md).
+- Application data: [observed Download/Upload protection, independent restore, normal startup and original-root preservation](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-application-data-recovery.md).
+- Runtime logging: [eight registered route templates, bounded log fields and real HTTP verification](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-runtime-route-logging.md).
+- Frozen load and CI: [9822454 storage 300-cycle run, normal stop and pending PR cover-test wait correction](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md).
+- Upload reconnection: [refresh the current session, clear recovered poll errors and preserve action feedback](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-poll-reconnection.md).
+- Upload storage: [configurable free-space floor, incoming/copy checks and bounded exhaustion cleanup](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-storage-threshold.md).
+- Release drill: [1540a7e isolated Setup/Start/stop, four-page browser checks, old Upload copy migration/restore and workflow notice correction](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md).
+- Release preparation: [live 7575773 baseline, green push/PR CI, matching installation receipt and pending merge gate](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md).
+- CI recovery history: [bounded Windows SQLite snapshot fixes and approved test maintenance](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md).
+- Current architecture-reset supplements: [caption cleanup](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-caption-cleanup-errors.md)
+  and [release documentation boundary](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-documentation-boundary.md).
+- Workflow request identity: [shared key and frozen request construction](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-request-construction.md).
+- Workflow form rules: [shared validation and incomplete absolute schedules](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-shared-validation.md).
+- Editing AI retry graph: [one owner for resolution and project cancellation](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-ai-retry-ownership.md).
+- Upload reconciliation polling: [retained controls and the historical test-maintenance proposal](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-reconciliation-node-retention.md).
+- Cross-page upload rules: [shared text, tags and schedules with retained page ownership](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-cross-page-upload-rules.md).
+- CLI shared rules: [normalized paths and existing worker output](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-cli-shared-parsing-output.md).
+- Upload source handoff: [protected consumption, staged bytes and post-execution results](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-source-handoff.md).
+- Editing render retry graph: [shared resolution, snapshot and cancellation fences](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-render-retry-ownership.md).
+- Workflow retry/cancellation: [shared result application and cancellation tail](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-retry-cancel-tails.md).
+- Backup file ownership: [protect foreign targets and close owned descriptors](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-file-ownership.md).
+- Editing copy ownership: [shared owned-file cleanup and collision protection](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-copy-ownership.md).
+- Upload lifecycle ownership: [shared manager, startup recovery and native lock handoff](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-manager-ownership.md).
+- Editing output registration: [validate metadata before copying and retain cleanup ownership](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-registration-cleanup.md).
+- Backup resource handoff: [owned descriptor wrapping and SQLite connection cleanup](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-resource-handoff.md).
+- Public backup files: [shared file operations and independent domain policies](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-public-backup-files.md).
+- Upload cover ownership: [shared format/platform rules and backup audit](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-cover-ownership.md).
+  The cover working-tree full suite was 2194 passed, 248 failed and 16 skipped;
+  the three added failures still patch the former service decoder location.
+- Development version: `0.28.0`; post-release commit `7575773` has a matching
+  clean source/wheel installation receipt. Later commits need their own receipt.
 - The `0592b6f` receipt applies only to that frozen build.
 - Real OpenAI responses, human listening quality, Bilibili/Douyin/WeChat
   Channels upload acceptance, scheduled publication and public visibility are
@@ -23,7 +331,7 @@ results belong outside Git or under ignored `validation/local/`.
   image. Bilibili/Douyin real extraction remains unverified, and yt-dlp has no
   dedicated WeChat Channels extractor.
 - Workflow now has an explicit source-cover preference with a generated-cover
-  fallback; see the scoped [validation record](iteration-0.28.0-workflow-source-cover-preference.md).
+  fallback; see the scoped [validation record](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md).
 - Upload Schema 4 now records one durable local attempt receipt for every
   claimed job, and upload backup format 3 preserves and audits those receipts.
   `unknown` can only move through the fixed operator conclusions after the
@@ -33,14 +341,17 @@ results belong outside Git or under ignored `validation/local/`.
   public-visibility proof. Real platform calls in this milestone are **0**,
   and the 2026-09-10 actual app-root record stops at Upload Schema 1→3; Schema
   4 has not been migrated or audited in that actual root. See the scoped
-  [attempt receipt record](iteration-0.28.0-upload-attempt-receipts.md).
+  [attempt receipt record](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md).
 - Explicit dubbing render retries can reuse individually verified cue WAV
   checkpoints from the same immutable retry lineage; see the scoped
-  [validation record](iteration-0.28.0-speech-checkpoint-retry.md).
-- Hosted CI now reaches the full Windows/Linux and CPython 3.12/3.13 pytest
-  stage, but the matrix remains red because frozen historical tests conflict
-  with current HTTP security, Schema and version contracts. See the CI record;
-  do not infer a green build.
+  [validation record](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-speech-checkpoint-retry.md).
+- Historical failures before CI recovery: hosted branch run `34680878428` at clean `36cfb56` reached offline pytest on
+  Windows/Linux and CPython 3.12/3.13; all four jobs failed. Local failures
+  include old internal interfaces, HTTP, Schema and fixture contracts, but
+  their causes are not a complete classification of hosted logs. This run
+  does not validate the later cover slice or imply a green build. Cover commit
+  `e4e84fd` run `34683683053` also completed with failure; the subsequent
+  frontend record reports scoped checks, not full CI success.
 - External testing starts with [`TESTING.md`](../TESTING.md). Use the
   [`Debug guide`](../docs/DEBUG_GUIDE.md) and return findings with the
   [`external tester handoff template`](../docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md).
@@ -51,57 +362,68 @@ The concise current development state, risks and next actions live in
 
 ## Current 0.28.0 evidence
 
+### Architecture reset implementation and CI recovery (2026-09-14 snapshot)
+
+`codex/architecture-reset-ci` is not merged into main. Its `7575773` push and PR
+runs each passed all four CI jobs. Merge enforcement and real business acceptance
+remain separate work. These records cover the implemented slices:
+
+- [Workflow startup rollback](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-start-rollback.md)
+- [Primary media errors and cleanup](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-media-cleanup-errors.md)
+- [Adapter control-record decoding](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-adapter-control-decoding.md)
+- [Worker assembly and CLI ownership](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-worker-entry-boundary.md)
+
 ### Architecture and boundaries
 
-- [Current document status and CI policy](iteration-0.28.0-document-status-consolidation.md)
-- [Workflow recipe functions](iteration-0.28.0-workflow-recipe-functions.md)
-- [Workflow upload form functions](iteration-0.28.0-workflow-upload-form-functions.md)
-- [Managed-file reads](iteration-0.28.0-managed-file-read.md) and
-  [managed-file identity](iteration-0.28.0-managed-file-identity.md)
-- [EditingManager boundary](iteration-0.28.0-editing-manager-boundary.md) and
-  [verified media response](iteration-0.28.0-verified-media-response.md)
-- [Edit snapshot](iteration-0.28.0-edit-snapshot-observation.md),
-  [Upload snapshot](iteration-0.28.0-upload-snapshot-observation.md) and
-  [AI snapshot](iteration-0.28.0-ai-snapshot-application.md)
-- [Upload identity contract](iteration-0.28.0-upload-identity-contract.md),
-  [upload retry payload identity](iteration-0.28.0-upload-retry-payload-identity.md),
-  [Upload Schema 4 attempt receipts](iteration-0.28.0-upload-attempt-receipts.md),
-  [Workflow profile contract](iteration-0.28.0-workflow-profile-contract.md) and
-  [upload metadata contract](iteration-0.28.0-upload-metadata-contract.md)
-- [Download HTTP boundary](iteration-0.28.0-download-http-boundary.md) and
-  [Workflow manager recovery](iteration-0.28.0-workflow-manager-recovery.md)
+- [Current document status and CI policy](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-document-status-consolidation.md)
+- [Workflow recipe functions](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-recipe-functions.md)
+- [Workflow upload form functions](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-upload-form-functions.md)
+- [Managed-file reads](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-managed-file-read.md) and
+  [managed-file identity](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-managed-file-identity.md)
+- [EditingManager boundary](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-manager-boundary.md) and
+  [verified media response](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-verified-media-response.md)
+- [Edit snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-edit-snapshot-observation.md),
+  [Upload snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-snapshot-observation.md) and
+  [AI snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-snapshot-application.md)
+- [Upload identity contract](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-identity-contract.md),
+  [upload retry payload identity](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-retry-payload-identity.md),
+  [Upload Schema 4 attempt receipts](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md),
+  [Workflow profile contract](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-profile-contract.md) and
+  [upload metadata contract](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-metadata-contract.md)
+- [Download HTTP boundary](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-download-http-boundary.md) and
+  [Workflow manager recovery](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-manager-recovery.md)
 
 ### Workflow, editing and frontend
 
-- [AI Workflow](iteration-0.28.0-ai-workflow-evidence.md),
-  [AI authorization](iteration-0.28.0-post-release-ai-authorization.md) and
-  [AI invocation ledger](iteration-0.28.0-ai-invocation-ledger.md), plus
-  [per-cue dubbing retry checkpoints](iteration-0.28.0-speech-checkpoint-retry.md)
-- [Workflow presets](iteration-0.28.0-workflow-presets.md),
-  [source-caption reuse](iteration-0.28.0-workflow-source-caption-reuse.md),
-  [source-cover preference](iteration-0.28.0-workflow-source-cover-preference.md),
-  [AI retry lineage](iteration-0.28.0-workflow-ai-retry-lineage.md),
-  [relative publish schedules](iteration-0.28.0-workflow-relative-schedules.md),
-  [source-title freezing](iteration-0.28.0-workflow-source-title.md),
-  [multi-segment workflow](iteration-0.28.0-multisegment-workflow.md) and
-  [no-AI whole video](iteration-0.28.0-no-ai-full-video.md)
-- [Post-release automation correctness](iteration-0.28.0-post-release-automation-correctness.md),
-  [full-video default](iteration-0.28.0-workflow-full-video-default.md) and
-  [multi-segment UI](iteration-0.28.0-workflow-multisegment-ui.md)
-- [Restart continuation](iteration-0.28.0-workflow-restart-continuation.md),
-  [whole-workflow cancellation](iteration-0.28.0-workflow-cancellation.md),
-  [duplicate download owner](iteration-0.28.0-workflow-duplicate-download-owner.md)
-  and [upload attention recovery](iteration-0.28.0-workflow-upload-attention-recovery.md)
-- [Server preflight](iteration-0.28.0-workflow-server-preflight.md),
-  [readiness UI](iteration-0.28.0-workflow-readiness-ui.md),
-  [platform parameters](iteration-0.28.0-workflow-platform-parameters.md) and
-  [speech rate](iteration-0.28.0-speech-rate.md)
-- [Editorial Glass frontend](iteration-0.28.0-editorial-glass-frontend.md) and
-  [source-cover research and explicit import](iteration-0.28.0-source-cover-research-and-import.md),
-  and [translation revision binding](iteration-0.28.0-translation-revision-binding.md)
-- [Current local runtime refresh](iteration-0.28.0-local-runtime-refresh.md),
-  [synthetic full-chain smoke](iteration-0.28.0-full-chain-smoke.md) and
-  [hosted CI execution-chain recovery](iteration-0.28.0-hosted-ci-recovery.md)
+- [AI Workflow](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-workflow-evidence.md),
+  [AI authorization](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-post-release-ai-authorization.md) and
+  [AI invocation ledger](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-invocation-ledger.md), plus
+  [per-cue dubbing retry checkpoints](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-speech-checkpoint-retry.md)
+- [Workflow presets](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-presets.md),
+  [source-caption reuse](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-caption-reuse.md),
+  [source-cover preference](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md),
+  [AI retry lineage](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-ai-retry-lineage.md),
+  [relative publish schedules](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-relative-schedules.md),
+  [source-title freezing](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-title.md),
+  [multi-segment workflow](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-multisegment-workflow.md) and
+  [no-AI whole video](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-no-ai-full-video.md)
+- [Post-release automation correctness](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-post-release-automation-correctness.md),
+  [full-video default](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-full-video-default.md) and
+  [multi-segment UI](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-multisegment-ui.md)
+- [Restart continuation](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-restart-continuation.md),
+  [whole-workflow cancellation](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-cancellation.md),
+  [duplicate download owner](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-duplicate-download-owner.md)
+  and [upload attention recovery](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-upload-attention-recovery.md)
+- [Server preflight](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-server-preflight.md),
+  [readiness UI](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-readiness-ui.md),
+  [platform parameters](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-platform-parameters.md) and
+  [speech rate](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-speech-rate.md)
+- [Editorial Glass frontend](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editorial-glass-frontend.md) and
+  [source-cover research and explicit import](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md),
+  and [translation revision binding](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-translation-revision-binding.md)
+- [Current local runtime refresh](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-runtime-refresh.md),
+  [synthetic full-chain smoke](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-full-chain-smoke.md) and
+  [hosted CI execution-chain recovery](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-hosted-ci-recovery.md)
 
 ## Historical milestone index
 
@@ -110,32 +432,32 @@ platform sample, package hash, test count, license inventory or runtime status
 does not describe current source unless a current record explicitly revalidates
 it.
 
-- [0.27.0 editing workspace](iteration-0.27.0-editing-workspace-evidence.md)
-- [0.26.0 upload parameters](iteration-0.26.0-upload-parameters-evidence.md)
-- [0.25.0 production frontend](iteration-0.25.0-t16-frontend-evidence.md)
-- [0.24.4 upload lifecycle](iteration-0.24.4-upload-data-lifecycle-evidence.md),
-  [0.24.3 final review](iteration-0.24.3-final-review.md),
-  [0.24.2 integration](iteration-0.24.2-integration-evidence.md),
-  [0.24.1 QR login](iteration-0.24.1-qr-login-evidence.md) and
-  [0.24.0 first-platform uploader](iteration-0.24.0-upload-evidence.md)
-- [0.19.0 short links and Cookie defaults](iteration-0.19.0-short-links-cookie-defaults-evidence.md),
-  [0.18.0 concurrent worker](iteration-0.18.0-concurrent-worker-evidence.md),
-  [0.17.0 progress](iteration-0.17.0-real-progress-evidence.md),
-  [0.16.0 claim fencing/retry](iteration-0.16.0-claim-retry-evidence.md),
-  [0.15.0 local app](iteration-0.15.0-local-app-evidence.md) and
-  [0.14.0 local Cookie](iteration-0.14.0-local-cookie-evidence.md)
-- [0.13.0 capability governance](iteration-0.13.0-capability-governance-evidence.md),
-  [0.12.0 auxiliary assets/TikTok](iteration-0.12.0-artifact-tiktok-evidence.md),
-  [0.11.0 Bilibili 412](iteration-0.11.0-schema9-bilibili-evidence.md),
-  [0.10.0 routing](iteration-0.10.0-multiplatform-routing-evidence.md) and
-  [0.10.0 Instagram sample](iteration-0.10.0-instagram-live-evidence.md)
-- [0.9.0 local Worker](iteration-0.9.0-local-worker-e2e-evidence.md),
-  [0.8.1 real dual sample](iteration-0.8.1-live-platform-evidence.md),
-  [0.8.0 local toolchain](iteration-0.8.0-local-toolchain-evidence.md),
-  [0.7.2 runtime logging](iteration-0.7.2-runtime-logging-evidence.md),
-  [0.7.1 debug/license](iteration-0.7.1-debug-use-license-evidence.md),
-  [0.7 short-link/Cookie/Linux](iteration-0.7-short-link-cookie-linux-offline-evidence.md)
-  and [0.6 graph v2](iteration-0.6-graph-v2-offline-evidence.md)
+- [0.27.0 editing workspace](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.27.0-editing-workspace-evidence.md)
+- [0.26.0 upload parameters](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.26.0-upload-parameters-evidence.md)
+- [0.25.0 production frontend](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.25.0-t16-frontend-evidence.md)
+- [0.24.4 upload lifecycle](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.4-upload-data-lifecycle-evidence.md),
+  [0.24.3 final review](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.3-final-review.md),
+  [0.24.2 integration](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.2-integration-evidence.md),
+  [0.24.1 QR login](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.1-qr-login-evidence.md) and
+  [0.24.0 first-platform uploader](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.0-upload-evidence.md)
+- [0.19.0 short links and Cookie defaults](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.19.0-short-links-cookie-defaults-evidence.md),
+  [0.18.0 concurrent worker](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.18.0-concurrent-worker-evidence.md),
+  [0.17.0 progress](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.17.0-real-progress-evidence.md),
+  [0.16.0 claim fencing/retry](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.16.0-claim-retry-evidence.md),
+  [0.15.0 local app](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.15.0-local-app-evidence.md) and
+  [0.14.0 local Cookie](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.14.0-local-cookie-evidence.md)
+- [0.13.0 capability governance](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.13.0-capability-governance-evidence.md),
+  [0.12.0 auxiliary assets/TikTok](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.12.0-artifact-tiktok-evidence.md),
+  [0.11.0 Bilibili 412](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.11.0-schema9-bilibili-evidence.md),
+  [0.10.0 routing](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.10.0-multiplatform-routing-evidence.md) and
+  [0.10.0 Instagram sample](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.10.0-instagram-live-evidence.md)
+- [0.9.0 local Worker](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.9.0-local-worker-e2e-evidence.md),
+  [0.8.1 real dual sample](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.8.1-live-platform-evidence.md),
+  [0.8.0 local toolchain](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.8.0-local-toolchain-evidence.md),
+  [0.7.2 runtime logging](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.7.2-runtime-logging-evidence.md),
+  [0.7.1 debug/license](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.7.1-debug-use-license-evidence.md),
+  [0.7 short-link/Cookie/Linux](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.7-short-link-cookie-linux-offline-evidence.md)
+  and [0.6 graph v2](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.6-graph-v2-offline-evidence.md)
 - [Apache-2.0 migration record](apache-2.0-license-migration-evidence.md)
 
 ## Stage 0 evidence procedure

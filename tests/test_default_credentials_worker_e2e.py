@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import json
 import os
 from pathlib import Path
@@ -160,7 +162,7 @@ def test_http_default_mode_reaches_private_cookie_and_ready_asset(
         runtime_logger=worker_logger,
     )
     public_payloads: list[str] = []
-    with TestClient(app) as client:
+    with download_client(app) as client:
         defaults_status = client.get("/api/v1/credential-defaults")
         assert defaults_status.status_code == 200
         assert defaults_status.json()["platforms"] == ["youtube"]

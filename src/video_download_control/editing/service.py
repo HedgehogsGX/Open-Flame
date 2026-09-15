@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -19,6 +19,8 @@ from ..managed_files import (
     ManagedFileChanged,
     ManagedFileSizeExceeded,
     UnsafeManagedPath,
+    close_binary_on_error,
+    discard_created_file,
     file_signature,
     hash_open_binary,
     lstat_plain,
@@ -234,49 +236,35 @@ def _open_verified_file(
 ) -> tuple[BinaryIO, os.stat_result, tuple[bytes, ...]]:
     """Verify one managed file and retain that exact open handle for serving."""
 
-    handle: BinaryIO | None = None
     try:
         before = _plain(path)
         if not 0 < before.st_size <= maximum or before.st_size != expected_size:
             raise EditingError(error_code)
         expected = file_signature(before)
         opened = open_matching_binary(path, expected=expected)
-        handle = opened.handle
-        hashed = hash_open_binary(
-            handle,
-            maximum=expected_size,
-            chunk_size=VERIFIED_MEDIA_CHUNK_BYTES,
-            collect_chunk_digests=True,
-        )
-        require_matching_fstat(handle, expected=expected)
-        after = _plain(path)
-        if (
-            hashed.size != expected_size
-            or hashed.hexdigest != expected_sha256
-            or file_signature(after) != expected
-        ):
-            raise EditingError(error_code)
-        handle.seek(0)
-        return handle, opened.info, hashed.chunk_digests
+        with close_binary_on_error(opened.handle) as handle:
+            hashed = hash_open_binary(
+                handle,
+                maximum=expected_size,
+                chunk_size=VERIFIED_MEDIA_CHUNK_BYTES,
+                collect_chunk_digests=True,
+            )
+            require_matching_fstat(handle, expected=expected)
+            after = _plain(path)
+            if (
+                hashed.size != expected_size
+                or hashed.hexdigest != expected_sha256
+                or file_signature(after) != expected
+            ):
+                raise EditingError(error_code)
+            handle.seek(0)
+            return handle, opened.info, hashed.chunk_digests
     except EditingError:
-        if handle is not None:
-            handle.close()
         raise
     except (ManagedFileChanged, ManagedFileSizeExceeded):
-        if handle is not None:
-            handle.close()
         raise EditingError(error_code) from None
     except OSError as exc:
-        if handle is not None:
-            handle.close()
         raise EditingError(error_code) from exc
-    except BaseException:
-        if handle is not None:
-            try:
-                handle.close()
-            except BaseException:
-                pass
-        raise
 
 
 class EditingService:
@@ -320,6 +308,7 @@ class EditingService:
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
+        connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(self.database_path, timeout=30)
             connection.row_factory = sqlite3.Row
@@ -327,17 +316,17 @@ class EditingService:
             connection.execute("PRAGMA busy_timeout=30000")
             yield connection
             connection.commit()
-        except sqlite3.Error as exc:
-            try:
-                connection.rollback()
-            except (UnboundLocalError, sqlite3.Error):
-                pass
-            raise EditingError("editing_database_unavailable") from exc
-        finally:
-            try:
-                connection.close()
-            except UnboundLocalError:
-                pass
+        except BaseException as exc:
+            if connection is not None:
+                with suppress(BaseException):
+                    connection.rollback()
+                with suppress(BaseException):
+                    connection.close()
+            if isinstance(exc, sqlite3.Error):
+                raise EditingError("editing_database_unavailable") from exc
+            raise
+        else:
+            connection.close()
 
     def recover_interrupted(self, *, cleanup_orphans: bool = False) -> None:
         """Fail local work safely and revoke queued confirmation after restart."""
@@ -1786,47 +1775,8 @@ class EditingService:
             "SELECT 1 FROM projects WHERE id=?", (project_id,)
         ).fetchone() is None:
             raise EditingError("project_not_found")
-        rows = db.execute(
-            "SELECT * FROM ai_tasks WHERE project_id=? ORDER BY created_at,id",
-            (project_id,),
-        ).fetchall()
-        records: dict[str, dict[str, Any]] = {}
-        successor_by_parent: dict[str, str] = {}
         try:
-            for row in rows:
-                task = self._ai_task_from_row(row)[0]
-                task_id = task["id"]
-                if task["project_id"] != project_id or task_id in records:
-                    raise EditingError("ai_task_set_invalid")
-                records[task_id] = task
-            for task_id, task in records.items():
-                parent_id = task["retry_of"]
-                if parent_id is None:
-                    continue
-                parent = records.get(parent_id)
-                if (
-                    parent is None
-                    or parent_id == task_id
-                    or parent_id in successor_by_parent
-                    or any(
-                        task[field] != parent[field]
-                        for field in (
-                            "operation",
-                            "source_revision_id",
-                            "request_sha256",
-                        )
-                    )
-                ):
-                    raise EditingError("ai_task_set_invalid")
-                successor_by_parent[parent_id] = task_id
-            for task_id in records:
-                seen: set[str] = set()
-                cursor = task_id
-                while cursor in successor_by_parent:
-                    if cursor in seen:
-                        raise EditingError("ai_task_set_invalid")
-                    seen.add(cursor)
-                    cursor = successor_by_parent[cursor]
+            records, successor_by_parent = self._ai_retry_forest_in(db, project_id)
         except EditingError as error:
             if error.code == "ai_task_set_invalid":
                 raise
@@ -1836,6 +1786,76 @@ class EditingService:
             task_id for task_id in records if task_id not in successor_by_parent
         ]
         return self._cancel_ai_task_ids_in(db, leaf_ids)
+
+    def _ai_retry_forest_in(
+        self, db: sqlite3.Connection, project_id: str
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Decode and validate the whole project, including unrelated retry chains."""
+
+        rows = db.execute(
+            "SELECT * FROM ai_tasks WHERE project_id=? ORDER BY created_at,id",
+            (project_id,),
+        ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        successor_by_parent: dict[str, str] = {}
+        for row in rows:
+            task = self._ai_task_from_row(row)[0]
+            task_id = task["id"]
+            if task["project_id"] != project_id or task_id in records:
+                raise EditingError("ai_task_set_invalid")
+            records[task_id] = task
+        for task_id, task in records.items():
+            parent_id = task["retry_of"]
+            if parent_id is None:
+                continue
+            parent = records.get(parent_id)
+            if (
+                parent is None
+                or parent_id == task_id
+                or parent_id in successor_by_parent
+                or any(
+                    task[field] != parent[field]
+                    for field in (
+                        "operation",
+                        "source_revision_id",
+                        "request_sha256",
+                    )
+                )
+            ):
+                raise EditingError("ai_task_set_invalid")
+            successor_by_parent[parent_id] = task_id
+
+        resolved: set[str] = set()
+        for task_id in records:
+            cursor = task_id
+            path: set[str] = set()
+            while cursor in successor_by_parent and cursor not in resolved:
+                if cursor in path:
+                    raise EditingError("ai_task_set_invalid")
+                path.add(cursor)
+                cursor = successor_by_parent[cursor]
+            resolved.update(path)
+        return records, successor_by_parent
+
+    def resolve_ai_task_retry(
+        self, task_id: str, *, project_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return the canonical start and leaf after validating its entire project.
+
+        The caller can compare the start against its independently frozen identity.
+        Invalid task rows keep their decoding errors; invalid forests fail closed.
+        """
+
+        task_id, project_id = _identifier(task_id), _identifier(project_id)
+        with self._db() as db:
+            records, successors = self._ai_retry_forest_in(db, project_id)
+            start = records.get(task_id)
+            if start is None:
+                raise EditingError("ai_task_set_invalid")
+            current_id = task_id
+            while current_id in successors:
+                current_id = successors[current_id]
+            return start, records[current_id]
 
     def cancel_ai_task(self, task_id: str) -> dict[str, Any]:
         return self.cancel_ai_tasks((task_id,))[0]
@@ -2421,6 +2441,16 @@ class EditingService:
             )
         return self._plan_by_id(db, plan_id)
 
+    def resolve_plan_retry(
+        self, plan_id: str, *, project_id: str
+    ) -> dict[str, Any]:
+        """Return the render leaf after validating its entire project snapshot."""
+
+        plan_id, project_id = _identifier(plan_id), _identifier(project_id)
+        with self._db() as db:
+            db.execute("BEGIN")
+            return self._latest_plan_for_project_in(db, plan_id, project_id)
+
     def _latest_plan_for_project_in(
         self,
         db: sqlite3.Connection,
@@ -2431,11 +2461,11 @@ class EditingService:
             "SELECT * FROM render_plans WHERE project_id=? ORDER BY created_at,id",
             (project_id,),
         ).fetchall()
+        plans = [self._plan_public(db, row) for row in rows]
         records: dict[str, dict[str, Any]] = {}
         successors: dict[str, str] = {}
         try:
-            for row in rows:
-                plan = self._plan_public(db, row)
+            for plan in plans:
                 plan_id = _identifier(plan["id"])
                 if plan.get("project_id") != project_id or plan_id in records:
                     raise EditingError("edit_plan_set_invalid")
@@ -2463,14 +2493,16 @@ class EditingService:
                 ):
                     raise EditingError("edit_plan_set_invalid")
                 successors[parent_id] = plan_id
+            resolved: set[str] = set()
             for plan_id in records:
                 cursor = plan_id
                 seen: set[str] = set()
-                while cursor in successors:
+                while cursor in successors and cursor not in resolved:
                     if cursor in seen:
                         raise EditingError("edit_plan_set_invalid")
                     seen.add(cursor)
                     cursor = successors[cursor]
+                resolved.update(seen)
         except EditingError as error:
             if error.code in {"edit_plan_set_invalid", "edit_plan_mismatch"}:
                 raise
@@ -2567,9 +2599,15 @@ class EditingService:
                 raise EditingError("edit_project_mismatch")
             if plan is not None:
                 root_plan_id = _identifier(plan["id"])
-                leaf = self._latest_plan_for_project_in(
-                    db, root_plan_id, project_id
-                )
+                try:
+                    leaf = self._latest_plan_for_project_in(
+                        db, root_plan_id, project_id
+                    )
+                except EditingError as error:
+                    # Discovery cancellation keeps its existing set-level error.
+                    if error.code in {"edit_plan_set_invalid", "edit_plan_mismatch"}:
+                        raise
+                    raise EditingError("edit_plan_set_invalid") from error
                 canceled_plan = self._cancel_plan_in(db, leaf["id"])
                 return {
                     "kind": "plan",
@@ -3253,15 +3291,6 @@ class EditingService:
                 mime_type = _text(asset.mime_type, 120, required=True)
                 if "/" not in mime_type or any(character.isspace() for character in mime_type):
                     raise EditingError("invalid_render_asset")
-                asset_id = uuid4().hex
-                destination = self.asset_root / f"{asset_id}{suffix}"
-                size, digest = self._copy_and_hash(source_path, destination, MAX_OUTPUT_BYTES)
-                if asset.size_bytes not in {0, size}:
-                    self._discard_unregistered_file(destination)
-                    raise EditingError("render_asset_size_mismatch")
-                if asset.sha256 and asset.sha256 != digest:
-                    self._discard_unregistered_file(destination)
-                    raise EditingError("render_asset_hash_mismatch")
                 ordinal = self._optional_integer(asset.ordinal, minimum=0, required=True)
                 duration_ms = self._optional_integer(asset.duration_ms, minimum=0)
                 width = self._optional_integer(asset.width, minimum=1)
@@ -3269,6 +3298,11 @@ class EditingService:
                 container = _text(asset.container, 40)
                 video_codec = None if asset.video_codec is None else _text(asset.video_codec, 80)
                 audio_codec = None if asset.audio_codec is None else _text(asset.audio_codec, 80)
+                asset_id = uuid4().hex
+                destination = self.asset_root / f"{asset_id}{suffix}"
+                size, digest = self._copy_and_hash(source_path, destination, MAX_OUTPUT_BYTES)
+                # A copied target belongs to failure cleanup before any result
+                # comparisons or database work can reject it.
                 records.append({
                     "id": asset_id, "plan_id": plan_id, "kind": asset.kind,
                     "name": name, "suffix": suffix, "mime_type": mime_type,
@@ -3277,6 +3311,10 @@ class EditingService:
                     "container": container, "video_codec": video_codec,
                     "audio_codec": audio_codec, "path": destination,
                 })
+                if asset.size_bytes not in {0, size}:
+                    raise EditingError("render_asset_size_mismatch")
+                if asset.sha256 and asset.sha256 != digest:
+                    raise EditingError("render_asset_hash_mismatch")
             now = _now()
             with self._db() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -3489,28 +3527,36 @@ class EditingService:
         if usage.free < before.st_size + EDITING_RESERVE_BYTES:
             raise EditingError("editing_storage_full")
         digest = hashlib.sha256()
+        created: os.stat_result | None = None
         try:
-            with source.open("rb") as reader, destination.open("xb") as writer:
-                opened = os.fstat(reader.fileno())
-                if file_signature(opened) != file_signature(before):
-                    raise EditingError("editing_media_changed")
-                while chunk := reader.read(1024 * 1024):
-                    digest.update(chunk)
-                    writer.write(chunk)
-                writer.flush()
-                os.fsync(writer.fileno())
-                after_handle = os.fstat(reader.fileno())
+            reader = source.open("rb")
+            with close_binary_on_error(reader):
+                writer = destination.open("xb")
+                with close_binary_on_error(writer):
+                    created = os.fstat(writer.fileno())
+                    opened = os.fstat(reader.fileno())
+                    if file_signature(opened) != file_signature(before):
+                        raise EditingError("editing_media_changed")
+                    while chunk := reader.read(1024 * 1024):
+                        digest.update(chunk)
+                        writer.write(chunk)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                    after_handle = os.fstat(reader.fileno())
+                writer.close()
+            reader.close()
             after = _plain(source)
             copied = _plain(destination)
-        except Exception:
-            self._discard_unregistered_file(destination)
+            if (file_signature(after_handle) != file_signature(before)
+                    or file_signature(after) != file_signature(before)
+                    or copied.st_size != before.st_size
+                    or copied.st_dev != created.st_dev
+                    or copied.st_ino != created.st_ino):
+                raise EditingError("editing_media_changed")
+            return before.st_size, digest.hexdigest()
+        except BaseException:
+            discard_created_file(destination, created)
             raise
-        if (file_signature(after_handle) != file_signature(before)
-                or file_signature(after) != file_signature(before)
-                or copied.st_size != before.st_size):
-            self._discard_unregistered_file(destination)
-            raise EditingError("editing_media_changed")
-        return before.st_size, digest.hexdigest()
 
     @staticmethod
     def _discard_unregistered_file(path: Path) -> None:

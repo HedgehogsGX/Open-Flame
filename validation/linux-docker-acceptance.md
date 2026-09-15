@@ -41,7 +41,7 @@ The v0.19 Windows local-app short-link direct transport and explicitly configure
 Cookie defaults are outside this Linux topology. They retain direct/non-isolated
 host networking, do not auto-enable the generic control entry, and do not change
 this runner's credential assignment or short-link egress coverage. Their
-[offline/simulated-network engineering record](iteration-0.19.0-short-links-cookie-defaults-evidence.md)
+[offline/simulated-network engineering record](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.19.0-short-links-cookie-defaults-evidence.md)
 is not real-platform, real-Cookie or target-Linux acceptance.
 
 ## Evidence and safety boundary

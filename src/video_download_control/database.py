@@ -5,7 +5,7 @@ import json
 import sqlite3
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from threading import Lock
 from typing import Callable, Iterator
@@ -1340,6 +1340,8 @@ class Database:
         ) = None
 
     def initialize(self) -> None:
+        if self._path_validator is not None:
+            self._path_validator(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # SQLite serializes writers, but a version check followed by
         # ``executescript`` is not itself atomic. Two fresh processes can both
@@ -1406,108 +1408,102 @@ class Database:
             self._migrate_to_11()
 
     def _migrate_to_8(self) -> None:
-        connection = sqlite3.connect(self.path, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        try:
-            connection.execute("PRAGMA busy_timeout = 5000")
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA foreign_keys = OFF")
-            connection.execute("PRAGMA legacy_alter_table = ON")
-            if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
-                raise RuntimeError("schema 8 migration could not disable foreign keys")
-            if connection.execute("PRAGMA legacy_alter_table").fetchone()[0] != 1:
-                raise RuntimeError(
-                    "schema 8 migration could not enable legacy alter table"
-                )
+        with self._owned_connection() as connection:
+            try:
+                connection.execute("PRAGMA busy_timeout = 5000")
+                connection.execute("PRAGMA synchronous = FULL")
+                connection.execute("PRAGMA foreign_keys = OFF")
+                connection.execute("PRAGMA legacy_alter_table = ON")
+                if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+                    raise RuntimeError("schema 8 migration could not disable foreign keys")
+                if connection.execute("PRAGMA legacy_alter_table").fetchone()[0] != 1:
+                    raise RuntimeError(
+                        "schema 8 migration could not enable legacy alter table"
+                    )
 
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT MAX(version) AS version FROM schema_migrations"
-            ).fetchone()
-            current_version = int(row["version"] or 0)
-            # Another process may have completed later migrations after
-            # this caller observed Schema 7 in ``initialize``.
-            if 8 <= current_version <= SCHEMA_VERSION:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT MAX(version) AS version FROM schema_migrations"
+                ).fetchone()
+                current_version = int(row["version"] or 0)
+                # Another process may have completed later migrations after
+                # this caller observed Schema 7 in ``initialize``.
+                if 8 <= current_version <= SCHEMA_VERSION:
+                    connection.commit()
+                    return
+                if current_version != 7:
+                    raise RuntimeError(
+                        f"schema 8 migration requires schema 7, found {current_version}"
+                    )
+
+                invalid_attempt = connection.execute(
+                    """
+                    SELECT relation.id
+                    FROM source_relations AS relation
+                    LEFT JOIN job_attempts AS attempt
+                      ON attempt.id = relation.discovered_by_attempt_id
+                    WHERE relation.discovered_by_attempt_id IS NOT NULL
+                      AND attempt.id IS NULL
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if invalid_attempt is not None:
+                    raise RuntimeError(
+                        "schema 8 migration found an invalid legacy relation attempt"
+                    )
+
+                self._execute_in_current_transaction(
+                    connection, MIGRATION_8_CREATE_DISCOVERY_SQL
+                )
+                self._execute_in_current_transaction(
+                    connection, MIGRATION_8_REBUILD_RELATIONS_SQL
+                )
+                discoveries, relations = _legacy_discovery_rows(connection)
+                connection.executemany(
+                    """
+                    INSERT INTO source_discoveries(
+                        id, parent_source_item_id, relation_type, snapshot_hash,
+                        members_json, member_count, discovered_by_attempt_id,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    discoveries,
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO source_relations(
+                        id, discovery_id, parent_source_item_id,
+                        child_source_item_id, relation_type, ordinal,
+                        media_kind, discovered_by_attempt_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    relations,
+                )
+                connection.execute("DROP TABLE source_relations_v7")
+
+                self._execute_in_current_transaction(
+                    connection, MIGRATION_8_REBUILD_JOBS_SQL
+                )
+                self._execute_in_current_transaction(connection, MIGRATION_8_FINISH_SQL)
+
+                violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    table = str(violations[0][0])
+                    raise RuntimeError(
+                        f"schema 8 migration foreign key check failed for {table}"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations(version, applied_at)
+                    VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    """
+                )
                 connection.commit()
-                return
-            if current_version != 7:
-                raise RuntimeError(
-                    f"schema 8 migration requires schema 7, found {current_version}"
-                )
-
-            invalid_attempt = connection.execute(
-                """
-                SELECT relation.id
-                FROM source_relations AS relation
-                LEFT JOIN job_attempts AS attempt
-                  ON attempt.id = relation.discovered_by_attempt_id
-                WHERE relation.discovered_by_attempt_id IS NOT NULL
-                  AND attempt.id IS NULL
-                LIMIT 1
-                """
-            ).fetchone()
-            if invalid_attempt is not None:
-                raise RuntimeError(
-                    "schema 8 migration found an invalid legacy relation attempt"
-                )
-
-            self._execute_in_current_transaction(
-                connection, MIGRATION_8_CREATE_DISCOVERY_SQL
-            )
-            self._execute_in_current_transaction(
-                connection, MIGRATION_8_REBUILD_RELATIONS_SQL
-            )
-            discoveries, relations = _legacy_discovery_rows(connection)
-            connection.executemany(
-                """
-                INSERT INTO source_discoveries(
-                    id, parent_source_item_id, relation_type, snapshot_hash,
-                    members_json, member_count, discovered_by_attempt_id,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                discoveries,
-            )
-            connection.executemany(
-                """
-                INSERT INTO source_relations(
-                    id, discovery_id, parent_source_item_id,
-                    child_source_item_id, relation_type, ordinal,
-                    media_kind, discovered_by_attempt_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                relations,
-            )
-            connection.execute("DROP TABLE source_relations_v7")
-
-            self._execute_in_current_transaction(
-                connection, MIGRATION_8_REBUILD_JOBS_SQL
-            )
-            self._execute_in_current_transaction(connection, MIGRATION_8_FINISH_SQL)
-
-            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-            if violations:
-                table = str(violations[0][0])
-                raise RuntimeError(
-                    f"schema 8 migration foreign key check failed for {table}"
-                )
-            connection.execute(
-                """
-                INSERT INTO schema_migrations(version, applied_at)
-                VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                """
-            )
-            connection.commit()
-        except Exception:
-            if connection.in_transaction:
-                connection.rollback()
-            raise
-        finally:
-            if connection.in_transaction:
-                connection.rollback()
-            connection.execute("PRAGMA legacy_alter_table = OFF")
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.close()
+            except BaseException:
+                with suppress(BaseException):
+                    if connection.in_transaction:
+                        connection.rollback()
+                raise
 
     def _migrate_to_9(self) -> None:
         """Add the Stage 0 job-kind identity in one forward-only transaction."""
@@ -1580,48 +1576,55 @@ class Database:
             raise RuntimeError("incomplete database migration statement")
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def _owned_connection(self) -> Iterator[sqlite3.Connection]:
+        """Validate every opening and own cleanup from the first acquired handle."""
+
         if self._path_validator is not None:
             self._path_validator(self.path)
         connection = sqlite3.connect(self.path, timeout=5.0)
-        if self._path_validator is not None:
-            try:
-                self._path_validator(self.path)
-            except Exception:
-                connection.close()
-                raise
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA recursive_triggers = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA synchronous = FULL")
         try:
+            if self._path_validator is not None:
+                self._path_validator(self.path)
+            connection.row_factory = sqlite3.Row
             yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
+        except BaseException:
+            with suppress(BaseException):
+                connection.close()
             raise
-        finally:
+        else:
             connection.close()
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        with self._owned_connection() as connection:
+            try:
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute("PRAGMA recursive_triggers = ON")
+                connection.execute("PRAGMA busy_timeout = 5000")
+                connection.execute("PRAGMA synchronous = FULL")
+                yield connection
+                connection.commit()
+            except BaseException:
+                with suppress(BaseException):
+                    connection.rollback()
+                raise
 
     def _enable_wal(self) -> None:
         """Set the persistent journal mode once, with bounded lock retries."""
 
         for attempt in range(5):
-            connection = sqlite3.connect(self.path, timeout=5.0)
-            try:
-                connection.execute("PRAGMA busy_timeout = 5000")
-                row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
-                if row is None or str(row[0]).lower() != "wal":
-                    raise RuntimeError("SQLite WAL mode could not be enabled")
-                return
-            except sqlite3.OperationalError as exc:
-                locked = "locked" in str(exc).lower() or "busy" in str(exc).lower()
-                if not locked or attempt == 4:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
-            finally:
-                connection.close()
+            with self._owned_connection() as connection:
+                try:
+                    connection.execute("PRAGMA busy_timeout = 5000")
+                    row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
+                    if row is None or str(row[0]).lower() != "wal":
+                        raise RuntimeError("SQLite WAL mode could not be enabled")
+                    return
+                except sqlite3.OperationalError as exc:
+                    locked = "locked" in str(exc).lower() or "busy" in str(exc).lower()
+                    if not locked or attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
     def ping(self) -> bool:
         try:

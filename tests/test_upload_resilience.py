@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from upload_contract_fixtures import (
+    synthetic_receipt_identity, synthetic_upload_result,
+    fail_confirmed_upload, reconcile_synthetic_not_accepted,
+)
+
 from collections import Counter
 import ctypes
 from ctypes import wintypes
@@ -24,6 +29,8 @@ MAX_TRANSIENT_POLL_BYTES = 16 * 1024**2
 
 
 class SequencedBackend:
+    receipt_identity = staticmethod(synthetic_receipt_identity)
+
     """A local backend whose upload calls advance only when the test permits."""
 
     def __init__(self) -> None:
@@ -55,7 +62,7 @@ class SequencedBackend:
                 raise TimeoutError("synthetic upload gate timed out")
             if stop.is_set():
                 return BackendResult("unknown", "synthetic_stopped")
-            return BackendResult("submitted", "synthetic_submitted")
+            return synthetic_upload_result(request, code="synthetic_submitted")
         finally:
             with self._guard:
                 self.active -= 1

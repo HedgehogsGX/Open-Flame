@@ -18,6 +18,7 @@ from ..domain import ErrorCode
 from ..editing.contracts import EditingError, recipe_from_mapping
 from ..service import BatchService, BatchValidationError
 from ..uploads.contracts import UploadError
+from ..uploads.metadata import cover_slot
 from ..uploads.identity import (
     bind_current_upload_target,
     normalize_account_bindings,
@@ -34,6 +35,8 @@ from .contracts import (
     MAX_WORKFLOW_SEGMENTS,
     UploadPrepared,
     UploadSnapshot,
+    workflow_upload_request,
+    workflow_upload_request_key,
 )
 from .contracts import WorkflowError
 
@@ -206,26 +209,6 @@ def _ai_shape(ai: Mapping[str, Any]) -> tuple[frozenset[object], str]:
     if _TRANSCRIPTION_MODE_KEY in keys:
         keys = keys - {_TRANSCRIPTION_MODE_KEY}
     return keys, mode
-
-
-def _validate_retry_successors(
-    record_ids: Sequence[str],
-    successors: Mapping[str, str],
-    *,
-    error_code: str,
-) -> None:
-    """Reject cycles in a retry forest without limiting legitimate history."""
-
-    resolved: set[str] = set()
-    for start in record_ids:
-        current = start
-        path: set[str] = set()
-        while current in successors and current not in resolved:
-            if current in path:
-                raise WorkflowError(error_code)
-            path.add(current)
-            current = successors[current]
-        resolved.update(path)
 
 
 @dataclass(slots=True)
@@ -454,7 +437,7 @@ class LocalWorkflowAdapter:
             platform = target.get("platform")
             if (
                 not isinstance(platform, str)
-                or self._cover_slot(platform, *dimensions) is None
+                or cover_slot(platform, *dimensions) is None
             ):
                 raise WorkflowError("workflow_cover_incompatible")
         return bindings
@@ -1420,25 +1403,31 @@ class LocalWorkflowAdapter:
             raise WorkflowError(error_code) from None
         if expected_project_id is not None and project_id != expected_project_id:
             raise WorkflowError(error_code)
-        rows = self.editing_manager.invoke("ai_tasks", project_id=project_id)
-        if not isinstance(rows, list):
+        try:
+            resolved = self.editing_manager.invoke(
+                "resolve_ai_task_retry", task_id, project_id=project_id
+            )
+        except EditingError as error:
+            if error.code == error_code:
+                raise WorkflowError(error_code) from error
+            raise
+        if not isinstance(resolved, tuple) or len(resolved) != 2:
             raise WorkflowError(error_code)
-
-        records: dict[str, Mapping[str, Any]] = {}
-        for row in rows:
-            if not isinstance(row, Mapping) or row.get("project_id") != project_id:
-                raise WorkflowError(error_code)
-            try:
-                current_id = _record_id(row)
-            except WorkflowError:
-                raise WorkflowError(error_code) from None
-            if current_id in records:
-                raise WorkflowError(error_code)
-            records[current_id] = row
-
-        start = records.get(task_id)
-        if start is None or any(
+        start, leaf = resolved
+        if (
+            not isinstance(start, Mapping)
+            or not isinstance(leaf, Mapping)
+            or start.get("id") != task_id
+            or leaf.get("project_id") != project_id
+        ):
+            raise WorkflowError(error_code)
+        try:
+            _record_id(leaf)
+        except WorkflowError:
+            raise WorkflowError(error_code) from None
+        if any(
             start.get(field) != task.get(field)
+            or leaf.get(field) != start.get(field)
             for field in (
                 "project_id",
                 "operation",
@@ -1447,41 +1436,7 @@ class LocalWorkflowAdapter:
             )
         ):
             raise WorkflowError(error_code)
-
-        successors: dict[str, str] = {}
-        for current_id, row in records.items():
-            retry_of = row.get("retry_of")
-            if retry_of is None:
-                continue
-            try:
-                parent_id = _hex_identifier(retry_of)
-            except WorkflowError:
-                raise WorkflowError(error_code) from None
-            if (
-                parent_id not in records
-                or parent_id == current_id
-                or parent_id in successors
-            ):
-                raise WorkflowError(error_code)
-            parent = records[parent_id]
-            if any(
-                row.get(field) != parent.get(field)
-                for field in (
-                    "operation",
-                    "source_revision_id",
-                    "request_sha256",
-                )
-            ):
-                raise WorkflowError(error_code)
-            successors[parent_id] = current_id
-
-        _validate_retry_successors(
-            tuple(records), successors, error_code=error_code
-        )
-        current_id = task_id
-        while current_id in successors:
-            current_id = successors[current_id]
-        return records[current_id]
+        return leaf
 
     def _ai_task_retry_blocked(self, task: Mapping[str, Any]) -> bool:
         """Read the full project-level recursive block set, independent of paging."""
@@ -1996,62 +1951,6 @@ class LocalWorkflowAdapter:
         except EditingError as error:
             _domain_failure(error, "editing_failed")
 
-    def _latest_edit_plan(
-        self, plan_id: str, project_id: str
-    ) -> Mapping[str, Any]:
-        try:
-            plans = self.editing_manager.invoke("plans", project_id=project_id)
-        except EditingError as error:
-            _domain_failure(error, "editing_failed")
-        if not isinstance(plans, list):
-            raise WorkflowError("edit_plan_set_invalid")
-        records: dict[str, Mapping[str, Any]] = {}
-        successors: dict[str, str] = {}
-        for plan in plans:
-            if not isinstance(plan, Mapping) or plan.get("project_id") != project_id:
-                raise WorkflowError("edit_plan_set_invalid")
-            try:
-                current_id = _record_id(plan)
-            except WorkflowError:
-                raise WorkflowError("edit_plan_set_invalid") from None
-            if current_id in records:
-                raise WorkflowError("edit_plan_set_invalid")
-            records[current_id] = plan
-        if plan_id not in records:
-            raise WorkflowError("edit_plan_mismatch")
-        for current_id, plan in records.items():
-            retry_of = plan.get("retry_of")
-            if retry_of is None:
-                continue
-            try:
-                parent_id = _hex_identifier(retry_of)
-            except WorkflowError:
-                raise WorkflowError("edit_plan_set_invalid") from None
-            if (
-                parent_id not in records
-                or parent_id in successors
-                or parent_id == current_id
-            ):
-                raise WorkflowError("edit_plan_set_invalid")
-            parent = records[parent_id]
-            if any(
-                plan.get(field) != parent.get(field)
-                for field in (
-                    "draft_version",
-                    "recipe_sha256",
-                    "timeline_revision_id",
-                )
-            ):
-                raise WorkflowError("edit_plan_set_invalid")
-            successors[parent_id] = current_id
-        _validate_retry_successors(
-            tuple(records), successors, error_code="edit_plan_set_invalid"
-        )
-        current_id = plan_id
-        while current_id in successors:
-            current_id = successors[current_id]
-        return records[current_id]
-
     def cancel_edit(
         self,
         plan_id: str,
@@ -2070,10 +1969,23 @@ class LocalWorkflowAdapter:
                 expected_name=expected_name,
                 expected_source_asset_id=expected_source_asset_id,
             )
-            plan = self._latest_edit_plan(plan_id, expected_project_id)
+            try:
+                plan = self.editing_manager.invoke(
+                    "resolve_plan_retry", plan_id, project_id=expected_project_id
+                )
+            except EditingError as error:
+                _domain_failure(error, "editing_failed")
+            if (
+                not isinstance(plan, Mapping)
+                or plan.get("project_id") != expected_project_id
+            ):
+                raise WorkflowError("edit_plan_set_invalid")
+            try:
+                leaf_id = _record_id(plan)
+            except WorkflowError:
+                raise WorkflowError("edit_plan_set_invalid") from None
         except WorkflowError as error:
             return CancellationSnapshot("attention", code=error.code)
-        leaf_id = _record_id(plan)
         if plan.get("code") in _AI_UNCERTAIN_CODES:
             return CancellationSnapshot("attention", code=plan["code"])
         try:
@@ -2274,11 +2186,7 @@ class LocalWorkflowAdapter:
             source_id = _managed_import_id(
                 workflow_id, "edit_video", output_id, output_sha256
             )
-            request_key = (
-                f"wf-{workflow_id}-upload-jobs"
-                if segment_ordinal == 1
-                else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
-            )
+            request_key = workflow_upload_request_key(workflow_id, segment_ordinal)
             edit_imported_cover_id = (
                 _managed_import_id(
                     workflow_id,
@@ -2470,17 +2378,11 @@ class LocalWorkflowAdapter:
             )
             if _record_id(source) != source_id:
                 raise WorkflowError("workflow_domain_data_invalid")
+            request = workflow_upload_request(source_id, account_ids, upload, overrides)
+            # Keep the execution boundary's tag list separate from frozen intent.
+            request["tags"] = list(upload["tags"])
             jobs = service.create_jobs(
-                source_id=source_id,
-                account_ids=list(account_ids),
-                title=upload["title"],
-                description=upload["description"],
-                tags=list(upload["tags"]),
-                category_id=upload["category_id"],
-                mode=upload["mode"],
-                copyright=upload["copyright"],
-                source_credit=upload["source_credit"],
-                target_overrides=overrides,
+                **request,
                 expected_account_bindings=[dict(binding) for binding in bindings],
                 idempotency_key=request_key,
             )
@@ -3221,7 +3123,7 @@ class LocalWorkflowAdapter:
             if source_id in source_ids:
                 return UploadSnapshot("attention", code="upload_job_set_invalid")
             source_ids.add(source_id)
-            expected_requests[request_key] = self._workflow_upload_request(
+            expected_requests[request_key] = workflow_upload_request(
                 source_id, account_ids, expected_upload, overrides
             )
 
@@ -3503,11 +3405,7 @@ class LocalWorkflowAdapter:
         ):
             return CancellationSnapshot("attention", code="upload_request_mismatch")
 
-        request_key = (
-            f"wf-{workflow_id}-upload-jobs"
-            if segment_ordinal == 1
-            else f"wf-{workflow_id}-upload-jobs-{segment_ordinal:03d}"
-        )
+        request_key = workflow_upload_request_key(workflow_id, segment_ordinal)
         try:
             service = self.upload_manager.get()
         except UploadError as error:
@@ -3630,33 +3528,19 @@ class LocalWorkflowAdapter:
                     return CancellationSnapshot(
                         "attention", code="upload_request_mismatch"
                     )
-                overrides = self._upload_overrides(
-                    expected_upload.get("target_overrides"),
-                    account_ids,
-                    binding_platforms,
-                    cover_record,
-                    imported_cover_id,
-                )
-                request_jobs = service.claim_workflow_request_for_cancellation(
-                    request_key,
-                    expected_request=self._workflow_upload_request(
-                        source_id, account_ids, expected_upload, overrides
-                    ),
-                )
-            else:
-                overrides = self._upload_overrides(
-                    expected_upload.get("target_overrides"),
-                    account_ids,
-                    binding_platforms,
-                    cover_record,
-                    imported_cover_id,
-                )
-                request_jobs = service.claim_workflow_request_for_cancellation(
-                    request_key,
-                    expected_request=self._workflow_upload_request(
-                        source_id, account_ids, expected_upload, overrides
-                    ),
-                )
+            overrides = self._upload_overrides(
+                expected_upload.get("target_overrides"),
+                account_ids,
+                binding_platforms,
+                cover_record,
+                imported_cover_id,
+            )
+            request_jobs = service.claim_workflow_request_for_cancellation(
+                request_key,
+                expected_request=workflow_upload_request(
+                    source_id, account_ids, expected_upload, overrides
+                ),
+            )
         except WorkflowError as error:
             if error.code in {
                 "workflow_source_cover_unavailable",
@@ -3829,7 +3713,7 @@ class LocalWorkflowAdapter:
             ):
                 raise WorkflowError("workflow_domain_data_invalid")
             for account_id in account_ids:
-                slot = LocalWorkflowAdapter._cover_slot(
+                slot = cover_slot(
                     platforms[account_id], width, height
                 )
                 if slot is None:
@@ -3851,45 +3735,6 @@ class LocalWorkflowAdapter:
             if account_id in by_account
         ]
 
-    @staticmethod
-    def _workflow_upload_request(
-        source_id: str,
-        account_ids: Sequence[str],
-        upload: Mapping[str, Any],
-        target_overrides: Sequence[Mapping[str, Any]],
-    ) -> dict[str, object]:
-        """Build the Upload-domain request identity from frozen Workflow data."""
-
-        return {
-            "source_id": source_id,
-            "account_ids": list(account_ids),
-            "title": upload.get("title"),
-            "description": upload.get("description"),
-            "tags": upload.get("tags"),
-            "category_id": upload.get("category_id"),
-            "mode": upload.get("mode"),
-            "copyright": upload.get("copyright"),
-            "source_credit": upload.get("source_credit"),
-            "target_overrides": [dict(item) for item in target_overrides],
-        }
-
-    @staticmethod
-    def _cover_slot(platform: str, width: int, height: int) -> str | None:
-        if platform == "bilibili":
-            return "cover_landscape_asset_id" if width >= height else None
-        if platform == "douyin":
-            return (
-                "cover_landscape_asset_id"
-                if width >= height
-                else "cover_portrait_asset_id"
-            )
-        if platform == "tencent":
-            ratio = width / height
-            if abs(ratio - 4 / 3) <= 0.04:
-                return "cover_landscape_asset_id"
-            if abs(ratio - 3 / 4) <= 0.04:
-                return "cover_portrait_asset_id"
-        return None
 
 
 __all__ = ["LocalWorkflowAdapter"]

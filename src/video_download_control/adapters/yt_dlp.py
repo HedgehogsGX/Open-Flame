@@ -17,7 +17,8 @@ import json
 import math
 import os
 import stat
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Any
 
 from ..capabilities import DEFAULT_DOWNLOAD_CAPABILITIES
 from ..domain import ErrorCode, Platform
+from ..managed_files import discard_created_file
 from ..subprocess_runner import (
     CommandCancelled,
     CommandOutputLimitExceeded,
@@ -489,7 +491,7 @@ class YtDlpAdapter:
                 output_dir=request.output_dir,
             )
         except BaseException:
-            _remove_mapping_file(mapping_file)
+            _remove_mapping_files(mapping_file, preserve_failure=True)
             raise
         progress_tracker = _YtDlpProgressTracker(progress)
         try:
@@ -517,11 +519,13 @@ class YtDlpAdapter:
                 max_bytes=self._mapping_limit_bytes,
                 require_payload=self._require_thumbnail_mapping_payload,
             )
-        finally:
-            try:
-                _remove_mapping_file(thumbnail_mapping_file)
-            finally:
-                _remove_mapping_file(mapping_file)
+        except BaseException:
+            _remove_mapping_files(
+                thumbnail_mapping_file, mapping_file, preserve_failure=True
+            )
+            raise
+        else:
+            _remove_mapping_files(thumbnail_mapping_file, mapping_file)
         classified = _classify_output(request, mappings, thumbnail_proofs)
         try:
             total_bytes = sum(
@@ -1160,41 +1164,78 @@ def _prepare_control_file(
             ErrorCode.STORAGE_ERROR,
             "yt-dlp mapping file could not be created",
         ) from exc
+    created: os.stat_result | None = None
     try:
-        created = os.fstat(descriptor)
-        if not stat.S_ISREG(created.st_mode) or created.st_nlink != 1:
-            raise AdapterFailure(
-                ErrorCode.VALIDATION_FAILED,
-                "yt-dlp mapping file was not created as a private regular file",
-            )
-        if os.name == "posix" and stat.S_IMODE(created.st_mode) & 0o077:
-            raise AdapterFailure(
-                ErrorCode.VALIDATION_FAILED,
-                "yt-dlp mapping file permissions are too broad",
-            )
-        os.fsync(descriptor)
+        with _owned_mapping_descriptor(descriptor):
+            created = os.fstat(descriptor)
+            if not stat.S_ISREG(created.st_mode) or created.st_nlink != 1:
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp mapping file was not created as a private regular file",
+                )
+            if os.name == "posix" and stat.S_IMODE(created.st_mode) & 0o077:
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp mapping file permissions are too broad",
+                )
+            os.fsync(descriptor)
     except OSError:
-        failure: AdapterFailure | None = AdapterFailure(
+        failure: BaseException | None = AdapterFailure(
             ErrorCode.STORAGE_ERROR,
             "yt-dlp mapping file could not be initialized",
         )
-    except AdapterFailure as exc:
+    except BaseException as exc:
         failure = exc
     else:
         failure = None
-    finally:
-        os.close(descriptor)
     if failure is not None:
-        try:
-            mapping_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        discard_created_file(mapping_path, created)
         raise failure
+    assert created is not None
     return _ControlFile(
         path=mapping_path,
         device=created.st_dev,
         inode=created.st_ino,
     )
+
+
+@contextmanager
+def _owned_mapping_descriptor(descriptor: int) -> Iterator[None]:
+    """Close one control descriptor without replacing an active failure."""
+
+    try:
+        yield
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            pass
+        raise
+    else:
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            raise AdapterFailure(
+                ErrorCode.STORAGE_ERROR,
+                "yt-dlp mapping file could not be closed",
+            ) from exc
+
+
+def _remove_mapping_files(
+    *control_files: _ControlFile,
+    preserve_failure: bool = False,
+) -> None:
+    """Attempt every control cleanup; successful operations still fail closed."""
+
+    failure: BaseException | None = None
+    for control_file in control_files:
+        try:
+            _remove_mapping_file(control_file)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None and not preserve_failure:
+        raise failure
 
 
 def _remove_mapping_file(control_file: _ControlFile) -> None:
@@ -1231,7 +1272,6 @@ def _read_mapping_payload(
     max_bytes: int,
 ) -> bytes:
     mapping_path = control_file.path
-    descriptor: int | None = None
     try:
         before = mapping_path.lstat()
         if (before.st_dev, before.st_ino) != (
@@ -1258,48 +1298,49 @@ def _read_mapping_payload(
         if hasattr(os, "O_BINARY"):
             flags |= os.O_BINARY
         descriptor = os.open(mapping_path, flags)
-        opened = os.fstat(descriptor)
-        if (
-            (opened.st_dev, opened.st_ino)
-            != (control_file.device, control_file.inode)
-            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
-            or not stat.S_ISREG(opened.st_mode)
-            or opened.st_nlink != 1
-            or (os.name == "posix" and stat.S_IMODE(opened.st_mode) & 0o077)
-        ):
-            raise AdapterFailure(
-                ErrorCode.VALIDATION_FAILED,
-                "yt-dlp mapping changed while it was being opened",
-            )
-        if opened.st_size > max_bytes:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping exceeded its byte limit",
-            )
-        chunks: list[bytes] = []
-        remaining = max_bytes + 1
-        while remaining > 0:
-            chunk = os.read(descriptor, remaining)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        payload = b"".join(chunks)
-        after = os.fstat(descriptor)
-        if (
-            (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
-            or after.st_size != opened.st_size
-            or len(payload) != opened.st_size
-        ):
-            raise AdapterFailure(
-                ErrorCode.VALIDATION_FAILED,
-                "yt-dlp mapping changed while it was being read",
-            )
-        if after.st_size > max_bytes:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping exceeded its byte limit",
-            )
+        with _owned_mapping_descriptor(descriptor):
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino)
+                != (control_file.device, control_file.inode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (os.name == "posix" and stat.S_IMODE(opened.st_mode) & 0o077)
+            ):
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp mapping changed while it was being opened",
+                )
+            if opened.st_size > max_bytes:
+                raise AdapterFailure(
+                    ErrorCode.EXTRACTOR_BROKEN,
+                    "yt-dlp output mapping exceeded its byte limit",
+                )
+            chunks: list[bytes] = []
+            remaining = max_bytes + 1
+            while remaining > 0:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if (
+                (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                or after.st_size != opened.st_size
+                or len(payload) != opened.st_size
+            ):
+                raise AdapterFailure(
+                    ErrorCode.VALIDATION_FAILED,
+                    "yt-dlp mapping changed while it was being read",
+                )
+            if after.st_size > max_bytes:
+                raise AdapterFailure(
+                    ErrorCode.EXTRACTOR_BROKEN,
+                    "yt-dlp output mapping exceeded its byte limit",
+                )
     except AdapterFailure:
         raise
     except FileNotFoundError as exc:
@@ -1312,15 +1353,44 @@ def _read_mapping_payload(
             ErrorCode.STORAGE_ERROR,
             "yt-dlp mapping file could not be inspected",
         ) from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
     if len(payload) > max_bytes:
         raise AdapterFailure(
             ErrorCode.EXTRACTOR_BROKEN,
             "yt-dlp output mapping exceeded its byte limit",
         )
     return payload
+
+
+def _mapping_lines(payload: bytes, *, kind: str) -> list[bytes]:
+    """Validate the shared bounded JSONL framing before inspecting output paths."""
+
+    lines = payload.splitlines()
+    if not lines or len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping has an invalid record count",
+        )
+    return lines
+
+
+def _mapping_record(
+    line: bytes, *, kind: str, fields: set[str]
+) -> dict[str, object]:
+    """Decode one record; ownership and scalar validation stay with its parser."""
+
+    try:
+        record = json.loads(line.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping contains invalid JSONL",
+        ) from exc
+    if not isinstance(record, dict) or set(record) != fields:
+        raise AdapterFailure(
+            ErrorCode.EXTRACTOR_BROKEN,
+            f"yt-dlp {kind} mapping contains an invalid record shape",
+        )
+    return record
 
 
 def _read_download_mapping(
@@ -1331,12 +1401,7 @@ def _read_download_mapping(
     max_bytes: int,
 ) -> tuple[_MappedOriginal, ...]:
     payload = _read_mapping_payload(control_file, max_bytes=max_bytes)
-    lines = payload.splitlines()
-    if not lines or len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
-        raise AdapterFailure(
-            ErrorCode.EXTRACTOR_BROKEN,
-            "yt-dlp output mapping has an invalid record count",
-        )
+    lines = _mapping_lines(payload, kind="output")
 
     try:
         resolved_output = output_dir.resolve(strict=True)
@@ -1348,22 +1413,13 @@ def _read_download_mapping(
     by_media_key: dict[str, _MappedOriginal] = {}
     mapped_paths: set[Path] = set()
     for line in lines:
-        try:
-            record = json.loads(line.decode("utf-8", errors="strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping contains invalid JSONL",
-            ) from exc
-        if not isinstance(record, dict) or set(record) != {"id", "filepath"}:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp output mapping contains an invalid record shape",
-            )
+        record = _mapping_record(line, kind="output", fields={"id", "filepath"})
         media_key = record["id"]
         filepath = record["filepath"]
         if (
-            _safe_text(media_key, max_chars=256) != media_key
+            not isinstance(media_key, str)
+            or not isinstance(filepath, str)
+            or _safe_text(media_key, max_chars=256) != media_key
             or _safe_text(filepath, max_chars=4096) != filepath
         ):
             raise AdapterFailure(
@@ -1433,12 +1489,7 @@ def _read_thumbnail_mapping(
         # original two-field control record.  This path carries no thumbnail
         # identity proof; the production command writes one record per item.
         return None
-    lines = payload.splitlines()
-    if len(lines) > _MAX_DOWNLOAD_ITEMS or any(not line for line in lines):
-        raise AdapterFailure(
-            ErrorCode.EXTRACTOR_BROKEN,
-            "yt-dlp thumbnail mapping has an invalid record count",
-        )
+    lines = _mapping_lines(payload, kind="thumbnail")
 
     try:
         resolved_output = output_dir.resolve(strict=True)
@@ -1452,29 +1503,19 @@ def _read_thumbnail_mapping(
     thumbnail_paths: set[Path] = set()
     original_paths = {mapping.path for mapping in mappings}
     for line in lines:
-        try:
-            record = json.loads(line.decode("utf-8", errors="strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp thumbnail mapping contains invalid JSONL",
-            ) from exc
-        if not isinstance(record, dict) or set(record) != {
-            "id",
-            "filepath",
-            "thumbnail_id",
-            "thumbnail_filepath",
-        }:
-            raise AdapterFailure(
-                ErrorCode.EXTRACTOR_BROKEN,
-                "yt-dlp thumbnail mapping contains an invalid record shape",
-            )
+        record = _mapping_record(
+            line,
+            kind="thumbnail",
+            fields={"id", "filepath", "thumbnail_id", "thumbnail_filepath"},
+        )
         media_key = record["id"]
         filepath = record["filepath"]
         thumbnail_id = record["thumbnail_id"]
         thumbnail_filepath = record["thumbnail_filepath"]
         if (
-            _safe_text(media_key, max_chars=256) != media_key
+            not isinstance(media_key, str)
+            or not isinstance(filepath, str)
+            or _safe_text(media_key, max_chars=256) != media_key
             or _safe_text(filepath, max_chars=4096) != filepath
         ):
             raise AdapterFailure(

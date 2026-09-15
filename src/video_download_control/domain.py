@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 
 
@@ -73,3 +74,17 @@ class ErrorCode(StrEnum):
     WORKER_LOST = "worker_lost"
     WORKER_TIMEOUT = "worker_timeout"
     WORKER_INTERNAL = "worker_internal"
+
+
+def validate_retry_delay_seconds(value: float) -> None:
+    """Shared numeric contract; retry timing and attempt budgets belong to policy."""
+
+    valid = False
+    if type(value) in (int, float):
+        try:
+            valid = math.isfinite(value) and value >= 0
+        except OverflowError:
+            # Python integers can exceed the representable float range.
+            pass
+    if not valid:
+        raise ValueError("retry delay must be finite and non-negative")

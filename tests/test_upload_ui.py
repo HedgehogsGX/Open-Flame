@@ -20,6 +20,7 @@ class Element{
  set textContent(value){this._textWriteCount+=1;this._text=String(value);for(const child of [...this.children])this.detach(child,false);}
  set innerHTML(value){throw new Error('Unsafe innerHTML assignment');}
  get firstChild(){return this.children[0];}get lastElementChild(){return [...this.children].reverse().find(item=>item.tagName!=='#text')||null;}
+ get previousElementSibling(){if(!this.parentElement)return null;const siblings=this.parentElement.children,index=siblings.indexOf(this);return siblings.slice(0,index).reverse().find(item=>item.tagName!=='#text')||null;}
  get isConnected(){return this.tagName==='document'||!!this.parentElement?.isConnected;}
  removeAttribute(name){delete this.attributes[name];delete this[name];}setAttribute(name,value){this.attributes[name]=String(value);}
  focus(){if(document.activeElement)document.activeElement.focused=false;document.activeElement=this;this.focused=true;}scrollIntoView(){this.scrolledIntoView=true;}
@@ -36,7 +37,21 @@ function construct(node){const item=new Element(node.tag,node.attrs,node.text||'
 const root=construct(fixture.page);function all(item){return [item,...item.children.flatMap(all)];}
 const documentListeners=new Map();
 const document={activeElement:null,hidden:false,getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),querySelectorAll(selector){if(selector==='button')return all(root).filter(item=>item.tagName==='button');if(selector==='#account-choices input:checked')return all(ids.get('account-choices')).filter(item=>item.tagName==='input'&&item.checked);throw new Error('Unsupported selector '+selector);},addEventListener(name,callback){if(!documentListeners.has(name))documentListeners.set(name,[]);documentListeners.get(name).push(callback);}};
-const state={requests:[],accounts:[{id:'a'.repeat(32),platform:'bilibili',name:'Synthetic Bili',auth_state:'ready',lifecycle_state:'active',disconnected_at:null},{id:'b'.repeat(32),platform:'tencent',name:'Synthetic Tencent',auth_state:'ready',lifecycle_state:'active',disconnected_at:null}],sources:[{id:'c'.repeat(32),name:'synthetic.mp4',size:42,sha256:'d'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true}],covers:[{id:'5'.repeat(32),name:'landscape.jpg',size:20,sha256:'6'.repeat(64),mime_type:'image/jpeg',width:1200,height:900,media_present:true,media_state:'present',active_reference_count:0,can_delete:true},{id:'6'.repeat(32),name:'portrait.png',size:24,sha256:'7'.repeat(64),mime_type:'image/png',width:900,height:1200,media_present:true,media_state:'present',active_reference_count:0,can_delete:true}],storage:{managed_bytes:42,registered_source_count:1,present_source_count:1,missing_source_count:0,deleted_source_count:0,changed_source_count:0,unsafe_source_count:0,orphan_file_count:0,orphan_bytes:0,unsafe_entry_count:0,free_bytes:1073741824,reserve_bytes:67108864,low_space:false},jobs:[],operations:[],turn:()=>new Promise(resolve=>setImmediate(resolve)),all};
+const state={requests:[],attempts:new Map(),attemptJobs:new Map(),accounts:[{id:'a'.repeat(32),platform:'bilibili',name:'Synthetic Bili',auth_state:'ready',lifecycle_state:'active',disconnected_at:null},{id:'b'.repeat(32),platform:'tencent',name:'Synthetic Tencent',auth_state:'ready',lifecycle_state:'active',disconnected_at:null}],sources:[{id:'c'.repeat(32),name:'synthetic.mp4',size:42,sha256:'d'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true}],covers:[{id:'5'.repeat(32),name:'landscape.jpg',size:20,sha256:'6'.repeat(64),mime_type:'image/jpeg',width:1200,height:900,media_present:true,media_state:'present',active_reference_count:0,can_delete:true},{id:'6'.repeat(32),name:'portrait.png',size:24,sha256:'7'.repeat(64),mime_type:'image/png',width:900,height:1200,media_present:true,media_state:'present',active_reference_count:0,can_delete:true}],storage:{managed_bytes:42,registered_source_count:1,present_source_count:1,missing_source_count:0,deleted_source_count:0,changed_source_count:0,unsafe_source_count:0,orphan_file_count:0,orphan_bytes:0,unsafe_entry_count:0,free_bytes:1073741824,reserve_bytes:67108864,low_space:false},jobs:[],operations:[],turn:()=>new Promise(resolve=>setImmediate(resolve)),all};
+// Explicit fixture action: populate a synthetic receipt, then click the real
+// page control. The production uploadAttempts map is never patched or prefilled.
+state.readAttempt=async job=>{
+ state.attemptJobs.set(job.id,job);
+ state.attempts.set(job.id,{id:'7'.repeat(32),job_id:job.id,revision:2,
+  state:job.state==='unknown'?'unknown':'responded',result_status:job.state,
+  result_code:job.code||'synthetic_result',evidence_kind:null,
+  created_at:'2026-09-12T00:00:00+00:00',request_digest:'a'.repeat(64),
+  job_digest:'b'.repeat(64),source_sha256:'d'.repeat(64),session_revision:'c'.repeat(64),
+  adapter_name:job.platform==='bilibili'?'biliup':'social-auto-upload',adapter_revision:'synthetic-pinned-revision'});
+ const load=all(ids.get('jobs')).find(item=>item.tagName==='button'&&item.dataset.focusKey==='job:'+job.id+':attempt');
+ if(!load)throw new Error('receipt load control missing for '+job.id);
+ await load.dispatch('click');await state.turn();await state.turn();
+};
 async function fetch(url,options={}){state.requests.push({url,method:options.method||'GET',body:options.body,headers:Object.fromEntries(options.headers.entries())});if(state.requestHook)await state.requestHook(url,options);let payload;
  if(url.endsWith('/session'))payload={csrf_token:'synthetic-session-nonce'};
  else if(url.endsWith('/status'))payload={worker_running:true,backend:{ready:true},platforms:[{id:'bilibili',title_limit:80},{id:'douyin',title_limit:30},{id:'tencent',title_limit:100}]};
@@ -49,6 +64,17 @@ async function fetch(url,options={}){state.requests.push({url,method:options.met
  else if(options.method==='POST'&&/\/sources\/[0-9a-f]{32}\/media$/.test(url)){const source=state.sources.find(item=>url.includes(item.id));if(state.restoreHandler){const response=await state.restoreHandler(source,options);if(response)return response;}const previous=source.media_state;source.media_present=true;source.media_state='present';source.media_deleted_at=null;source.can_delete=source.active_reference_count===0;state.storage.managed_bytes+=source.size;state.storage.present_source_count++;if(previous==='deleted')state.storage.deleted_source_count--;if(previous==='missing')state.storage.missing_source_count--;for(const job of state.jobs)if(job.source_id===source.id){job.source_media_present=true;job.source_media_state='present';}payload=source;}
  else if(options.method==='POST'&&/\/sources\/edits\/[0-9a-f]{32}$/.test(url)){payload={id:'9'.repeat(32),name:'segment-001.mp4',size:84,sha256:'8'.repeat(64),media_present:true,media_state:'present',media_deleted_at:null,active_reference_count:0,can_delete:true};state.sources.unshift(payload);}
  else if(options.method==='POST'&&url.endsWith('/cancel')){const op=state.operations.find(item=>url.includes(item.id));if(op)op.state='canceled';payload=op||{state:'canceled'};}
+  else if((options.method||'GET')==='GET'&&/\/jobs\/[0-9a-f]{32}\/attempt$/.test(url)){
+   const id=url.split('/').at(-2);payload=state.attempts.get(id);
+   if(!payload)return {ok:false,status:404,json:async()=>({detail:'upload_attempt_not_found'})};
+  }
+  else if(options.method==='POST'&&/\/jobs\/[0-9a-f]{32}\/reconcile$/.test(url)){
+   const id=url.split('/').at(-2),attempt=state.attempts.get(id),job=state.attemptJobs.get(id),body=JSON.parse(options.body);
+   if(!attempt||attempt.state!=='unknown'||body.attempt_id!==attempt.id||body.expected_revision!==attempt.revision||body.acknowledge_platform_check!==true||body.conclusion!=='not_accepted')
+    return {ok:false,status:409,json:async()=>({detail:'upload_attempt_conflict'})};
+   Object.assign(attempt,{state:'reconciled',reconciliation:'not_accepted',revision:attempt.revision+1});
+   Object.assign(job,{state:'failed',code:'manual_remote_not_accepted'});payload={job,attempt};
+  }
  else if(options.method==='POST')payload={state:'draft'};
  else if(url.endsWith('/qr')){if(state.qrHandler)return state.qrHandler();return {ok:true,status:200,headers:new Headers({'Content-Type':'image/png'}),blob:async()=>new Blob(['synthetic-png'],{type:'image/png'})};}
  else if(url.includes('/jobs/resolve?')){const wanted=new URL(url,'http://127.0.0.1').searchParams.get('ids').split(',');payload=state.jobs.filter(item=>wanted.includes(item.id));}
@@ -497,9 +523,9 @@ return {text:$('jobs').textContent,posts:__test.requests.filter(item=>item.metho
     assert result["posts"] == 0
 
 
-def test_unknown_requires_explicit_acknowledgement_survives_polling_and_never_confirms():
+def test_unknown_requires_receipt_platform_check_survives_polling_and_never_confirms():
     result = run_upload_ui(r"""
-__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'c'.repeat(32),title:'<img src=x onerror=evil()>',tags:[],mode:'publish',state:'unknown',code:'interrupted_result_unknown'}];await refresh();
+__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_name:'Synthetic',source_id:'c'.repeat(32),title:'<img src=x onerror=evil()>',tags:[],mode:'publish',state:'unknown',code:'interrupted_result_unknown'}];await refresh();await __test.readAttempt(__test.jobs[0]);
 const maliciousText=$('jobs').textContent;let retry=__test.all($('jobs')).find(item=>item.tagName==='button');await retry.dispatch('click');await __test.turn();
 const withoutAck=__test.requests.filter(item=>item.method==='POST').length;
 let checkbox=__test.all($('jobs')).find(item=>item.tagName==='input');checkbox.checked=true;await checkbox.dispatch('change');await refresh();
@@ -511,8 +537,11 @@ return {withoutAck,afterPoll,maliciousText,posts:__test.requests.filter(item=>it
     assert result["afterPoll"] is True
     assert "<img src=x onerror=evil()>" in result["maliciousText"]
     assert len(result["posts"]) == 1
-    assert result["posts"][0]["url"].endswith("/retry")
-    assert result["posts"][0]["body"] == {"acknowledge_unknown": True}
+    assert result["posts"][0]["url"].endswith("/reconcile")
+    assert result["posts"][0]["body"] == {
+        "attempt_id": "7" * 32, "expected_revision": 2,
+        "conclusion": "not_accepted", "acknowledge_platform_check": True,
+    }
 
 
 def test_platform_upload_requires_pressing_individual_confirmation_button():
@@ -775,7 +804,7 @@ def test_missing_media_blocks_retry_then_exact_restore_recovers_same_source():
 const source=__test.sources[0];source.media_present=false;source.media_state='deleted';source.media_deleted_at='2026-09-07T01:03:04+00:00';source.can_delete=false;
 __test.storage.managed_bytes=0;__test.storage.present_source_count=0;__test.storage.deleted_source_count=1;
 __test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:source.id,source_media_present:false,source_media_state:'deleted',title:'Synthetic',tags:[],mode:'publish',state:'failed',code:'source_reimport_required'}];
-await refresh();let card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id),job=[...$('jobs').children].find(item=>item.dataset.jobId==='e'.repeat(32));
+await refresh();await __test.readAttempt(__test.jobs[0]);let card=[...$('source-library').children].find(item=>item.dataset.sourceId===source.id),job=[...$('jobs').children].find(item=>item.dataset.jobId==='e'.repeat(32));
 const before={selected:$('source-id').value,card:card.textContent,job:job.textContent,retry:__test.all(job).some(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿')};
 let restore=__test.all(card).find(item=>item.tagName==='button'&&item.textContent==='重新导入相同视频');await restore.dispatch('click');
 $('source-restore-file').files=[new Blob(['x'.repeat(42)],{type:'video/mp4'})];$('source-restore-file').focus();await poll();
@@ -837,7 +866,7 @@ return {cards:[...$('jobs').children].map(item=>({text:item.textContent,confirm:
 
 def test_poll_preserves_focus_for_rebuilt_account_and_job_controls():
     result = run_upload_ui(r"""
-__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Synthetic',tags:[],mode:'publish',state:'failed'}];await refresh();
+__test.jobs=[{id:'e'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Synthetic',tags:[],mode:'publish',state:'failed'}];await refresh();await __test.readAttempt(__test.jobs[0]);
 let choice=__test.all($('account-choices')).find(item=>item.tagName==='input'&&item.value==='a'.repeat(32));choice.focus();await poll();
 choice=__test.all($('account-choices')).find(item=>item.tagName==='input'&&item.value==='a'.repeat(32));const choiceKept=document.activeElement===choice;
 let summary=__test.all($('jobs')).find(item=>item.tagName==='summary');summary.focus();await poll();summary=__test.all($('jobs')).find(item=>item.tagName==='summary');const summaryKept=document.activeElement===summary;
@@ -970,11 +999,13 @@ const jobButton=(id,label)=>{const article=[...$('jobs').children].find(item=>__
 preview('1').open=false;preview('2').open=true;
 __test.requestHook=(url,options)=>{
  if(options.method==='POST'&&url.endsWith('/cancel')){original.state='canceled';original.code='canceled';}
- if(options.method==='POST'&&url.endsWith('/retry'))__test.jobs.unshift({...original,id:'3'.repeat(32),state:'draft',code:'',retry_of:original.id});
+ if(options.method==='POST'&&url.endsWith('/retry'))__test.jobs.unshift({...__test.jobs.find(job=>job.id==='2'.repeat(32)),id:'3'.repeat(32),state:'draft',code:'',retry_of:'2'.repeat(32)});
 };
 await jobButton('1','取消').dispatch('click');await __test.turn();
 const afterCancel={old:preview('1').open,other:preview('2').open};
-await jobButton('1','重新创建本地草稿').dispatch('click');await __test.turn();
+if(jobButton('1','重新创建本地草稿'))throw new Error('unattempted canceled draft must not offer retry');
+await __test.readAttempt(__test.jobs.find(job=>job.id==='2'.repeat(32)));
+await jobButton('2','重新创建本地草稿').dispatch('click');await __test.turn();
 const afterRetry={old:preview('1').open,other:preview('2').open,newDraft:preview('3').open};
 preview('3').open=false;preview('1').open=true;await poll();
 return {afterCancel,afterRetry,afterPoll:{old:preview('1').open,other:preview('2').open,newDraft:preview('3').open},posts:__test.requests.filter(item=>item.method==='POST').map(item=>item.url)};
@@ -982,8 +1013,10 @@ return {afterCancel,afterRetry,afterPoll:{old:preview('1').open,other:preview('2
     assert result["afterCancel"] == {"old": False, "other": True}
     assert result["afterRetry"] == {"old": False, "other": True, "newDraft": True}
     assert result["afterPoll"] == {"old": True, "other": True, "newDraft": False}
-    assert result["posts"] == ["/api/v1/uploads/jobs/" + "1" * 32 + suffix
-                               for suffix in ("/cancel", "/retry")]
+    assert result["posts"] == [
+        "/api/v1/uploads/jobs/" + "1" * 32 + "/cancel",
+        "/api/v1/uploads/jobs/" + "2" * 32 + "/retry",
+    ]
 
 
 @pytest.mark.parametrize("selection_change", ["cleared", "missing"])
@@ -1110,7 +1143,7 @@ const target=[...$('jobs').children].find(item=>item.dataset.jobId===running.id)
 return {found:!!target,text:target?.textContent||'',resolveRequests:__test.requests.filter(item=>item.url.includes('/jobs/resolve?')).length,posts:__test.requests.filter(item=>item.method==='POST').length};
 """)
     assert result["found"]
-    assert "上游报告投稿完成" in result["text"]
+    assert "已确认投稿" in result["text"]
     assert "执行中" not in result["text"]
     assert result["resolveRequests"] == 1
     assert result["posts"] == 0
@@ -1175,14 +1208,14 @@ return {shownBefore,hiddenAfter:$('edit-output-import').hidden,selected:$('sourc
     ("draft", "本地草稿已就绪"),
     ("canceled", "已取消"),
     ("running", "执行中"),
-    ("submitted", "上游报告投稿完成"),
-    ("draft_saved", "上游报告草稿已保存"),
+    ("submitted", "已确认投稿"),
+    ("draft_saved", "已确认草稿已保存"),
 ])
 def test_retry_reports_returned_successor_state_and_focuses_it_without_confirming(successor_state, label):
     result = run_upload_ui(r"""
 const original={id:'1'.repeat(32),platform:'tencent',account_name:'Synthetic',source_id:'c'.repeat(32),title:'Original',tags:[],mode:'draft',state:'canceled'};
 const successor={...original,id:'2'.repeat(32),state:""" + json.dumps(successor_state) + r"""};
-__test.jobs=[successor,original];await refresh();
+__test.jobs=[successor,original];await refresh();await __test.readAttempt(original);
 const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);return url.endsWith('/retry')?{ok:true,status:201,json:async()=>successor}:response;};
 const articleFor=id=>[...$('jobs').children].find(item=>__test.all(item).some(child=>child.tagName==='details'&&child.dataset.jobId===id));
 const retry=__test.all(articleFor(original.id)).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');await retry.dispatch('click');await __test.turn();
@@ -1204,7 +1237,7 @@ const original={id:'1'.repeat(32),platform:'douyin',account_name:'Synthetic',sou
 const successor={...original,id:'2'.repeat(32),source_id:'7'.repeat(32),title:'Older successor',state:'draft',retry_of:original.id};
 const oldSource={id:'7'.repeat(32),name:'older-source.mp4',size:77,sha256:'7'.repeat(64)};
 __test.jobs=[successor];__test.sources=[oldSource];
-__test.jobPageHandler=()=>({items:[original],next_cursor:null});__test.sourcePageHandler=()=>({items:[],next_cursor:null});await refresh();
+__test.jobPageHandler=()=>({items:[original],next_cursor:null});__test.sourcePageHandler=()=>({items:[],next_cursor:null});await refresh();await __test.readAttempt(original);
 const defaultFetch=fetch;fetch=async(url,options={})=>{const response=await defaultFetch(url,options);return options.method==='POST'&&url.endsWith('/retry')?{ok:true,status:201,json:async()=>successor}:response;};
 const article=[...$('jobs').children].find(item=>item.dataset.jobId===original.id);const retry=__test.all(article).find(item=>item.tagName==='button'&&item.textContent==='重新创建本地草稿');await retry.dispatch('click');for(let i=0;i<5;i++)await __test.turn();
 const target=[...$('jobs').children].find(item=>item.dataset.jobId===successor.id);const focused=!!target?.focused,scrolled=!!target?.scrolledIntoView;await poll();const afterPoll=[...$('jobs').children].find(item=>item.dataset.jobId===successor.id);
@@ -1220,7 +1253,7 @@ return {found:!!target,focused,scrolled,persisted:!!afterPoll,text:afterPoll?.te
 def test_poll_reuses_keyed_account_source_and_job_nodes_with_local_state():
     result = run_upload_ui(r"""
 const job={id:'1'.repeat(32),platform:'douyin',account_id:'a'.repeat(32),account_name:'Synthetic Bili',account_lifecycle_state:'active',source_id:'c'.repeat(32),source_media_present:true,source_media_state:'present',title:'Unknown result',description:'Keep this',tags:['one'],mode:'publish',state:'unknown',code:'interrupted_result_unknown'};
-__test.jobs=[job];await refresh();
+__test.jobs=[job];await refresh();await __test.readAttempt(job);
 const find=(root,tag,predicate=()=>true)=>__test.all(root).find(item=>item.tagName===tag&&predicate(item));
 const before={
  account:[...$('accounts').children].find(item=>item.dataset.accountId==='a'.repeat(32)),
@@ -1229,7 +1262,7 @@ const before={
  source:[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32)),
  job:[...$('jobs').children].find(item=>item.dataset.jobId===job.id)
 };
-before.details=find(before.job,'details');before.summary=find(before.job,'summary');before.ack=find(before.job,'input');before.retry=find(before.job,'button',item=>item.textContent==='重新创建本地草稿');
+before.details=find(before.job,'details');before.summary=find(before.job,'summary');before.ack=find(before.job,'input');before.retry=find(before.job,'button',item=>item.textContent==='平台未接收');
 before.choice.checked=true;await before.choice.dispatch('change');before.details.open=false;before.ack.checked=true;await before.ack.dispatch('change');before.retry.focus();
 __test.accounts.reverse();for(const item of [...__test.accounts,...__test.sources,...__test.jobs])item.updated_at='ignored-'+Math.random();await poll();
 const after={
@@ -1239,7 +1272,7 @@ const after={
  source:[...$('source-library').children].find(item=>item.dataset.sourceId==='c'.repeat(32)),
  job:[...$('jobs').children].find(item=>item.dataset.jobId===job.id)
 };
-after.details=find(after.job,'details');after.summary=find(after.job,'summary');after.ack=find(after.job,'input');after.retry=find(after.job,'button',item=>item.textContent==='重新创建本地草稿');
+after.details=find(after.job,'details');after.summary=find(after.job,'summary');after.ack=find(after.job,'input');after.retry=find(after.job,'button',item=>item.textContent==='平台未接收');
 return {same:Object.fromEntries(Object.keys(before).map(key=>[key,before[key]===after[key]])),checked:after.choice.checked,detailsOpen:after.details.open,acknowledged:after.ack.checked,focused:document.activeElement===after.retry,firstAccount:$('accounts').children[0].dataset.accountId,posts:__test.requests.filter(item=>item.method==='POST').length};
 """)
     assert all(result["same"].values())
@@ -1258,7 +1291,7 @@ job.state='submitted';job.code='upstream_submitted';job.updated_at='2026-09-07T1
 return {sameCard:before===after,copy:after.textContent,detailsOpen:afterDetails.open,hasCancel:__test.all(after).some(item=>item.tagName==='button'&&item.textContent==='取消'),posts:__test.requests.filter(item=>item.method==='POST').length};
 """)
     assert result["sameCard"] is True
-    assert "上游报告投稿完成" in result["copy"]
+    assert "已确认投稿" in result["copy"]
     assert result["detailsOpen"] is False
     assert result["hasCancel"] is False
     assert result["posts"] == 0

@@ -5,7 +5,7 @@
 
 编辑工作台位于 `/edits`，负责在已登记的下载视频与上传器之间生成可核对的派生文件。0.28.0 已实现**视频分段、封面制作、自动听写、自动翻译、字幕和标准音色 AI 配音**；云端操作只有在隔离 AI runtime 完整、`OPEN_FLAME_AI_OPENAI_API_KEY` 存在，并且用户确认与当前 runtime/model/operation/外发范围/硬上限精确绑定的 authorization 后才能执行。当前仓库没有凭据，也没有真实 API 或真人试听证据，因此页面在该环境中仍会把三项云能力显示为 blocked。
 
-本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[无 AI 完整视频验证](../validation/iteration-0.28.0-no-ai-full-video.md)、[译文精确修订绑定记录](../validation/iteration-0.28.0-translation-revision-binding.md)、[预授权重启续跑记录](../validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](../validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](../validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](../validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](../validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](../validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
+本指南不证明任意真实视频均能正确处理，也不证明 OpenAI 或 Bilibili、抖音、视频号已经接收、审核或公开任何成品。当前本地证据见[无 AI 完整视频验证](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-no-ai-full-video.md)、[译文精确修订绑定记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-translation-revision-binding.md)、[预授权重启续跑记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-restart-continuation.md)、[三平台参数与封面预检记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-platform-parameters.md)、[多分段自动流程记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-multisegment-workflow.md)、[Iteration 0.28.0 AI 与自动流程记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-workflow-evidence.md)、[发布后 AI 精确授权与输入硬预算记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-post-release-ai-authorization.md)及[Schema 4 远程调用账本记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-invocation-ledger.md)；0.27.0 编辑工作台记录保留为历史。
 
 ## 1. 完整工作流
 
@@ -83,7 +83,7 @@ ready 编辑成品（分段 MP4 / 封面 PNG / segment-local VTT / 配音 MP4）
 时间对轨；目标语言不是中文时，渲染结果与本切片前逐字节相同，仍只有 `caption.vtt`。
 `caption-checks.json` 只记录行宽、阅读速度、不允许的标点、一行多个逗号与重叠等观察，不阻止
 渲染，也不是对翻译正确性的判断。本轮没有把字幕烧录进视频：烧录、字体落地与 Windows 上的
-libass 渲染仍未实现、未验证。详见[中文字幕上屏样式](../validation/iteration-0.28.0-chinese-caption-style.md)。
+libass 渲染仍未实现、未验证。详见[中文字幕上屏样式](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-chinese-caption-style.md)。
 
 ### 1.5 显式导入上传
 

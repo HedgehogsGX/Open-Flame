@@ -1,6 +1,7 @@
 """Exact validation plus atomic creation and migration for the upload schema."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sqlite3
@@ -8,7 +9,7 @@ import stat
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -547,65 +548,70 @@ def _exclusive_schema_access(path: Path):
     handle = None
     acquired = False
     try:
-        deadline = time.monotonic() + _PUBLISH_LINK_TIMEOUT_SECONDS
-        while True:
-            try:
-                before = _require_plain_database(path)
-                break
-            except UploadSchemaError:
-                info = path.lstat()
-                publisher = False
-                if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
-                    for candidate in path.parent.glob(f".{path.name}.*.tmp"):
-                        try:
-                            linked = candidate.lstat()
-                        except OSError:
-                            continue
-                        if (linked.st_dev, linked.st_ino) == (info.st_dev, info.st_ino):
-                            publisher = True
-                            break
-                    if not publisher:
-                        try:
-                            before = _require_plain_database(path)
-                        except UploadSchemaError:
-                            pass
-                        else:
-                            break
-                if not publisher or time.monotonic() >= deadline:
-                    raise
-                time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
-        handle = path.open("rb")
-        opened = os.fstat(handle.fileno())
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise UploadSchemaError
-        deadline = time.monotonic() + _SCHEMA_LOCK_TIMEOUT_SECONDS
-        while True:
-            try:
-                _try_lock_schema_file(handle)
-                acquired = True
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise UploadSchemaError from None
-                time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
-        current = _require_plain_database(path)
-        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-            raise UploadSchemaError
-    except (OSError, UploadSchemaError):
-        if acquired and handle is not None:
-            try:
-                _unlock_schema_file(handle)
-            except OSError:
-                pass
-        if handle is not None:
-            handle.close()
-        raise UploadSchemaError from None
-    try:
+        try:
+            deadline = time.monotonic() + _PUBLISH_LINK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    before = _require_plain_database(path)
+                    break
+                except UploadSchemaError:
+                    info = path.lstat()
+                    publisher = False
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+                        for candidate in path.parent.glob(f".{path.name}.*.tmp"):
+                            try:
+                                linked = candidate.lstat()
+                            except OSError:
+                                continue
+                            if (linked.st_dev, linked.st_ino) == (info.st_dev, info.st_ino):
+                                publisher = True
+                                break
+                        if not publisher:
+                            try:
+                                before = _require_plain_database(path)
+                            except UploadSchemaError:
+                                pass
+                            else:
+                                break
+                    if not publisher or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
+            handle = path.open("rb")
+            opened = os.fstat(handle.fileno())
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise UploadSchemaError
+            deadline = time.monotonic() + _SCHEMA_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    _try_lock_schema_file(handle)
+                    acquired = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise UploadSchemaError from None
+                    time.sleep(_SCHEMA_LOCK_POLL_SECONDS)
+            current = _require_plain_database(path)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise UploadSchemaError
+        except (OSError, UploadSchemaError):
+            raise UploadSchemaError from None
         yield
-    finally:
+    except BaseException:
+        if acquired and handle is not None:
+            with suppress(BaseException):
+                _unlock_schema_file(handle)
+        if handle is not None:
+            with suppress(BaseException):
+                handle.close()
+        raise
+    else:
         try:
             _unlock_schema_file(handle)
-        finally:
+        except BaseException:
+            with suppress(BaseException):
+                handle.close()
+            raise
+        else:
             handle.close()
 
 
@@ -617,7 +623,13 @@ def _require_plain_database(path: Path) -> os.stat_result:
     info = path.lstat()
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
-            or getattr(info, "st_file_attributes", 0) & reparse or info.st_nlink != 1):
+            or getattr(info, "st_file_attributes", 0) & reparse):
+        raise UploadSchemaError
+    if os.name == "nt" and info.st_nlink == 0:
+        # SQLite may unlink a sidecar between the path lookup and metadata read.
+        # Classify it as absent so snapshot callers can retry; never accept it.
+        raise FileNotFoundError(errno.ENOENT, "database file was unlinked", str(path))
+    if info.st_nlink != 1:
         raise UploadSchemaError
     return info
 
@@ -637,6 +649,8 @@ def _file_identity(info: os.stat_result) -> tuple[int, ...]:
 def _fingerprint_file(
     path: Path,
     copy_to: Path | None = None,
+    *,
+    sidecar: bool = False,
 ) -> tuple[tuple[int, ...], bytes]:
     before = _require_plain_database(path)
     digest = sha256()
@@ -644,12 +658,21 @@ def _fingerprint_file(
     destination = copy_to.open("xb") if copy_to is not None else None
     try:
         with path.open("rb") as source:
+            def read_chunk(size: int) -> bytes:
+                try:
+                    return source.read(size)
+                except PermissionError:
+                    # Windows byte-range locks can reject reads without a filename.
+                    if sidecar and os.name == "nt":
+                        raise _SnapshotChanged from None
+                    raise
+
             opened = os.fstat(source.fileno())
             if _file_identity(opened) != _file_identity(before):
                 raise _SnapshotChanged
             remaining = before.st_size
             while remaining:
-                chunk = source.read(min(_SNAPSHOT_CHUNK_BYTES, remaining))
+                chunk = read_chunk(min(_SNAPSHOT_CHUNK_BYTES, remaining))
                 if not chunk:
                     raise _SnapshotChanged
                 total += len(chunk)
@@ -657,7 +680,7 @@ def _fingerprint_file(
                 digest.update(chunk)
                 if destination is not None:
                     destination.write(chunk)
-            if source.read(1):
+            if read_chunk(1):
                 raise _SnapshotChanged
             after = os.fstat(source.fileno())
         if total != before.st_size or _file_identity(after) != _file_identity(before):
@@ -700,9 +723,9 @@ def _copy_stable_snapshot(path: Path, destination: Path) -> None:
     expected = {path: _fingerprint_file(path, destination)}
     try:
         if wal_present:
-            expected[wal] = _fingerprint_file(wal, _sidecar(destination, "-wal"))
+            expected[wal] = _fingerprint_file(wal, _sidecar(destination, "-wal"), sidecar=True)
         if shm_present:
-            expected[shm] = _fingerprint_file(shm)
+            expected[shm] = _fingerprint_file(shm, sidecar=True)
     except FileNotFoundError:
         raise _SnapshotChanged from None
 
@@ -714,7 +737,7 @@ def _copy_stable_snapshot(path: Path, destination: Path) -> None:
         raise _SnapshotChanged
     for source, fingerprint in expected.items():
         try:
-            current = _fingerprint_file(source)
+            current = _fingerprint_file(source, sidecar=source != path)
         except FileNotFoundError:
             if source != path:
                 raise _SnapshotChanged from None
@@ -905,7 +928,17 @@ def _validated_schema_version(path: Path, allowed_versions: frozenset[int]) -> i
                     finally:
                         db.close()
                 return version
-            except _SnapshotChanged:
+            except (_SnapshotChanged, PermissionError) as exc:
+                # A closing SQLite connection can temporarily deny Windows reads
+                # of its WAL/SHM files. Retry the whole verified snapshot only;
+                # permissions on the database or our temporary files still fail.
+                if isinstance(exc, PermissionError) and (
+                    os.name != "nt" or exc.filename is None
+                    or Path(exc.filename) not in (
+                        _sidecar(resolved, "-wal"), _sidecar(resolved, "-shm")
+                    )
+                ):
+                    raise
                 if attempt + 1 == _SNAPSHOT_ATTEMPTS:
                     raise UploadSchemaError from None
                 time.sleep(_SNAPSHOT_RETRY_SECONDS)
@@ -1418,7 +1451,6 @@ def _preserve_v3_legacy_review_state_reasons(
 def _migrate_to_latest(path: Path) -> None:
     before = _require_plain_database(path)
     db = None
-    committed = False
     try:
         db = sqlite3.connect(path, timeout=30)
         db.row_factory = sqlite3.Row
@@ -1458,17 +1490,17 @@ def _migrate_to_latest(path: Path) -> None:
         else:
             raise UploadSchemaError
         db.commit()
-        committed = True
-    except (OSError, sqlite3.Error, UploadSchemaError):
-        if db is not None and not committed:
-            try:
-                db.rollback()
-            except sqlite3.Error:
-                pass
-        raise UploadSchemaError from None
-    finally:
+    except BaseException as exc:
         if db is not None:
-            db.close()
+            with suppress(BaseException):
+                db.rollback()
+            with suppress(BaseException):
+                db.close()
+        if isinstance(exc, (OSError, sqlite3.Error, UploadSchemaError)):
+            raise UploadSchemaError from None
+        raise
+    else:
+        db.close()
 
 
 def _publish_upload_schema(path: Path) -> None:

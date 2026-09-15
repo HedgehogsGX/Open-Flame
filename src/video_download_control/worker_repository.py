@@ -387,6 +387,117 @@ class WorkerRepository:
             cleaned += 1
         return cleaned
 
+    def recover_before_claim(
+        self,
+        *,
+        worker_id: str,
+        now: datetime,
+        remove_pending_asset: PendingAssetCleanup | None = None,
+        recovery_limit: int = ASSET_INTENT_RECOVERY_LIMIT,
+        claim_gate_run_id: str | None = None,
+    ) -> bool:
+        """Recover abandoned work at one observation time, without claiming.
+
+        Filesystem cleanup can be slow. The execution coordinator must check
+        its stop channel after this phase, then read a fresh clock for
+        ``claim_next(..., perform_recovery=False)``. That later claim rechecks
+        the persistent gate, queue and pending intents in its own transaction.
+        """
+        if not worker_id.strip():
+            raise ValueError("worker_id is required")
+        if recovery_limit < 1:
+            raise ValueError("recovery_limit must be positive")
+        if claim_gate_run_id is not None:
+            self._validate_claim_gate_identity(
+                run_id=claim_gate_run_id, worker_id=worker_id
+            )
+        now_text = utc_text(now)
+        with self.database.connect() as connection:
+            connection.execute("BEGIN")
+            if not self._claims_allowed_locked(
+                connection, worker_id=worker_id,
+                claim_gate_run_id=claim_gate_run_id,
+            ):
+                return False
+
+        if not self._recover_intents_before_claim(
+            now=now,
+            remove_pending_asset=remove_pending_asset,
+            recovery_limit=recovery_limit,
+        ):
+            return False
+
+        with self.database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not self._claims_allowed_locked(
+                connection, worker_id=worker_id,
+                claim_gate_run_id=claim_gate_run_id,
+            ):
+                return False
+            self._recover_expired(connection, now_text)
+        return True
+
+    def _recover_intents_before_claim(
+        self,
+        *,
+        now: datetime,
+        remove_pending_asset: PendingAssetCleanup | None,
+        recovery_limit: int,
+    ) -> bool:
+        # Fence abandoned intents in short transactions and clean their files
+        # without a SQLite writer lock, preserving the recovery observation.
+        if self.get_queue_control()["paused"]:
+            return False
+        if remove_pending_asset is None:
+            now_text = utc_text(now)
+            _, _, recovery_blocked = self._prepare_asset_intent_recovery(
+                now_text=now_text,
+                recovery_expires_text=now_text,
+                limit=recovery_limit,
+                claim_cleanup=False,
+            )
+            return not recovery_blocked
+        self.recover_asset_commit_intents(
+            now=now,
+            remove_pending_asset=remove_pending_asset,
+            limit=recovery_limit,
+        )
+        return True
+
+    @staticmethod
+    def _claims_allowed_locked(
+        connection,
+        *,
+        worker_id: str,
+        claim_gate_run_id: str | None,
+    ) -> bool:
+        if claim_gate_run_id is not None:
+            claim_gate = connection.execute(
+                """
+                SELECT run_id, worker_id, accepting_claims,
+                       activated_at, stop_requested_at
+                FROM worker_claim_gate WHERE id = 1
+                """
+            ).fetchone()
+            if claim_gate is None:
+                raise RuntimeError("worker claim gate singleton is missing")
+            if (
+                claim_gate["run_id"] != claim_gate_run_id
+                or claim_gate["worker_id"] != worker_id
+                or claim_gate["accepting_claims"] != 1
+                or not isinstance(claim_gate["activated_at"], str)
+                or not claim_gate["activated_at"]
+                or claim_gate["activated_at"] != claim_gate["activated_at"].strip()
+                or claim_gate["stop_requested_at"] is not None
+            ):
+                return False
+        queue_control = connection.execute(
+            "SELECT paused FROM queue_control WHERE id = 1"
+        ).fetchone()
+        if queue_control is None:
+            raise RuntimeError("queue control singleton is missing")
+        return not queue_control["paused"]
+
     def claim_next(
         self,
         *,
@@ -404,6 +515,12 @@ class WorkerRepository:
         perform_recovery: bool = True,
         excluded_job_ids: frozenset[str] = frozenset(),
     ) -> JobLease | None:
+        """Claim using the supplied time and optional same-time recovery.
+
+        Execution coordinators use ``recover_before_claim`` separately so
+        slow cleanup cannot spend the lease before an attempt is dispatched.
+        The convenience path retains one explicit observation time.
+        """
         if not worker_id.strip():
             raise ValueError("worker_id is required")
         if lease_seconds < 10:
@@ -472,57 +589,19 @@ class WorkerRepository:
         now_text = utc_text(now)
         expires_text = utc_text(now + timedelta(seconds=lease_seconds))
 
-        # Recovery may touch slow or unhealthy storage.  Fence the abandoned
-        # attempt in a short transaction, perform cleanup without a SQLite
-        # writer lock, then CAS-delete the durable intent.  Recheck queue state
-        # inside the claim transaction because it may change during cleanup.
-        if self.get_queue_control()["paused"]:
+        if perform_recovery and not self._recover_intents_before_claim(
+            now=now,
+            remove_pending_asset=remove_pending_asset,
+            recovery_limit=recovery_limit,
+        ):
             return None
-        if perform_recovery and remove_pending_asset is None:
-            _, _, recovery_blocked = self._prepare_asset_intent_recovery(
-                now_text=now_text,
-                recovery_expires_text=now_text,
-                limit=recovery_limit,
-                claim_cleanup=False,
-            )
-            if recovery_blocked:
-                return None
-        elif perform_recovery:
-            self.recover_asset_commit_intents(
-                now=now,
-                remove_pending_asset=remove_pending_asset,
-                limit=recovery_limit,
-            )
 
         with self.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            if claim_gate_run_id is not None:
-                claim_gate = connection.execute(
-                    """
-                    SELECT run_id, worker_id, accepting_claims,
-                           activated_at, stop_requested_at
-                    FROM worker_claim_gate WHERE id = 1
-                    """
-                ).fetchone()
-                if claim_gate is None:
-                    raise RuntimeError("worker claim gate singleton is missing")
-                if (
-                    claim_gate["run_id"] != claim_gate_run_id
-                    or claim_gate["worker_id"] != worker_id
-                    or claim_gate["accepting_claims"] != 1
-                    or not isinstance(claim_gate["activated_at"], str)
-                    or not claim_gate["activated_at"]
-                    or claim_gate["activated_at"]
-                    != claim_gate["activated_at"].strip()
-                    or claim_gate["stop_requested_at"] is not None
-                ):
-                    return None
-            queue_control = connection.execute(
-                "SELECT paused FROM queue_control WHERE id = 1"
-            ).fetchone()
-            if queue_control is None:
-                raise RuntimeError("queue control singleton is missing")
-            if queue_control["paused"]:
+            if not self._claims_allowed_locked(
+                connection, worker_id=worker_id,
+                claim_gate_run_id=claim_gate_run_id,
+            ):
                 return None
             if perform_recovery:
                 self._recover_expired(connection, now_text)

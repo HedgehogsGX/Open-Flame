@@ -21,13 +21,24 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import BinaryIO, Final
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from .managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    close_binary_on_error,
+    file_signature,
+    hash_open_binary,
+    open_matching_binary,
+    require_matching_fstat,
+    snapshot_open_binary,
+)
 from .subprocess_runner import CommandSpec, SecureSubprocessRunner
 
 LOCK_PATH: Final = Path(__file__).with_name("toolchains") / "windows-x64.json"
@@ -343,14 +354,13 @@ def load_toolchain_lock(path: Path = LOCK_PATH) -> ToolchainLock:
     # Package managers such as uv may hard-link immutable wheel resources from
     # their content-addressed cache. Runtime artifacts remain single-link, but
     # rejecting that normal package layout would make a clean wheel unusable.
-    _plain_file(
-        path,
-        code="lock_unavailable",
-        maximum=LOCK_MAX_BYTES,
-        require_single_link=False,
-    )
     try:
-        raw = path.read_bytes()
+        raw = _read_plain_bytes(
+            path,
+            code="lock_unavailable",
+            maximum=LOCK_MAX_BYTES,
+            require_single_link=False,
+        )
         parsed = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise _fail(
@@ -517,14 +527,6 @@ def load_toolchain_lock(path: Path = LOCK_PATH) -> ToolchainLock:
     )
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(DOWNLOAD_CHUNK_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _is_reparse(info: os.stat_result) -> bool:
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     return bool(reparse and getattr(info, "st_file_attributes", 0) & reparse)
@@ -538,7 +540,7 @@ def _plain_file(
     sha256: str | None = None,
     maximum: int | None = None,
     require_single_link: bool = True,
-) -> None:
+) -> os.stat_result:
     try:
         info = path.stat(follow_symlinks=False)
     except OSError as error:
@@ -554,8 +556,71 @@ def _plain_file(
         raise _fail(code, "required file size does not match the lock")
     if maximum is not None and not 0 < info.st_size <= maximum:
         raise _fail(code, "required file exceeds its size boundary")
-    if sha256 is not None and _sha256_file(path) != sha256:
-        raise _fail(code, "required file hash does not match the lock")
+    if sha256 is not None:
+        with _matching_plain_read(
+            path, info, code=code, require_single_link=require_single_link
+        ) as stream:
+            observed = hash_open_binary(
+                stream, maximum=info.st_size, chunk_size=DOWNLOAD_CHUNK_BYTES
+            )
+            if observed.hexdigest != sha256:
+                raise _fail(code, "required file hash does not match the lock")
+    return info
+
+
+@contextmanager
+def _matching_plain_read(
+    path: Path,
+    before: os.stat_result,
+    *,
+    code: str,
+    require_single_link: bool,
+) -> Iterator[BinaryIO]:
+    """Retain the accepted identity through one bounded toolchain-file read."""
+
+    expected = file_signature(before)
+    try:
+        opened = open_matching_binary(path, expected=expected)
+        with close_binary_on_error(opened.handle):
+            yield opened.handle
+            require_matching_fstat(opened.handle, expected=expected)
+            current = _plain_file(
+                path, code=code, require_single_link=require_single_link
+            )
+            if file_signature(current) != expected:
+                raise ManagedFileChanged
+        opened.handle.close()
+    except ManagedFileChanged as error:
+        raise _fail(code, "required file changed while being read") from error
+    except ManagedFileSizeExceeded as error:
+        raise _fail(code, "required file exceeds its size boundary") from error
+
+
+def _read_plain_bytes(
+    path: Path,
+    *,
+    maximum: int,
+    code: str = "bundle_invalid",
+    size: int | None = None,
+    sha256: str | None = None,
+    require_single_link: bool = True,
+) -> bytes:
+    before = _plain_file(
+        path,
+        code=code,
+        size=size,
+        maximum=maximum,
+        require_single_link=require_single_link,
+    )
+    with _matching_plain_read(
+        path, before, code=code, require_single_link=require_single_link
+    ) as stream:
+        snapshot = snapshot_open_binary(
+            stream, maximum=maximum, chunk_size=DOWNLOAD_CHUNK_BYTES
+        )
+        if sha256 is not None and snapshot.hexdigest != sha256:
+            raise _fail(code, "required file hash does not match the lock")
+    return snapshot.payload
 
 
 def _require_absolute_normalized(path: Path, *, label: str) -> Path:
@@ -727,15 +792,29 @@ def _download_artifact(artifact: Artifact, destination: Path) -> None:
 
 def _copy_cached_artifact(artifact: Artifact, destination: Path, cache: Path) -> None:
     source = cache / artifact.cache_name
-    _plain_file(
+    before = _plain_file(
         source,
         code="artifact_cache_invalid",
         size=artifact.size,
         sha256=artifact.sha256,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with source.open("rb") as read_stream, destination.open("xb") as write_stream:
-        shutil.copyfileobj(read_stream, write_stream, DOWNLOAD_CHUNK_BYTES)
+    with _matching_plain_read(
+        source, before, code="artifact_cache_invalid", require_single_link=True
+    ) as read_stream:
+        write_stream = destination.open("xb")
+        with close_binary_on_error(write_stream):
+            copied = 0
+            while chunk := read_stream.read(
+                min(DOWNLOAD_CHUNK_BYTES, artifact.size - copied + 1)
+            ):
+                copied += len(chunk)
+                if copied > artifact.size:
+                    raise _fail(
+                        "bundle_invalid", "required file size does not match the lock"
+                    )
+                write_stream.write(chunk)
+        write_stream.close()
     _plain_file(destination, size=artifact.size, sha256=artifact.sha256)
 
 
@@ -854,9 +933,15 @@ def _extract_yt_dlp_license(source_archive: Path, root: Path, item: LockedFile) 
 
 
 def _checksum_evidence_matches(root: Path, lock: ToolchainLock) -> None:
-    path = root / Path(lock.yt_dlp.checksums_artifact.install_path or "")
+    artifact = lock.yt_dlp.checksums_artifact
+    path = root / Path(artifact.install_path or "")
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _read_plain_bytes(
+            path,
+            maximum=artifact.size,
+            size=artifact.size,
+            sha256=artifact.sha256,
+        ).decode("utf-8").splitlines()
     except (OSError, UnicodeError) as error:
         raise _fail("bundle_invalid", "yt-dlp checksum evidence is invalid") from error
     expected = f"{lock.yt_dlp.artifact.sha256}  yt-dlp"
@@ -940,9 +1025,8 @@ def _smoke_marker_valid(root: Path, lock: ToolchainLock) -> bool:
     marker = root / SMOKE_FILENAME
     if not marker.exists():
         return False
-    _plain_file(marker, maximum=4096)
     try:
-        document = json.loads(marker.read_text(encoding="utf-8"))
+        document = json.loads(_read_plain_bytes(marker, maximum=4096).decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise _fail(
             "smoke_marker_invalid", "offline smoke marker is invalid"
@@ -1039,8 +1123,7 @@ def verify_toolchain(
     _plain_directory(root)
     _verify_existing_ancestors(root)
     installed_lock = root / LOCK_COPY_FILENAME
-    _plain_file(installed_lock, maximum=LOCK_MAX_BYTES)
-    if installed_lock.read_bytes() != active_lock.raw_bytes:
+    if _read_plain_bytes(installed_lock, maximum=LOCK_MAX_BYTES) != active_lock.raw_bytes:
         raise _fail("lock_mismatch", "installed lock differs from the application lock")
 
     expected = _expected_files(active_lock)

@@ -1,6 +1,6 @@
 # Open-Flame 当前架构
 
-> 状态日期：2026-09-11（Australia/Adelaide）
+> 状态日期：2026-09-16（Australia/Adelaide）
 > 文档起始源码基线：`30548f32e072ee549a322b840374d09486d63110`
 > 产品版本：`0.28.0` 发布后的持续开发源码
 
@@ -34,7 +34,7 @@ flowchart TB
         API["FastAPI control plane<br/>共享静态资源与域独立 API"]
         DownloadService["Download<br/>BatchService + Repository"]
         Editing["EditingManager<br/>render / AI worker thread"]
-        Upload["Upload service manager<br/>serial scheduler thread"]
+        Upload["UploadManager<br/>serial scheduler thread"]
         Workflow["WorkflowManager<br/>bounded reconciler thread"]
         Adapter["LocalWorkflowAdapter<br/>窄跨域适配"]
         API --> DownloadService
@@ -97,7 +97,7 @@ LocalApp 下载在操作者显式启用网络后使用 direct mode。架构图�
 | --- | --- | --- | --- |
 | `/` 与 `/api/v1/*` | [`api.py`](../src/video_download_control/api.py)、[`web.py`](../src/video_download_control/web.py) | control process + 独立 download worker | URL/批次、队列、来源发现、下载任务、ready assets、能力证据 |
 | `/edits` 与 `/api/v1/edits/*` | [`editing/api.py`](../src/video_download_control/editing/api.py)、[`editing/web.py`](../src/video_download_control/editing/web.py) | [`EditingManager`](../src/video_download_control/editing/manager.py) | 非破坏草稿、timeline 审核、AI task、render plan、成品与封面 |
-| `/uploads` 与 `/api/v1/uploads/*` | [`uploads/api.py`](../src/video_download_control/uploads/api.py)、[`uploads/web.py`](../src/video_download_control/uploads/web.py) | Upload service manager / [`UploadService`](../src/video_download_control/uploads/service.py) | 账号 session、受管视频/封面、投稿参数、确认、串行上传、attempt receipt |
+| `/uploads` 与 `/api/v1/uploads/*` | [`uploads/api.py`](../src/video_download_control/uploads/api.py)、[`uploads/web.py`](../src/video_download_control/uploads/web.py) | [`UploadManager`](../src/video_download_control/uploads/manager.py) / [`UploadService`](../src/video_download_control/uploads/service.py) | 账号 session、受管视频/封面、投稿参数、确认、串行上传、attempt receipt |
 | `/workflows` 与 `/api/v1/workflows/*` | [`workflows/api.py`](../src/video_download_control/workflows/api.py)、[`workflows/web.py`](../src/video_download_control/workflows/web.py) | [`WorkflowManager`](../src/video_download_control/workflows/manager.py) | 跨域编排、预设、checkpoint、恢复、取消和 attention |
 
 四页使用 [`open-flame.css`](../src/video_download_control/static/open-flame.css) 与
@@ -114,7 +114,7 @@ LocalApp 下载在操作者显式启用网络后使用 direct mode。架构图�
 | FastAPI control | 独立 child process | Uvicorn 在继承的 loopback listener 上先进入 ready；supervisor 随后核对 child 身份并汇总整体 ready，再向操作者报告可用 |
 | Download Worker | 独立 child process | preflight/recovery 可先读取 Download DB；持久 claim gate 只原子允许或阻止新的 `claim_next`；两个执行 slot 负责 probe/download/verify/commit，DB 同时限制全局最多 2 个、每平台最多 1 个 active job |
 | EditingManager | control 内 lazy worker thread | 单 owner；串行取得任务并协调本地 FFmpeg 与 AI child，持有 Editing activity lease |
-| UploadService | control 内 scheduler thread | 全局串行领取 login/upload operation；另用有界 cancellation monitor，worker lock 阻止第二 owner |
+| UploadManager / UploadService | control 内 lazy scheduler thread | 应用组装唯一 manager，HTTP/Workflow/退出共用；恢复与关闭串行化，全局串行领取 login/upload operation，有界 cancellation monitor 与 worker lock 保持执行所有权 |
 | WorkflowManager | control 内 reconciler thread | 分页扫描 active workflow，有界退避；通过 LocalWorkflowAdapter 逐域观察和推进 |
 | AI / Upload bridge | 受各 manager 启动的 child process/runtime | 使用固定 manifest、最小环境与超时；不成为独立常驻业务服务 |
 
@@ -133,6 +133,46 @@ Editing、Upload、Workflow 的线程共享 control process，但不共享数据
 | 灾备 | `video-download-backup`、`video-upload-backup` |
 
 这些入口共享源码包，但不等于 14 个独立部署服务；LocalApp 仍是 Windows 桌面运行的默认所有者。
+
+### 3.3 职责分层与当前重构分支
+
+2026-09-12 的 `codex/architecture-reset-ci` 按六类核心职责加 CLI 入口整理依赖。它们是模块化
+单体内部的职责，不是六个部署服务；四个业务域继续各自拥有状态。下载 Schema 11 不代表其他
+域也使用同一 Schema。
+
+| 职责 | 主要模块与依赖方向 |
+| --- | --- |
+| API / Web | `api.py`、各域 `api.py/web.py`、`schemas.py`：HTTP/DTO、展示和 composition；不作为可复用 Worker 的实现入口 |
+| 领域 / 数据 | `domain.py`、`database.py`、`repository.py`、`worker_repository.py` 和各域 service/schema：实体、事务与领域状态机；`download_assets.py` 拥有 Download 登记素材读取 |
+| Worker / 调度 | `worker.py`、`worker_pool.py`、`graph.py`、`retry_policy.py`；新增 `local_worker.py`、`candidate_worker.py` 拥有配置、preflight 和组装 |
+| 适配器 | `adapters/base.py` 定义共享 Protocol 与请求/结果；fake 和真实适配器实现它；`yt_dlp_contract.py` 是生产命令/配置合同，并非测试基类 |
+| 工具链 / 校验 | `toolchain.py`、`verifiers/ffprobe.py`、capabilities/evidence：版本、产物与能力证据；本地 ready 不自动升级真实平台验收 |
+| 安全 / 网络 | `security/`、受管文件与网络执行 guard：身份、出站约束和执行前复验；Windows 显式 direct 模式与 Linux relay 模式保持各自合同 |
+| CLI | `*_cli.py`：参数与进程输出，调用执行模块；LocalApp 直接调用公开 Worker builder/锁/logger；LocalApp/LocalWorker 的绝对路径解析及 Worker 结果输出共用既有 CLI support |
+
+资源与错误归属遵循以下当前规则：
+
+- `AssetStore.validate_output_inventory` 统一文件身份去重与完整目录集合；Worker 保留
+  媒体 key/owner/ordinal。`managed_files` 提供同句柄、有界读取和结束身份复核，工具链、
+  能力证据与代理策略各自保留尺寸、摘要、权限和错误合同。
+- `WorkerRuntimeObservation` 不依赖 HTTP DTO；API 投影响应，Workflow 消费普通 mapping。
+  领域层校验 retry 数值，策略层判断可排程范围，Worker 持久化终态或重试。
+- Repository 显式恢复旧任务后，Worker 检查 stop 并用新时钟领取；claim 事务继续复核
+  gate、queue 和 pending intent。旧显式时刻的便利入口保留事务线性化。
+- Adapter 拥有控制记录的 descriptor、解码和清理；graph fake 只转换自己的文件错误，
+  Worker 进度回调的存储错误保留原暂停队列语义，共享 Protocol 与真实 capability 不变。
+- 安全层 `BoundedResolver` 在实际解析结束后释放容量；超时/取消只结束观察，late
+  completion 不阻止事件循环退出。代理保留连接容量和最多 64 个答案，短链保留原合同。
+- Download 的 `_owned_connection` 覆盖路径检查、连接设置与关闭；普通事务、WAL 初始化
+  和 Schema 8 迁移各自保留事务及重试语义。Workflow、Editing、AI ledger 和 Upload 的
+  私有 `_db` 各自持有连接，失败清理保留主异常，成功关闭失败仍可见。
+- Upload 自己管理旧库迁移与 Schema 初始化锁。锁 owner 同时覆盖准备和业务段，
+  中断后立即尝试解锁/关闭；准备段错误映射与业务段原始异常分开，成功清理保留首个错误。
+  原锁、路径复核、时限、SQL 和四域独立连接配置保持。
+
+当前锁反馈见[验收索引](../validation/README.md#upload-schema-lock-ownership-2026-09-16)。
+其他具体反馈从同一索引定位；完整经过见
+[冻结架构记录](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/docs/CURRENT_ARCHITECTURE.md)。
 
 ## 4. 数据所有权与存储布局
 
@@ -255,7 +295,7 @@ stateDiagram-v2
 `unknown` 不能直接 retry。操作者必须先读取 receipt，再到对应平台后台核对；只有固定
 `not_accepted` 结论落库后才能建立新的待确认草稿。任何没有 receipt 的旧 failed/canceled job 都
 不能根据可变 job 字段推断为“从未 dispatch”。完整合同见
-[Upload Schema 4 attempt receipt 记录](../validation/iteration-0.28.0-upload-attempt-receipts.md)。
+[Upload Schema 4 attempt receipt 记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)。
 
 ## 6. 执行环境与外部边界
 
@@ -279,8 +319,11 @@ stateDiagram-v2
   普通日志、备份或发行包。
 - [`managed_files.py`](../src/video_download_control/managed_files.py) 统一 plain entry、匹配打开、
   `fstat/lstat`、有界 SHA-256 与有界 bytes snapshot。领域仍保留各自 MIME、大小、错误码和事务语义。
-- 已验证媒体响应使用保持打开的 handle，避免校验后按路径重新打开；上传主视频交给第三方 adapter
-  前仍存在一次复核后再由子进程重开路径的 P2 TOCTOU 窗口。
+- 已验证媒体响应持有同一文件 handle。Windows 上传核对主视频身份与摘要后，将只允许共享读
+  的 reader 持有至 backend 返回，限制此期间的普通并发写入、替换和删除；Biliup 的 operation
+  暂存也重新匹配打开、核对冻结 SHA-256，并持有至受管执行结束。非 Windows 保留匹配打开
+  与摘要复核，不声明 Windows 共享模式的写/删限制。该边界不保证抵御任意同机修改，也不证明
+  真实平台接受；receipt 仍是本地工具观察，见[源文件交接记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-source-handoff.md)。
 - 日志只保存脱敏状态、固定错误码、request ID 与 bounded metadata；`validation/local/` 保存临时
   探针和本机结果，不能提交。
 - 本地管理员拥有修改代码和数据的能力。当前 hash、manifest、receipt 与 ledger 的目标是发现漂移
@@ -293,39 +336,39 @@ stateDiagram-v2
 | HTTP 防护 | [`local_http_guard.py`](../src/video_download_control/local_http_guard.py) | 四域共享算法，各域声明策略 |
 | Workflow profile / Upload metadata | [`workflows/profile.py`](../src/video_download_control/workflows/profile.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 公开纯数据合同已被生产路径复用 |
 | Upload slot / retry identity | [`uploads/identity.py`](../src/video_download_control/uploads/identity.py) | inspect、retry、cancel 与 backup 复用 |
-| Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类已集中，部分结果应用仍重复 |
+| Upload receipt 状态 | [`uploads/receipts.py`](../src/video_download_control/uploads/receipts.py) | 执行与备份共用纯状态合同，各自保留身份/事务/恢复处理 |
+| Upload 封面 | [`uploads/covers.py`](../src/video_download_control/uploads/covers.py)、[`uploads/metadata.py`](../src/video_download_control/uploads/metadata.py) | 格式/解码与轻量平台规则分别归属 Upload；Workflow 不加载 Pillow，备份不依赖 service |
+| Download 素材读取 | [`download_assets.py`](../src/video_download_control/download_assets.py) | 登记文件、安全读取、snapshot 和跨域素材引用脱离 HTTP；API 保留响应与错误映射 |
+| Workflow snapshot 分类 | [`workflows/snapshots.py`](../src/video_download_control/workflows/snapshots.py) | 基础分类集中；service 内上传重试前后的成功/等待结果共用一处应用，重试权限保持显式 |
 | Editing 生命周期 | [`editing/manager.py`](../src/video_download_control/editing/manager.py) | 后台执行所有权已移出 HTTP API |
+| Upload 生命周期 | [`uploads/manager.py`](../src/video_download_control/uploads/manager.py) | 应用统一注入 owner，HTTP/Workflow/退出共用；启动、恢复、关闭及锁交接有当前验证 |
+| Editing AI 重试图 | [`editing/service.py`](../src/video_download_control/editing/service.py) | 完整图校验由查询和项目取消共用；Workflow 只复核返回合同与独立冻结身份 |
+| Editing render 重试图 | [`editing/service.py`](../src/video_download_control/editing/service.py) | 公开 leaf 解析与发现式取消共用图校验；保留一致读、取消后继保护及独立 speech checkpoint |
 | Verified media response | [`verified_media_response.py`](../src/video_download_control/verified_media_response.py) | 下载/编辑共享 same-handle 响应边界 |
 | 受管文件读取 | [`managed_files.py`](../src/video_download_control/managed_files.py) | hash 与 bytes snapshot 共用 bounded consumer |
-| Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 已拆分，仍有规则重复 |
-| 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；禁止新增/修改 tracked tests |
+| 备份文件操作 | [`backup_files.py`](../src/video_download_control/backup_files.py) | Download/Upload 使用公开路径、复制与 snapshot；各自保留事务、锁、格式、审计和恢复 |
+| Workflow 页面分责 | [`workflows/web.py`](../src/video_download_control/workflows/web.py) | recipe/read/merge/validate 分责；日期/DST、时限、标签、分区与短标题共享纯判定，调用者保留 DOM 与冻结时间上下文 |
+| 提交范围门禁 | [`scripts/verify_commit_scope.py`](../scripts/verify_commit_scope.py) | pre-commit 与 hosted CI 复用；默认禁止新增/修改 tracked tests，仅接受 AGENTS 记载的已授权冻结差分 |
 
 ## 9. 当前缺陷、复杂度集中点与下一切片
 
-以下项目是当前源码可见的工程风险。它们不代表真实平台故障，也不能仅凭文档标记为已修复。
+1. **当前提交必须独立通过验证。** 基线 `8819190` 的 push Windows 3.12 Node 子进程
+   10 秒等待连续两次失败，最终 CI 为 7/8 success，原因未确认。相同 Node/Python 版本
+   的本地完整套件通过也不解释 hosted 失败；没有成功 receipt。原始记录保留在
+   [PR #2](https://github.com/HedgehogsGX/Open-Flame/pull/2)，后续提交读取自己的检查。
+2. **规则归属按可证明的收益继续收敛。** Workflow 只消费各域公开合同，retry 图归
+   Editing，投稿参数/receipt 归 Upload，素材读取归 Download。提取必须删除实际重复，
+   并保留 CAS、lease、checkpoint、unknown、取消与逐项确认；不为缩短文件共享数据库或调度器。
+3. **真实平台输入仍缺失。** 用户反馈 YT 6/10，但没有四个失败 URL、错误与执行版本。
+   先保留并复现实际输入，再修复同批用例。Windows 上传锁的本地控制不证明平台接受，
+   AI、真人试听、上传、目标 Linux/container/macOS 各需独立证据。
+4. **实际应用根与发行证据独立。** 实际 app root 的既有记录停在 Upload Schema 1→3；
+   Schema 4 尚未在该原根迁移/审计。包外 receipt 必须绑定最终 clean commit、制品、
+   source/wheel 安装及同提交 CI，历史安装不能跨提交复用。
 
-1. **P2：Workflow 首次线程启动失败没有回滚 owner 状态。**
-   [`WorkflowManager.get()`](../src/video_download_control/workflows/manager.py) 在 `Thread.start()` 前发布
-   `_service`、`_worker_active` 和 `_thread`；`start()` 抛错后可能留下“有 service、无 worker”的
-   组合，后续 `stop()` 还可能 join 未启动线程。下一切片应参考 EditingManager 的局部回滚模式，
-   保留 lazy single-owner 与永久 stop 语义，不引入通用 Scheduler。
-2. **P2：清理失败可能覆盖原始媒体校验错误。**
-   Editing 的部分失败分支和 `VerifiedOpenFileResponse` 构造失败路径仍直接调用 `handle.close()`；
-   close 的 `OSError` 可能覆盖更有意义的 `asset_changed` 或 manifest 错误。应统一为不覆盖主异常的
-   清理方式，同时保留 same-handle、Range、最终 `lstat` 和领域错误映射。
-3. **P2：上传 source 复核与第三方读取之间仍有 TOCTOU。** UploadService 校验主视频 SHA-256 后，
-   adapter/子进程会再次按路径打开。后续可评估稳定 Windows share-lock handle 或 attempt-private
-   source staging；不能用 receipt 的 SHA-256 宣称实际上传字节已经被加密证明。
-4. **规则 Locality 仍不够集中。** 当前优先候选是：封面/稳定 request 字段投影；Editing AI retry
-   forest 所有权；Workflow 前端即时清错与提交校验；上传 retry 前后结果应用。较低优先级是把辅助
-   素材读取归回 Download、只共享两类 JSONL control record 的传输解码，以及继续缩短入口文档。
-5. **运维与发布仍未闭合。** 2026-09-10 的实际 app root 只完成 Upload Schema 1→3；Schema 4
-   尚未在该实根迁移/审计。当前发布后源码也没有新的 clean source/wheel 独立安装与包外 release
-   receipt。Hosted CI 已真实执行，但完整 pytest 仍因冻结历史合同漂移而红色。
-
-推荐顺序：先把第 1、2 项分别做成小修提交，再处理已确定的规则重复；收到外部测试反馈时优先
-复现和修复有真实触发条件的问题。每个切片都必须删除旧实现、保持状态/确认/恢复语义，并使用现有
-回归与 ignored validator 验证。完整路线见[后续执行计划](FOLLOW_UP_EXECUTION_PLAN.md)。
+已完成的 owner、受管文件和跨域纯规则见第 8 节；旧问题与各次修复细节保留在
+[冻结记录](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/docs/CURRENT_ARCHITECTURE.md)。下一切片优先处理可复现失败，现有回归与
+ignored validator 一起证明行为；完整工作包见[执行计划](FOLLOW_UP_EXECUTION_PLAN.md)。
 
 ## 10. 验证与证据入口
 
@@ -334,13 +377,13 @@ stateDiagram-v2
 - 当前验证索引：[`validation/README.md`](../validation/README.md)
 - Editorial Glass：[`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md)
 - Workflow、编辑和上传操作：[`RUNBOOK.md`](RUNBOOK.md)
-- 来源封面：[研究与导入](../validation/iteration-0.28.0-source-cover-research-and-import.md)、
-  [Workflow 偏好](../validation/iteration-0.28.0-workflow-source-cover-preference.md)
-- Upload Schema 4：[attempt receipt 验收](../validation/iteration-0.28.0-upload-attempt-receipts.md)
-- 架构收敛分项：[HTTP](../validation/iteration-0.28.0-download-http-boundary.md)、
-  [EditingManager](../validation/iteration-0.28.0-editing-manager-boundary.md)、
-  [受管文件读取](../validation/iteration-0.28.0-managed-file-read.md)、
-  [Workflow snapshot](../validation/iteration-0.28.0-upload-snapshot-observation.md)
+- 来源封面：[研究与导入](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md)、
+  [Workflow 偏好](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)
+- Upload Schema 4：[attempt receipt 验收](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md)
+- 架构收敛分项：[HTTP](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-download-http-boundary.md)、
+  [EditingManager](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-manager-boundary.md)、
+  [受管文件读取](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-managed-file-read.md)、
+  [Workflow snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-snapshot-observation.md)
 
 文档中的图表示进程、所有权和主要调用关系，不表示节点是独立部署服务，也不表示图中出现的外部
 平台已经通过真实验收。

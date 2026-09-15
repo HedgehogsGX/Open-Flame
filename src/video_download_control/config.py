@@ -10,6 +10,11 @@ from .runtime_logging import (
     RuntimeLogConfig,
 )
 
+from .uploads.contracts import (
+    DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES,
+    validate_upload_storage_min_free_bytes,
+)
+
 LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 DEFAULT_STORAGE_MIN_FREE_BYTES = 1024 * 1024 * 1024
 
@@ -64,6 +69,7 @@ class Settings:
     short_link_transport_socket: Path | None = field(default=None, repr=False)
     short_link_attestation_key_file: Path | None = field(default=None, repr=False)
     storage_min_free_bytes: int = DEFAULT_STORAGE_MIN_FREE_BYTES
+    upload_storage_min_free_bytes: int = DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES
     runtime_log_level: str = "INFO"
     runtime_log_max_bytes: int = DEFAULT_RUNTIME_LOG_MAX_BYTES
     runtime_log_backup_count: int = DEFAULT_RUNTIME_LOG_BACKUP_COUNT
@@ -73,6 +79,7 @@ class Settings:
         require_loopback_bind_host(self.host)
         if self.storage_min_free_bytes < 0:
             raise ValueError("storage_min_free_bytes must be non-negative")
+        validate_upload_storage_min_free_bytes(self.upload_storage_min_free_bytes)
         log_config = RuntimeLogConfig(
             directory=self.data_root / "logs",
             level=self.runtime_log_level,
@@ -160,6 +167,9 @@ class Settings:
                     "VDC_STORAGE_MIN_FREE_BYTES",
                     str(DEFAULT_STORAGE_MIN_FREE_BYTES),
                 )
+            ),
+            upload_storage_min_free_bytes=int(
+                os.getenv("VDC_UPLOAD_STORAGE_MIN_FREE_BYTES", str(DEFAULT_UPLOAD_STORAGE_MIN_FREE_BYTES))
             ),
             runtime_log_level=os.getenv("VDC_RUNTIME_LOG_LEVEL", "INFO"),
             runtime_log_max_bytes=int(

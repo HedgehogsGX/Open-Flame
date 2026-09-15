@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import json
 import shutil
 import subprocess
@@ -17,7 +19,7 @@ def test_get_batch_exposes_exact_downloading_and_postprocessing_progress(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/progress-api-contract"]},
@@ -67,7 +69,7 @@ def test_frontend_executes_real_progress_renderer_for_active_phases(
     if node is None:
         pytest.skip("Node.js is unavailable for the executable frontend contract test")
 
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         page = client.get("/")
 
     assert page.status_code == 200

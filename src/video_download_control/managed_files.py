@@ -1,18 +1,20 @@
 """Small identity and lstat checks for managed filesystem entries.
 
-Callers keep ownership of domain limits, error mapping, and transactional
-cleanup. Path I/O here is limited to non-following `lstat` and a binary open
-whose handle transfers only after its first identity check.
+Callers keep ownership of domain limits, error mapping, and transactions.
+File helpers preserve handle ownership and restrict failed-copy cleanup to
+the plain entry created by that operation.
 """
 from __future__ import annotations
 
 import hashlib
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, TypeAlias
+from typing import BinaryIO, Literal, TypeAlias
 
 
 FileSignature: TypeAlias = tuple[int, int, int, int]
@@ -85,6 +87,22 @@ def lstat_plain(path: Path, *, directory: bool = False) -> os.stat_result:
     return info
 
 
+def discard_created_file(path: Path, created: os.stat_result | None) -> None:
+    """Best-effort failure cleanup of an exclusively created, still-owned file."""
+
+    if created is None:
+        return
+    try:
+        current = path.lstat()
+        if (is_plain_entry(current)
+                and current.st_dev == created.st_dev
+                and current.st_ino == created.st_ino):
+            path.unlink()
+    except BaseException:
+        # Cleanup must not replace the operation's original failure.
+        pass
+
+
 def require_matching_fstat(
     handle: BinaryIO, *, expected: FileSignature
 ) -> os.stat_result:
@@ -96,21 +114,82 @@ def require_matching_fstat(
     return info
 
 
-def open_matching_binary(
-    path: Path, *, expected: FileSignature
-) -> OpenedManagedFile:
-    """Open a binary file and transfer ownership only after an identity match."""
+@contextmanager
+def close_binary_on_error(handle: BinaryIO) -> Iterator[BinaryIO]:
+    """Keep ownership on success; close on failure without replacing its cause."""
 
-    handle = path.open("rb")
     try:
-        info = require_matching_fstat(handle, expected=expected)
+        yield handle
     except BaseException:
         try:
             handle.close()
         except BaseException:
             pass
         raise
+
+
+def fdopen_owned_binary(descriptor: int, mode: Literal["rb", "r+b"]) -> BinaryIO:
+    """Consume a raw descriptor, closing it if file-object wrapping fails."""
+
+    try:
+        return os.fdopen(descriptor, mode, closefd=True)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            pass
+        raise
+
+
+def open_matching_binary(
+    path: Path, *, expected: FileSignature
+) -> OpenedManagedFile:
+    """Open a binary file and transfer ownership only after an identity match."""
+
+    handle = path.open("rb")
+    with close_binary_on_error(handle):
+        info = require_matching_fstat(handle, expected=expected)
     return OpenedManagedFile(handle=handle, info=info)
+
+
+def open_windows_shared_read_binary(
+    path: Path, *, expected: FileSignature
+) -> OpenedManagedFile:
+    """Hold a matching Windows file open while denying other write/delete opens."""
+
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
+    # FILE_FLAG_OPEN_REPARSE_POINT | FILE_ATTRIBUTE_NORMAL.
+    raw = create(str(path), 0x80000000, 0x1, None, 3, 0x00200080, None)
+    if raw == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(
+            raw, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT
+        )
+    except BaseException:
+        try:
+            close(raw)
+        except BaseException:
+            pass
+        raise
+    handle = fdopen_owned_binary(descriptor, "rb")
+    with close_binary_on_error(handle):
+        info = require_matching_fstat(handle, expected=expected)
+        return OpenedManagedFile(handle=handle, info=info)
 
 
 def _consume_open_binary(

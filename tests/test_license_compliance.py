@@ -32,11 +32,13 @@ def test_sdist_excludes_self_reference_and_local_runtime_trees() -> None:
     sdist = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]
 
     assert sdist["exclude"] == [
+        "/tests/**",
         "/validation/apache-2.0-license-migration-evidence.md",
         "/validation/local/**",
         "/runtime-tools/**",
         "/data-uploads/**",
         "/data-edits/**",
+        "/data-workflows/**",
         "/dist/**",
         "/build/**",
         "/.venv/**",

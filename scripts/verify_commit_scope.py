@@ -25,6 +25,13 @@ TEST_FILE_SUFFIXES = (
 )
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+# PR #2 already contains reviewed test maintenance. Only that committed history
+# may cross its original base; it never authorizes a newly staged patch. Once
+# the merge base advances, this bridge is inactive and can be removed. Keep the
+# review endpoints fixed instead of accumulating reusable patch exemptions.
+REVIEWED_PR_BASE = "d48132637ce94a8b0b41bc2a965d24e27ac62aff"
+REVIEWED_PR_HEAD = "7b48a9fe4dae09279a3e986642af68263386e796"
+
 
 def _is_test_artifact(value: str) -> bool:
     path = PurePosixPath(value.replace("\\", "/"))
@@ -69,6 +76,30 @@ def _changed_paths(diff_args: Sequence[str]) -> list[str]:
             paths.append(item.decode("utf-8", errors="surrogateescape"))
         index += path_count
     return paths
+
+
+def _test_patch(base: str, head: str, paths: Sequence[str]) -> bytes:
+    return _git(
+        "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv",
+        "--no-renames", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+        "--unified=3", "--inter-hunk-context=0", "--diff-algorithm=myers",
+        "--no-indent-heuristic", base, head, "--", *paths,
+    )
+
+
+def _reviewed_pr_test_history(base: str, head: str, paths: Sequence[str]) -> bool:
+    if not paths or base != REVIEWED_PR_BASE:
+        return False
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", REVIEWED_PR_HEAD, head],
+        check=False,
+        capture_output=True,
+    )
+    if ancestry.returncode != 0:
+        return False
+    return _test_patch(base, head, paths) == _test_patch(
+        REVIEWED_PR_BASE, REVIEWED_PR_HEAD, paths,
+    )
 
 
 def _commit(value: str) -> str:
@@ -210,6 +241,9 @@ def main() -> int:
                 base_is_tree=base_is_tree,
             )
             print(f"commit_scope_range merge_base={merge_base} head={_commit(head)}")
+            if _reviewed_pr_test_history(merge_base, _commit(head), blocked):
+                print("commit_scope_reviewed_pr_history")
+                blocked = []
     except (OSError, UnicodeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"commit_scope_failed: {exc}", file=sys.stderr)
         return 2

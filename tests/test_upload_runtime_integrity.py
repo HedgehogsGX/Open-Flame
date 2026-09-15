@@ -339,6 +339,14 @@ def test_backend_execution_check_bypasses_warm_status_cache(tmp_path, monkeypatc
         return original_file_digest(*args, **kwargs)
 
     monkeypatch.setattr(setup.hashlib, "file_digest", counted_file_digest)
+    if os.name != "nt":
+        assert backend.inspect()["code"] == "unsupported_platform"
+        assert backend._inspect_for_execution() == {
+            "ready": False, "code": "unsupported_platform",
+        }
+        assert file_hashes == 0
+        return
+
     first = backend.inspect()
     assert first["ready"] is True
     assert first["integrity_cached"] is False

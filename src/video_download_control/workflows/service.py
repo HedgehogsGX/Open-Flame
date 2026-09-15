@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +27,7 @@ from .contracts import (
     WorkflowDomainAdapter,
     WorkflowError,
     workflow_outputs_match_state,
+    workflow_upload_request_key,
 )
 from .profile import (
     canonical_workflow_mapping,
@@ -275,13 +276,19 @@ class WorkflowService:
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=30000")
         try:
-            with connection:
-                yield connection
-        finally:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=30000")
+            yield connection
+            connection.commit()
+        except BaseException:
+            with suppress(BaseException):
+                connection.rollback()
+            with suppress(BaseException):
+                connection.close()
+            raise
+        else:
             connection.close()
 
     def _preflight(
@@ -891,28 +898,9 @@ class WorkflowService:
             )
 
         snapshot, classification, _job_ids_changed = self._observe_upload(record)
-        if classification.disposition == "ready":
-            self._record_upload_outcome(record, snapshot)
-            return self.get(workflow_id)
-        if classification.disposition == "waiting_active":
-            self._transition(
-                workflow_id, "uploading", classification.code, expected=record
-            )
-            return self.get(workflow_id)
-        if classification.disposition == "waiting_confirmation":
-            if classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
-                return self._attention(
-                    workflow_id,
-                    "workflow_domain_data_invalid",
-                    expected=record,
-                )
-            self._transition(
-                workflow_id,
-                "awaiting_upload_confirmation",
-                classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
+        applied = self._apply_upload_retry_observation(record, snapshot, classification)
+        if applied is not None:
+            return applied
         if classification.disposition == "invalid":
             return self._attention(
                 workflow_id,
@@ -934,31 +922,11 @@ class WorkflowService:
         )
         self._sync_upload_job_ids(record, retry_snapshot)
         retry_classification = classify_upload_snapshot(retry_snapshot)
-        if retry_classification.disposition == "ready":
-            self._record_upload_outcome(record, retry_snapshot)
-            return self.get(workflow_id)
-        if retry_classification.disposition == "waiting_active":
-            self._transition(
-                workflow_id,
-                "uploading",
-                retry_classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
-        if retry_classification.disposition == "waiting_confirmation":
-            if retry_classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
-                return self._attention(
-                    workflow_id,
-                    "workflow_domain_data_invalid",
-                    expected=record,
-                )
-            self._transition(
-                workflow_id,
-                "awaiting_upload_confirmation",
-                retry_classification.code,
-                expected=record,
-            )
-            return self.get(workflow_id)
+        applied = self._apply_upload_retry_observation(
+            record, retry_snapshot, retry_classification
+        )
+        if applied is not None:
+            return applied
         return self._attention(
             workflow_id,
             (
@@ -968,6 +936,42 @@ class WorkflowService:
             ),
             expected=record,
         )
+
+    def _apply_upload_retry_observation(
+        self,
+        record: dict[str, Any],
+        snapshot: UploadSnapshot,
+        classification: UploadSnapshotClassification,
+    ) -> dict[str, Any] | None:
+        """Apply a checkpointed success/waiting result without authorizing a retry."""
+
+        workflow_id = record["id"]
+        if classification.disposition == "ready":
+            self._record_upload_outcome(record, snapshot)
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_active":
+            self._transition(
+                workflow_id,
+                "uploading",
+                classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        if classification.disposition == "waiting_confirmation":
+            if classification.code not in _UPLOAD_RETRY_REVIEW_CODES:
+                return self._attention(
+                    workflow_id,
+                    "workflow_domain_data_invalid",
+                    expected=record,
+                )
+            self._transition(
+                workflow_id,
+                "awaiting_upload_confirmation",
+                classification.code,
+                expected=record,
+            )
+            return self.get(workflow_id)
+        return None
 
     def require_attention(
         self,
@@ -1720,13 +1724,8 @@ class WorkflowService:
         """Return each upload slot's immutable per-segment request key."""
 
         return [
-            (
-                f"wf-{record['id']}-upload-jobs"
-                if output["segment_ordinal"] == 1
-                else (
-                    f"wf-{record['id']}-upload-jobs-"
-                    f"{output['segment_ordinal']:03d}"
-                )
+            workflow_upload_request_key(
+                record["id"], output["segment_ordinal"]
             )
             for output in record["outputs"]
             for _target in output["targets"]

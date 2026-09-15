@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import multiprocessing
 import threading
 import time
@@ -33,7 +35,7 @@ def _publish_from_spawn(source: ManagedWorkerRuntimeStatus) -> None:
 
 
 def test_control_only_reports_unknown_worker_instead_of_disabled_network(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         response = client.get('/api/v1/operations/runtime')
     assert response.status_code == 200
     payload = response.json()
@@ -136,7 +138,7 @@ def test_api_consumes_same_run_supervisor_status_and_never_upgrades_tool_policy(
     logger = RuntimeLogger(component='control', config=RuntimeLogConfig(directory=settings.data_root / 'logs'), run_id=RUN_ID)
     source.publish('online', worker_pid=1234)
     app = create_app(settings, runtime_logger=logger, managed_worker_status=source)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         online = client.get('/api/v1/operations/runtime')
         assert online.status_code == 200
         assert online.json()['state'] == 'online'

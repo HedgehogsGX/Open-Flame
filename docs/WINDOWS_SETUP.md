@@ -2,7 +2,7 @@
 
 本流程在源码目录准备本地 Python 环境和锁定媒体工具，也可通过同一个入口安装可选上传 runtime，或从用户已下载的固定 CPython 归档构建可选 AI runtime，之后可独立于 Codex 使用；不要求安装 uv。它仍需要系统 Python，**不是免 Python 的 EXE，也不是已发布的第三方离线工具合集**。
 
-本轮已在独立空目录通过默认联网安装、重复安装、失败后修复及正常启动验证，实测系统 Python 为 3.13.14；详情与范围见 [v0.23 验收记录](../validation/iteration-0.23.0-source-setup-evidence.md)。这不代表所有平台或所有 Python 版本都已验收。
+本轮已在独立空目录通过默认联网安装、重复安装、失败后修复及正常启动验证，实测系统 Python 为 3.13.14；详情与范围见 [v0.23 验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.23.0-source-setup-evidence.md)。这不代表所有平台或所有 Python 版本都已验收。
 
 ## 第一次使用
 

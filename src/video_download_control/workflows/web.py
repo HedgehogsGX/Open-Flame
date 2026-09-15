@@ -1,5 +1,7 @@
 """Single-URL workflow page built on the shared Open-Flame design system."""
 
+from ..uploads.web_rules import UPLOAD_FORM_RULES_JS
+
 WORKFLOW_HTML = r'''<!doctype html>
 <html lang="zh-CN" class="no-js" data-theme="system">
 <head>
@@ -17,7 +19,7 @@ WORKFLOW_HTML = r'''<!doctype html>
     <label class="theme-control"><span>外观</span><select data-of-theme aria-label="界面外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
   </div></header>
   <main class="of-shell">
-    <header class="page-header"><p class="eyebrow">URL 到三平台的可恢复编排</p><h1 aria-label="一次设置，自动推进每个阶段">一次设置，自动推进<em>每个阶段</em></h1><p class="lede">输入一个网址，按已保存的编辑与投稿参数完成下载、翻译、配音、封面和上传。每个跨域副本都会校验，重启后从持久状态继续。</p><p class="notice page-note">云端 AI 会在单独勾选数据外发授权后启动；自动确认只适用于本次流程，应用重启或重试后仍会再次停下。平台返回 submitted 只代表提交完成；公开、审核与定时发布结果仍以平台后台为准。</p></header>
+    <header class="page-header"><p class="eyebrow">URL 到三平台的可恢复编排</p><h1 aria-label="一次设置，自动推进每个阶段">一次设置，自动推进<em>每个阶段</em></h1><p class="lede">输入一个网址，按已保存的编辑与投稿参数完成下载、翻译、配音、封面和上传。每个跨域副本都会校验，重启后从持久状态继续。</p><p class="notice page-note">云端 AI 须先单独授权数据外发。自动确认仅适用于本次流程：已预授权且尚未开始执行的原始排队任务，可在重启后重新校验并继续；手动流程、重试或结果未知的任务仍需停下核对。submitted 是本地记录的投稿结果，平台接收、审核、定时执行和公开状态仍须到平台后台核对。</p></header>
     <section class="status-strip" aria-label="自动流程摘要"><div class="status-tile"><p class="status-label">核心</p><p class="status-value">轻量状态机</p></div><div class="status-tile"><p class="status-label">AI</p><p class="status-value">独立运行时</p></div><div class="status-tile"><p class="status-label">发布</p><p class="status-value">Bilibili · 抖音 · 视频号</p></div></section>
     <section class="card" aria-labelledby="readiness-heading"><div class="card-header"><div><p class="section-index">开始前诊断</p><h2 id="readiness-heading">自动执行就绪度</h2><p class="muted">分别读取下载 Worker、AI runtime、上传 runtime 与已连接账号；这些状态是即时提示，创建时服务端仍会重新校验。</p></div><a class="button-link secondary" href="/uploads">管理上传账号</a></div><div class="diagnostic-grid" id="workflow-readiness"><article class="diagnostic-panel"><p class="status-label">下载 Worker</p><p class="status-value" id="readiness-download-state">正在检查…</p><p class="muted small" id="readiness-download-detail">等待本次启动实例的心跳。</p></article><article class="diagnostic-panel"><p class="status-label">AI runtime 与凭据</p><p class="status-value" id="readiness-ai-state">正在检查…</p><p class="muted small" id="readiness-ai-detail">核对听写、翻译和标准音色配音能力。</p></article><article class="diagnostic-panel"><p class="status-label">上传 runtime</p><p class="status-value" id="readiness-upload-state">正在检查…</p><p class="muted small" id="readiness-upload-detail">核对三平台运行时与当前调度器。</p></article><article class="diagnostic-panel"><p class="status-label">已选平台账号</p><p class="status-value" id="readiness-accounts-state">正在检查…</p><p class="muted small" id="readiness-accounts-detail">核对当前账号登录态。</p></article></div><p id="readiness-summary" class="notice small">正在汇总当前表单所需的运行条件…</p><p id="readiness-updates" class="sr-only" role="status" aria-live="polite"></p></section>
     <p id="message" role="status" aria-live="polite">正在连接自动流程…</p>
@@ -53,14 +55,13 @@ WORKFLOW_HTML = r'''<!doctype html>
     <p class="page-footer">Open-Flame 0.28.0 · 自动流程使用独立 Workflow Schema 3</p>
   </main>
   <script>
-'use strict';
+'use strict';''' + UPLOAD_FORM_RULES_JS + r'''
 const $=id=>document.getElementById(id);let csrf='',busy=false,pollTimer=null,readinessExpiryTimer=null,accounts=[],aiCapabilities=[],workflowPresets=[],appliedPreset=null,presetParameters=null,aiEnginesLoaded=false,presetsLoaded=false,workflowSegmentSequence=0,workflowRefreshSequence=0,renderedWorkflowSignature='',renderedWorkflowStates=new Map(),downloadRuntimeStatus=null,downloadRuntimeObservedAt=null,aiRuntimeStatus=null,uploadRuntimeStatus=null,renderedReadinessSignature='',presetIntentSequence=0,formGeneration=0,presetRestoreGeneration=0,presetRestoreSettled=false,presetRestorePending=false;const readinessProbes={download:'pending',aiRuntime:'pending',aiCapabilities:'pending',upload:'pending',accounts:'pending'},readinessProbeSequence={download:0,aiRuntime:0,aiCapabilities:0,upload:0,accounts:0},changedUploadFields=new Set(),suggestedAiLabelFields=new Set(),maxWorkflowSegments=10,rememberedPresetStorageKey='open-flame-workflow-last-preset-v1';
 const stateNames={created:'已创建',downloading:'下载中',preparing_edit:'准备编辑',awaiting_ai_review:'等待 AI 结果核对',awaiting_edit_confirmation:'等待编辑确认',rendering:'编辑处理中',preparing_upload:'准备上传草稿',awaiting_upload_confirmation:'等待上传确认',uploading:'上传中',completed:'流程已结束',attention_required:'需要处理',canceled:'已取消'};
 const platformNames={bilibili:'Bilibili',douyin:'抖音',tencent:'视频号'},platformContentIds={bilibili:['bilibili-title','bilibili-description','bilibili-tags'],douyin:['douyin-title','douyin-description','douyin-tags'],tencent:['tencent-title','tencent-description','tencent-tags']},platformUploadFieldIds={bilibili:['bilibili-use-overrides','bilibili-title','bilibili-description','bilibili-tags','category-id','copyright','source-credit','bilibili-schedule-mode','bilibili-publish-at','bilibili-publish-delay-hours','bilibili-dynamic','bilibili-no-reprint','bilibili-close-comments','bilibili-close-danmu'],douyin:['douyin-use-overrides','douyin-title','douyin-description','douyin-tags','douyin-schedule-mode','douyin-publish-at','douyin-publish-delay-hours','douyin-declaration'],tencent:['tencent-use-overrides','tencent-title','tencent-description','tencent-tags','tencent-mode','tencent-schedule-mode','tencent-publish-at','tencent-publish-delay-hours','tencent-short-title','tencent-content-label']};
 function uploadCapability(platform){return Array.isArray(uploadRuntimeStatus?.platforms)?uploadRuntimeStatus.platforms.find(item=>item?.id===platform)||null:null;}
 function platformTitleLimit(platform){const value=Number(uploadCapability(platform)?.title_limit);return Number.isSafeInteger(value)&&value>0&&value<=100?value:{bilibili:80,douyin:30,tencent:100}[platform];}
-function platformScheduleLead(platform){const value=Number(uploadCapability(platform)?.schedule_min_lead_seconds);return Number.isSafeInteger(value)&&value>=60&&value<=604800?value:(platform==='bilibili'?21900:14700);}
-function leadText(seconds){const hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60);return hours+' 小时'+(minutes?' '+minutes+' 分钟':'');}
+function platformScheduleLead(platform){return uploadScheduleLead(platform,uploadCapability(platform)?.schedule_min_lead_seconds);}
 function replaceSelectValues(id,emptyLabel,values,current){const select=$(id);select.replaceChildren();const empty=el('option',emptyLabel);empty.value='';select.append(empty);for(const value of values){if(typeof value!=='string'||!value)continue;const option=el('option',value);option.value=value;select.append(option);}select.value=[...select.options].some(option=>option.value===current)?current:'';}
 function renderUploadCapabilities(){for(const platform of Object.keys(platformNames)){const limit=platformTitleLimit(platform),title=$(platformContentIds[platform][0]),schedule=$(platform+'-publish-at'),lead=platformScheduleLead(platform);title.maxLength=limit;title.previousElementSibling.textContent=(platform==='tencent'?'独立主文案':'独立标题')+'（最多 '+limit+' 字）';schedule.previousElementSibling.textContent='定时发布（至少提前 '+leadText(lead)+(platform==='tencent'?'，整点，最多 28 天':'')+'）';}const douyin=uploadCapability('douyin')?.declaration_values,tencent=uploadCapability('tencent')?.content_label_values,modes=uploadCapability('tencent')?.modes,currentMode=$('tencent-mode').value;replaceSelectValues('douyin-declaration','不声明',Array.isArray(douyin)&&douyin.length?douyin:['内容由AI生成','内容为转载信息','内容为个人观点或见解'],$('douyin-declaration').value);replaceSelectValues('tencent-content-label','不标记',Array.isArray(tencent)&&tencent.length?tencent:['含AI生成内容'],$('tencent-content-label').value);$('tencent-mode').replaceChildren(...(Array.isArray(modes)&&modes.length?modes:['publish','draft']).map(value=>{const option=el('option',value==='draft'?'保存平台草稿':'投稿发布');option.value=value;return option;}));$('tencent-mode').value=[...$('tencent-mode').options].some(option=>option.value===currentMode)?currentMode:'publish';}
 function presetProtectsPlatformOption(platform,key){const upload=presetParameters?.profile?.upload,selected=new Set(selectedAccountRows().filter(item=>item.platform===platform).map(item=>item.id));return !!upload&&Array.isArray(upload.target_overrides)&&upload.target_overrides.some(target=>selected.has(target.account_id)&&target.platform_options&&Object.hasOwn(target.platform_options,key));}
@@ -125,7 +126,18 @@ function failWorkflowSegment(text,input=null){const error=$('segment-error');err
 function clearUploadError(){const error=$('upload-error');error.hidden=true;error.textContent='';for(const control of document.querySelectorAll('[data-upload-invalid]')){delete control.dataset.uploadInvalid;control.removeAttribute('aria-invalid');const described=(control.getAttribute('aria-describedby')||'').split(/\s+/).filter(value=>value&&value!=='upload-error');if(described.length)control.setAttribute('aria-describedby',described.join(' '));else control.removeAttribute('aria-describedby');}}
 function showUploadError(text,control=null){const error=$('upload-error');error.textContent=text;error.hidden=false;if(control){control.dataset.uploadInvalid='';control.setAttribute('aria-invalid','true');const described=new Set((control.getAttribute('aria-describedby')||'').split(/\s+/).filter(Boolean));described.add('upload-error');control.setAttribute('aria-describedby',[...described].join(' '));control.focus({preventScroll:false});}}
 function failUpload(text,control=null){showUploadError(text,control);throw new Error(text);}
-function uploadControlValueValid(control){if(!control.validity.valid)return false;const id=control.id,value=control.value.trim();if(['title','bilibili-title','douyin-title','tencent-title'].includes(id)){let limit=control.maxLength;if(id==='title'){const commonPlatforms=selectedAccountRows().map(item=>item.platform).filter(platform=>!$(platform+'-use-overrides').checked);if(commonPlatforms.length)limit=Math.min(...commonPlatforms.map(platform=>platformTitleLimit(platform)));}return (!value&&sourceTitleMode())||!!value&&textLength(value)<=limit;}if(['tags','bilibili-tags','douyin-tags','tencent-tags'].includes(id)){const tags=splitTags(control.value);return (!control.required||tags.length>0)&&tags.length<=10&&new Set(tags).size===tags.length&&tags.every(tag=>textLength(tag)<=20&&!/[#＃\n\r\t]/.test(tag));}if(id==='category-id')return !!value&&Number.isSafeInteger(Number(value))&&Number(value)>=1&&Number(value)<=10000;if(id==='source-credit')return $('copyright').value==='2'?!!value:!value;if(id==='bilibili-dynamic')return textLength(control.value)<=250;if(id==='tencent-short-title')return !value||(textLength(value)>=7&&textLength(value)<=15);if(id.endsWith('-publish-at')){if(!control.value)return true;const platform=id.slice(0,-11),parsed=new Date(control.value),key=control.value.slice(0,16);if(Number.isNaN(parsed.getTime())||localDateTimeKey(parsed)!==key||parsed.getTime()<=Date.now()+platformScheduleLead(platform)*1000)return false;for(let minutes=-180;minutes<=180;minutes+=30){if(!minutes)continue;const alternate=new Date(parsed.getTime()+minutes*60000);if(localDateTimeKey(alternate)===key&&alternate.getTimezoneOffset()!==parsed.getTimezoneOffset())return false;}if(platform==='tencent'&&(parsed.getMinutes()!==0||parsed.getTime()>Date.now()+28*24*3600000))return false;}return true;}
+function uploadControlValueValid(control){
+  if(!control.validity.valid)return false;
+  const id=control.id,value=control.value.trim();
+  if(['title','bilibili-title','douyin-title','tencent-title'].includes(id)){let limit=control.maxLength;if(id==='title'){const commonPlatforms=selectedAccountRows().map(item=>item.platform).filter(platform=>!$(platform+'-use-overrides').checked);if(commonPlatforms.length)limit=Math.min(...commonPlatforms.map(platform=>platformTitleLimit(platform)));}return (!value&&sourceTitleMode())||!!value&&textLength(value)<=limit;}
+  if(['tags','bilibili-tags','douyin-tags','tencent-tags'].includes(id))return uploadTagsValid(splitTags(control.value),control.required);
+  if(id==='category-id')return bilibiliCategoryValid(Number(value));
+  if(id==='source-credit')return $('copyright').value==='2'?!!value:!value;
+  if(id==='bilibili-dynamic')return textLength(control.value)<=250;
+  if(id==='tencent-short-title')return tencentShortTitleValid(value);
+  if(id.endsWith('-publish-at'))return !localPublishSchedule(id.slice(0,-11),control.value,Date.now(),control.required,platformScheduleLead(id.slice(0,-11))).error;
+  return true;
+}
 function clearResolvedUploadError(control){if(control.hasAttribute('data-upload-invalid')&&uploadControlValueValid(control))clearUploadError();}
 function uploadControlRelevant(control){const id=control.id,selected=new Set(selectedAccountRows().map(item=>item.platform));if(id==='title')return !sourceTitleMode();if(id==='tags')return [...selected].some(platform=>!$(platform+'-use-overrides').checked);for(const platform of Object.keys(platformNames)){if(platformContentIds[platform].includes(id))return selected.has(platform)&&$(platform+'-use-overrides').checked;if(id.startsWith(platform+'-')||platform==='bilibili'&&['category-id','copyright','source-credit'].includes(id))return selected.has(platform);}return true;}
 function normalizePresetSegments(raw,requireContiguous=false){if(!Array.isArray(raw)||raw.length>maxWorkflowSegments)throw new Error('该预设的分段参数无效');const segments=[];for(const [index,segment] of raw.entries()){if(!segment||typeof segment!=='object'||!Number.isSafeInteger(segment.start_ms)||!Number.isSafeInteger(segment.end_ms)||segment.start_ms<0||segment.end_ms>604800000||segment.end_ms-segment.start_ms<100||typeof segment.label!=='string'||!segment.label.trim()||[...segment.label.trim()].length>120||index&&segment.start_ms<segments[index-1].end_ms||requireContiguous&&index&&segment.start_ms!==segments[index-1].end_ms)throw new Error('该预设的分段参数无效');segments.push({start_ms:segment.start_ms,end_ms:segment.end_ms,label:segment.label.trim()});}return segments;}
@@ -185,10 +197,16 @@ function recipe(){
   const ai=readWorkflowAiRecipe(translate,target,dub);
   return {segments,cover,translation:ai.translation,dubbing:ai.dubbing};
 }
-function textLength(value){return [...value].length;}
-function splitTags(value){return value.split(/[,，]/).map(item=>item.trim()).filter(Boolean);}
-function localDateTimeKey(value){const pad=number=>String(number).padStart(2,'0');return value.getFullYear()+'-'+pad(value.getMonth()+1)+'-'+pad(value.getDate())+'T'+pad(value.getHours())+':'+pad(value.getMinutes());}
-function scheduleFor(platform,raw,control){if(!raw)return {publish_at_unix:null,publish_timezone_offset_minutes:null};const parsed=new Date(raw),key=raw.slice(0,16);if(Number.isNaN(parsed.getTime())||localDateTimeKey(parsed)!==key)failUpload('定时发布时间无效，可能落在本地夏令时跳时区间',control);for(let minutes=-180;minutes<=180;minutes+=30){if(!minutes)continue;const alternate=new Date(parsed.getTime()+minutes*60000);if(localDateTimeKey(alternate)===key&&alternate.getTimezoneOffset()!==parsed.getTimezoneOffset())failUpload('该本地时间在夏令时切换时出现两次，请选择其他时间',control);}const lead=platformScheduleLead(platform);if(parsed.getTime()<=Date.now()+lead*1000)failUpload(platformNames[platform]+' 定时发布至少需提前 '+leadText(lead),control);if(platform==='tencent'&&parsed.getMinutes()!==0)failUpload('视频号定时发布只支持整点',control);if(platform==='tencent'&&parsed.getTime()>Date.now()+28*24*3600000)failUpload('视频号定时发布最多可提前 28 天',control);return {publish_at_unix:Math.floor(parsed.getTime()/60000)*60,publish_timezone_offset_minutes:-parsed.getTimezoneOffset()};}
+function bilibiliCategoryValid(value){return Number.isSafeInteger(value)&&value>=1&&value<=10000;}
+function tencentShortTitleValid(value){return !value||textLength(value)>=7&&textLength(value)<=15;}
+function scheduleFor(platform,raw,control){
+  const result=localPublishSchedule(platform,raw,Date.now(),control.required,platformScheduleLead(platform));
+  if(result.error){
+    const messages={required:'请选择固定的发布日期和时间',invalid:'定时发布时间无效，可能落在本地夏令时跳时区间',ambiguous:'该本地时间在夏令时切换时出现两次，请选择其他时间',lead:platformNames[platform]+' 定时发布至少需提前 '+leadText(platformScheduleLead(platform)),hour:'视频号定时发布只支持整点',horizon:'视频号定时发布最多可提前 28 天'};
+    failUpload(messages[result.error],control);
+  }
+  return result.schedule;
+}
 function relativeSchedulePolicy(platform,accountId,control){const hours=Number(control.value),minimum=platform==='bilibili'?7:5,maximum=platform==='tencent'?671:8760;if(!Number.isSafeInteger(hours)||hours<minimum||hours>maximum)failUpload(platformNames[platform]+' 相对发布时间需为 '+minimum+'–'+maximum+' 个整小时',control);return {account_id:accountId,platform,delay_seconds:hours*3600};}
 function materializeRelativeSchedule(policy,scheduleBaseUnix,control){if(!Number.isSafeInteger(scheduleBaseUnix)||scheduleBaseUnix<1700000000||scheduleBaseUnix>4102444800)failUpload('本次相对发布时间基准无效，请重新创建流程',control);let publish=Math.ceil((scheduleBaseUnix+policy.delay_seconds)/60)*60,offset=-new Date(publish*1000).getTimezoneOffset();if(policy.platform==='tencent'){let found=false;for(let minute=0;minute<=180;minute++){offset=-new Date(publish*1000).getTimezoneOffset();if((publish+offset*60)%3600===0){found=true;break;}publish+=60;}if(!found)failUpload('无法按本机时区生成视频号整点发布时间',control);}return {publish_at_unix:publish,publish_timezone_offset_minutes:offset};}
 function uploadFieldChanged(...ids){return ids.some(id=>changedUploadFields.has(id));}
@@ -238,10 +256,10 @@ function mergeUploadTarget(account,state,{scheduleBaseUnix=null,templateOnly=fal
 function validateUploadTarget(target){
   const {override,effective,options,platform,platformName,titleMode,titleControl,tagsControl,scheduleControl,schedulePolicy}=target;
   if((titleMode==='explicit'&&!effective.title)||effective.title&&textLength(effective.title)>platformTitleLimit(platform))failUpload(platformName+' 标题为空或超过平台长度限制',titleControl);
-  if(effective.tags.length>10||new Set(effective.tags).size!==effective.tags.length||effective.tags.some(tag=>!tag||textLength(tag)>20||/[#＃\n\r\t]/.test(tag)))failUpload(platformName+' 最多填写 10 个不重复标签，每个最多 20 字，且不要填写 #',tagsControl);
+  if(!uploadTagsValid(effective.tags))failUpload(platformName+' 最多填写 10 个不重复标签，每个最多 20 字，且不要填写 #',tagsControl);
   if(effective.mode==='draft'&&platform!=='tencent')failUpload('只有视频号支持保存平台草稿；Bilibili 与抖音需选择投稿发布',titleControl);
   if(platform==='bilibili'){
-    if(!effective.category_id||!Number.isSafeInteger(effective.category_id))failUpload('Bilibili 投稿必须填写分区 ID',$('category-id'));
+    if(!bilibiliCategoryValid(effective.category_id))failUpload('Bilibili 投稿分区 ID 必须为 1–10000 的整数',$('category-id'));
     if(!effective.tags.length)failUpload('Bilibili 投稿至少需要一个标签',tagsControl);
     if(effective.copyright===2&&!effective.source_credit)failUpload('Bilibili 转载投稿必须填写来源',$('source-credit'));
     if(effective.copyright===1&&effective.source_credit)failUpload('Bilibili 原创投稿请清空转载来源',$('source-credit'));
@@ -249,12 +267,12 @@ function validateUploadTarget(target){
   const scheduled=override.publish_at_unix;
   if(effective.mode==='draft'&&(scheduled||schedulePolicy))failUpload('保存平台草稿时不能设置定时发布',scheduleControl);
   if(scheduled&&!schedulePolicy){
-    const lead=platformScheduleLead(platform)*1000;
-    if(scheduled*1000<=Date.now()+lead)failUpload(platformName+' 预设的发布时间已过期或提前量不足，请更新发布时间',scheduleControl);
-    if(platform==='tencent'&&scheduled*1000>Date.now()+28*24*3600000)failUpload('视频号定时发布最多可提前 28 天',scheduleControl);
+    const error=publishTimeError(platform,scheduled*1000,Date.now(),null,platformScheduleLead(platform));
+    if(error==='lead')failUpload(platformName+' 预设的发布时间已过期或提前量不足，请更新发布时间',scheduleControl);
+    if(error==='horizon')failUpload('视频号定时发布最多可提前 28 天',scheduleControl);
   }
   if(platform==='bilibili'&&textLength(options.dynamic||'')>250)failUpload('Bilibili 动态文案不能超过 250 字',$('bilibili-dynamic'));
-  if(platform==='tencent'&&options.short_title&&(textLength(options.short_title)<7||textLength(options.short_title)>15))failUpload('视频号短标题需为 7–15 字',$('tencent-short-title'));
+  if(platform==='tencent'&&!tencentShortTitleValid(options.short_title))failUpload('视频号短标题需为 7–15 字',$('tencent-short-title'));
 }
 function upload({scheduleBaseUnix=null,templateOnly=false,schedulePolicies=null}={}){
   clearUploadError();

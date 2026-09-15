@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import asyncio
 from dataclasses import replace
 
@@ -33,7 +35,7 @@ def test_short_link_file_import_runs_blocking_resolution_outside_event_loop(sett
         short_link_transport_socket=settings.data_root / "transport.sock",
         short_link_attestation_key_file=settings.data_root / "key",
     )
-    with TestClient(create_app(configured, short_link_resolver=Resolver())) as client:
+    with download_client(create_app(configured, short_link_resolver=Resolver())) as client:
         response = client.post(
             "/api/v1/batches/import?filename=links.txt",
             content="https://b23.tv/synthetic",

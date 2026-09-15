@@ -241,6 +241,12 @@ async function fetch(url, options = {}) {
   url = String(url);
   state.requests.push({url, options});
   if (url === '/api/v1/operations/runtime') return response({mode: 'external_unknown', state: 'unknown'});
+  if (url === '/api/v1/session') return {ok: true, status: 200, json: async () => ({csrf_token: 'synthetic-download-csrf'})};
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD'
+      && new Headers(options.headers || {}).get('X-Download-CSRF') !== 'synthetic-download-csrf') {
+    return {ok: false, status: 403, json: async () => ({detail: 'csrf_required'})};
+  }
   if (url === '/api/v1/credential-defaults') return response({available: true, platforms: []});
   if (url === '/api/v1/operations/queue') return response({paused: false});
   if (url === '/api/v1/platform-circuits') return response([]);
@@ -280,7 +286,7 @@ async function fetch(url, options = {}) {
   throw new Error('unexpected fetch: ' + url);
 }
 const context = vm.createContext({
-  document, fetch, URLSearchParams, console,
+  document, fetch, Headers, URLSearchParams, console,
   addEventListener: (name, callback) => addListener(windowListeners, name, callback),
   setTimeout: (callback, delay) => {
     const id = ++nextTimer;

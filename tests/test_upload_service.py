@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from upload_contract_fixtures import (
+    synthetic_receipt_identity, synthetic_upload_result,
+    fail_confirmed_upload, reconcile_synthetic_not_accepted,
+)
+
 import hashlib
 import os
 import sqlite3
@@ -17,10 +22,12 @@ from video_download_control.uploads.service import UploadService, default_upload
 
 
 class FakeBackend:
+    receipt_identity = staticmethod(synthetic_receipt_identity)
+
     def __init__(self):
         self.uploads = []
         self.accounts = []
-        self.result = BackendResult("submitted", "upstream_submitted")
+        self.result = None
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -40,7 +47,7 @@ class FakeBackend:
         while not self.release.wait(0.01):
             if stop.is_set():
                 return BackendResult("unknown", "upload_cancelled_unknown")
-        return self.result
+        return self.result if self.result is not None else synthetic_upload_result(request, code="upstream_submitted")
 
 
 def wait_for(predicate, timeout=5):
@@ -120,7 +127,7 @@ def test_draft_mode_is_supported_only_by_channels(service, tmp_path):
     channels = account(service, "tencent")
     job = service.create_jobs(source_id=source(service, tmp_path)["id"], account_ids=[channels["id"]],
                               title="草稿", description="说明", tags=[], mode="draft", idempotency_key="request_draft")[0]
-    service.backend.result = BackendResult("draft_saved", "upstream_draft_saved")
+    service.backend.result = BackendResult("draft_saved", "upstream_draft_saved", "post_list_navigation")
     service.confirm(job["id"])
     wait_for(lambda: service.jobs()[0]["state"] == "draft_saved")
     assert service.backend.uploads[0].mode == "draft"
@@ -143,9 +150,10 @@ def test_cancel_queued_never_uploads_and_cancel_running_is_unknown(service, tmp_
     assert len(service.backend.uploads) == 1
     with pytest.raises(UploadError, match="verify_remote_result_first"):
         service.retry(first["id"])
-    retry = service.retry(first["id"], acknowledge_unknown=True)
+    reconcile_synthetic_not_accepted(service, first["id"])
+    retry = service.retry(first["id"])
     assert retry["state"] == "draft" and retry["id"] != first["id"]
-    assert service.retry(first["id"], acknowledge_unknown=True)["id"] == retry["id"]
+    assert service.retry(first["id"])["id"] == retry["id"]
 
 
 def test_mutated_source_fails_before_platform_is_called(service, tmp_path):
@@ -431,8 +439,9 @@ def test_malformed_backend_result_does_not_stop_the_queue(service, tmp_path):
     wait_for(lambda: service.jobs()[0]["state"] == "unknown")
     assert service.jobs()[0]["code"] == "backend_result_invalid"
     assert service.status()["worker_running"]
-    service.backend.result = BackendResult("submitted", "upstream_submitted")
-    retry = service.retry(job["id"], acknowledge_unknown=True)
+    service.backend.result = BackendResult("submitted", "upstream_submitted", "process_exit_zero")
+    reconcile_synthetic_not_accepted(service, job["id"])
+    retry = service.retry(job["id"])
     service.confirm(retry["id"])
     wait_for(lambda: {row["id"]: row["state"] for row in service.jobs()}[retry["id"]] == "submitted")
 
@@ -714,7 +723,7 @@ def test_concurrent_new_database_initialization_publishes_only_complete_schema(t
         assert db.execute("SELECT version FROM metadata").fetchall() == [(SCHEMA_VERSION,)]
         assert {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")} == {
             "metadata", "accounts", "sources", "upload_assets", "jobs", "operations",
-            "requests",
+            "requests", "upload_attempts",
         }
     assert not any(".tmp" in item.name or item.name.endswith("-journal") for item in root.iterdir())
 

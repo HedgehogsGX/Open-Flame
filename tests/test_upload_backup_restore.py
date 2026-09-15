@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from video_download_control.uploads.schema import SCHEMA_VERSION as UPLOAD_SCHEMA_VERSION
+
 import ctypes
 import hashlib
 import json
@@ -597,8 +599,8 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
     backup = create_upload_backup(source_root=source, backup_target=backup_root)
 
     assert _tree_bytes(source) == source_before
-    assert backup.schema_version == 3
-    assert UPLOAD_BACKUP_FORMAT_VERSION == 2
+    assert backup.schema_version == 4
+    assert UPLOAD_BACKUP_FORMAT_VERSION == 3
     payload_media = backup_root.joinpath(*UPLOAD_MEDIA_PAYLOAD_PREFIX.parts)
     assert {path.name for path in payload_media.iterdir()} == {f"{SOURCE_PRESENT}.mp4"}
     all_backup_bytes = b"".join(
@@ -646,7 +648,7 @@ def test_backup_restore_round_trip_is_secret_free_and_applies_recovery_policy(tm
         assert accounts[ACCOUNT_READY]["code"] == "account_missing"
         assert accounts[ACCOUNT_DISCONNECTED]["lifecycle_state"] == "disconnected"
         assert jobs["1" * 32]["state"] == "unknown"
-        assert jobs["1" * 32]["code"] == "interrupted_result_unknown"
+        assert jobs["1" * 32]["code"] == "attempt_receipt_missing"
         assert jobs["2" * 32]["state"] == "draft"
         assert jobs["2" * 32]["code"] == "restart_confirmation_required"
         assert jobs["4" * 32]["retry_of"] == "3" * 32
@@ -738,7 +740,7 @@ def test_service_reachable_tencent_short_titles_can_be_backed_up(
         source_root=root,
         backup_target=tmp_path / "reachable-short-title-backup",
     )
-    assert result.schema_version == 3
+    assert result.schema_version == 4
 
 
 @pytest.mark.parametrize(
@@ -827,12 +829,12 @@ def test_format1_schema2_restores_via_staged_migration_without_changing_backup(t
     result = restore_upload_backup(backup_root=backup_root, restore_root=restored)
 
     assert _tree_bytes(backup_root) == before
-    assert result.schema_version == 3
+    assert result.schema_version == 4
     assert (restored / "assets").is_dir()
     assert list((restored / "assets").iterdir()) == []
     validate_upload_schema(restored / "uploads.sqlite3")
     with sqlite3.connect(restored / "uploads.sqlite3") as db:
-        assert db.execute("SELECT version FROM metadata").fetchone() == (3,)
+        assert db.execute("SELECT version FROM metadata").fetchone() == (4,)
         assert db.execute("SELECT COUNT(*) FROM upload_assets").fetchone() == (0,)
         assert db.execute(
             "SELECT platform_options,cover_landscape_asset_id,publish_at_unix FROM jobs"
@@ -881,7 +883,7 @@ def test_format1_schema2_tencent_short_title_restores_and_rebacks_up(tmp_path):
         source_root=restored,
         backup_target=tmp_path / "legacy-tencent-format2",
     )
-    assert result.schema_version == 3
+    assert result.schema_version == 4
 
 
 @pytest.mark.parametrize(
@@ -1060,12 +1062,12 @@ def test_restore_rejects_casefold_colliding_scanned_paths(tmp_path, monkeypatch)
     source = _make_upload_root(tmp_path)
     backup_root = tmp_path / "casefold-collision-backup"
     create_upload_backup(source_root=source, backup_target=backup_root)
-    original_scan = upload_backup._common._scan_backup_files
+    original_scan = upload_backup.backup_files.scan_backup_files
 
     def scan_with_collision(root):
         return (*original_scan(root), "PAYLOAD/uploads.sqlite3")
 
-    monkeypatch.setattr(upload_backup._common, "_scan_backup_files", scan_with_collision)
+    monkeypatch.setattr(upload_backup.backup_files, "scan_backup_files", scan_with_collision)
     target = tmp_path / "casefold-collision-restore"
 
     with pytest.raises(UploadBackupError, match="upload backup paths collide"):
@@ -1122,7 +1124,7 @@ def test_rehashed_database_schema_tamper_is_still_rejected(tmp_path):
     relative = UPLOAD_DATABASE_PAYLOAD_PATH
     database = backup_root.joinpath(*Path(relative).parts)
     with sqlite3.connect(database) as db:
-        db.execute("UPDATE metadata SET version=4")
+        db.execute("UPDATE metadata SET version=?", (UPLOAD_SCHEMA_VERSION + 1,))
     _update_entry(backup_root, relative)
     target = tmp_path / "schema-tamper-restore"
 
@@ -1629,20 +1631,20 @@ def test_existing_backup_and_restore_targets_are_never_replaced(tmp_path):
 def test_backup_failure_and_restore_failure_remove_private_staging(tmp_path, monkeypatch):
     source = _make_upload_root(tmp_path)
     backup_target = tmp_path / "failed-backup"
-    original_copy = upload_backup._copy_regular_file
+    original_copy = upload_backup.backup_files.copy_regular_file
 
     def fail_media(source_path, destination, **kwargs):
         if source_path.parent.name == "media":
             raise UploadBackupError("injected media copy failure")
         return original_copy(source_path, destination, **kwargs)
 
-    monkeypatch.setattr(upload_backup, "_copy_regular_file", fail_media)
+    monkeypatch.setattr(upload_backup.backup_files, "copy_regular_file", fail_media)
     with pytest.raises(UploadBackupError, match="injected"):
         create_upload_backup(source_root=source, backup_target=backup_target)
     assert not backup_target.exists()
     assert not list(tmp_path.glob(".failed-backup.partial-*"))
 
-    monkeypatch.setattr(upload_backup, "_copy_regular_file", original_copy)
+    monkeypatch.setattr(upload_backup.backup_files, "copy_regular_file", original_copy)
     valid_backup = tmp_path / "valid-for-failed-restore"
     create_upload_backup(source_root=source, backup_target=valid_backup)
     restore_target = tmp_path / "failed-restore"

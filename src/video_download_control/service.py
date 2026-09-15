@@ -140,7 +140,10 @@ class BatchService:
                         try:
                             resolution = self.short_link_resolver.resolve(
                                 normalized.canonical_url,
-                                timeout_seconds=short_link_deadline - now,
+                                timeout_seconds=min(
+                                    self.short_link_batch_timeout_seconds,
+                                    short_link_deadline - now,
+                                ),
                             )
                             if not isinstance(resolution, ShortLinkResolution):
                                 raise TypeError(

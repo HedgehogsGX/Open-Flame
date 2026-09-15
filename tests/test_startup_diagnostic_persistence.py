@@ -201,6 +201,8 @@ def test_parallel_process_writers_have_complete_noninterleaved_records(
     profile: Path, rotate: bool
 ) -> None:
     program = (
+        "import video_download_control.startup_diagnostics as diagnostics; "
+        "diagnostics._LOCK_TIMEOUT_SECONDS = 10.0; "
         "from video_download_control.startup_diagnostics import DiagnosticCode, persist_diagnostic; "
         "assert all(persist_diagnostic(DiagnosticCode.INVALID_ARGUMENTS) for _ in range(12))"
     )
@@ -225,7 +227,9 @@ def test_parallel_process_writers_have_complete_noninterleaved_records(
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         results = list(executor.map(run, range(6)))
-    assert all(result.returncode == 0 and result.stderr == "" for result in results)
+    assert all(result.returncode == 0 and result.stderr == "" for result in results), [
+        (result.returncode, result.stderr) for result in results
+    ]
     records = _records(profile)
     if rotate:
         assert 0 < len(records) < 72

@@ -45,7 +45,7 @@ def test_cli_creates_and_restores_an_upload_backup(
         "file_count": 2,
         "manifest_sha256": created["manifest_sha256"],
         "operation": "create",
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "ok",
         "total_bytes": created["total_bytes"],
     }
@@ -71,7 +71,7 @@ def test_cli_creates_and_restores_an_upload_backup(
         "manifest_sha256": created["manifest_sha256"],
         "operation": "restore",
         "restore_root": str(restore_root),
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "ok",
         "total_bytes": restored["total_bytes"],
     }

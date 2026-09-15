@@ -61,9 +61,9 @@ Schema 2 比对运行时的完整文件集合与 SHA-256，包含 SAU 源码、b
 
 页面状态最多缓存 10 秒，显示最近检查的年龄；manifest 的文件身份变化立即使结果缓存失效。缓存到期后重新枚举集合，并按文件身份、大小和时间戳复用进程内的散列缓存；因此普通状态页对运行时漂移的反馈有界滞后，不作为执行授权。开始登录、检查账号或上传之前以及 CLI `--check` 都绕过这些缓存执行完整核验。`__pycache__` 中的普通 `.pyc` 允许存在，但桥接解释器使用 `-I -B` 和每次操作独立的空 `pycache_prefix`，避免读取相邻缓存；其他位置的 `.pyc` 拒绝。账号和浏览器 profile 写入私有操作目录。
 
-manifest 是本机运维完整性记录，未做数字签名。Chromium 与 CPython 以安装时的基线检测后续漂移；不能声称已独立验证其发行签名，或能够抵御同权限用户同时重写应用、锁和 manifest。页面缓存也不是执行授权。检测耗时与实际安装结果见 [本轮修复记录](../validation/iteration-0.24.3-debug-fixes.md)。
+manifest 是本机运维完整性记录，未做数字签名。Chromium 与 CPython 以安装时的基线检测后续漂移；不能声称已独立验证其发行签名，或能够抵御同权限用户同时重写应用、锁和 manifest。页面缓存也不是执行授权。检测耗时与实际安装结果见 [本轮修复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.3-debug-fixes.md)。
 
-执行入口和状态页面都保留 Windows 平台门禁；非 Windows 不因 manifest 完整而获得运行授权。CLI 安装及 `--check` 在创建目录或获取锁前拒绝 symlink/junction 重定向根目录，避免在被拒绝的目标留下锁文件。最终补修证据见 [源码审查记录](../validation/iteration-0.24.3-final-review.md)。
+执行入口和状态页面都保留 Windows 平台门禁；非 Windows 不因 manifest 完整而获得运行授权。CLI 安装及 `--check` 在创建目录或获取锁前拒绝 symlink/junction 重定向根目录，避免在被拒绝的目标留下锁文件。最终补修证据见 [源码审查记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.24.3-final-review.md)。
 
 ## 固定来源
 

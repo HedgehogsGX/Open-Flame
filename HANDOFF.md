@@ -1,12 +1,39 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-11（Australia/Adelaide）
-> 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
-> [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
+> 最后更新：2026-09-16（Australia/Adelaide）
+> 当前身份、能力、风险与下一入口保留在本文；逐项结果见
+> [`validation/`](validation/README.md)，历史结果只证明各自冻结构建。
 
-新开发任务可直接复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、
-数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
-提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
+新任务可复制 [`docs/HANDOFF_PROMPT.md`](docs/HANDOFF_PROMPT.md)；模块、进程、数据所有权与
+跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。继续前重新核对
+HEAD、远端 main、Schema、CI 与签名。
+
+本轮修复 Upload Schema 初始化的锁所有权：打开后、进入业务段前的中断也会立即尝试
+解锁和关闭；调用方保留异常 traceback 时不再阻塞下一次初始化。准备阶段沿用既有
+Schema 错误映射，业务段保留原始异常；清理失败不覆盖主异常，成功路径保留最先发生的
+清理错误。原生锁、路径复核、轮询时限和 SQL 不变，同一组反馈 **9/22 → 22/22**，见
+[当前验收](validation/README.md#upload-schema-lock-ownership-2026-09-16)。Windows Python 3.13.14 /
+Node 22.23.2 完整现有回归 2442 passed、16 skipped；新提交 CI 与安装仍须单独绑定。
+
+基线 `8819190` 已修复旧库迁移的错误归属，但其 CI 最终为 **7/8 success**：push
+Windows 3.12 的 Node 10 秒等待在首轮及唯一一次原样复跑均失败，原因未确认，成功 receipt
+未生成。PR Windows 3.12 首轮通过；补做的本地 Python 3.12.10 / Node 22.23.2 完整套件
+2442 passed、16 skipped 也未复现。两次原始日志、版本更正与失败交付记录保留在 ignored
+`validation/local/upload-migration-ownership-20260916/` 和 [PR #2](https://github.com/HedgehogsGX/Open-Flame/pull/2)。
+本次锁修复不解释该 Node 超时；新提交必须读取自己的 CI、构建和安装结果。
+
+已读取 [PR 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。通用测试
+摘要豁免已撤除，新增/改动 staged tests 一律拦截；仅保留固定已提交历史的范围校验，base
+前移即失效。118 份历史报告留在 Git 并退出发行清单，发行载荷保留索引、模板与操作指南。
+旧 CI 失败和复跑经过继续保留，不能用后续通过倒推它们的根因。
+
+用户反馈 **YT 6/10**；四个失败 URL、原始错误和执行版本仍缺失，PR 评论没有这些样本。
+收到输入后先复现，再用同一批样本复验；本地文件与锁修复不证明真实通过率提高。
+
+开发分支为 `codex/architecture-reset-ci`，起点 main `d481326`，尚未合并。六类核心职责加
+薄 CLI、四域独立数据库/运行时、CAS、lease、checkpoint、unknown 与逐项确认继续保持。
+本轮同时收敛交接、计划及架构中的重复流水记录；完整历史见[冻结交接](https://github.com/HedgehogsGX/Open-Flame/blob/8819190e1ceae8f313b26fc6aeb8eb9f04929fa8/HANDOFF.md)，
+各切片验证仍由[验收索引](validation/README.md)定位。
 
 ## 当前源码身份
 
@@ -18,13 +45,14 @@
 | 上传备份格式 | 3 |
 | 首批上传平台 | Bilibili、抖音、视频号（内部 ID `tencent`） |
 | 前端方向 | 方向 C“编辑式玻璃”，遵循 [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) |
-| Git 交付 | 关键步骤后签名提交并直接推送 `origin/main`；禁止 force push |
+| Git 交付 | 当前任务签名提交到 `codex/architecture-reset-ci`，通过分支/PR 交付；不直接推送 main，禁止 force push |
 | Git 身份 | `Cyaegha_Xu <85352261+novahanser@users.noreply.github.com>` |
 | Upload Schema 4 源码提交 | `496fb63f9d0010c22fa1abc660e6450cd403b6be`；已签名直推 `origin/main`，GitHub author/committer 均归属 `novahanser` |
 
-当前源码位于 0.28.0 发布后的持续开发链。`0592b6f` 的五件制品和包外 receipt
-只证明其冻结构建；之后的提交尚未形成新的 clean release receipt。判断当前源码时以
-`git rev-parse HEAD`、源码中的版本/Schema 常量和对应提交后的验证记录为准。
+当前源码位于 0.28.0 发布后的持续开发链。历次五件制品和包外 receipt 只证明各自冻结构建。
+本轮最终制品须从包含本交接更新的 clean commit 冻结，和该提交的四格 CI、源码/wheel
+独立安装及包外 receipt 一起核对；精确路径与最终 HEAD 由交付报告提供。判断源码时以
+`git rev-parse HEAD`、版本/Schema 常量和对应提交后的验证记录为准。
 
 ## 当前已接线能力
 
@@ -119,16 +147,36 @@
 
 | 范围 | 当前记录 |
 | --- | --- |
-| 当前状态与 CI 策略 | [文档状态收敛](validation/iteration-0.28.0-document-status-consolidation.md) |
-| Workflow 前端职责 | [recipe 分责](validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](validation/iteration-0.28.0-workflow-upload-form-functions.md) |
-| 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](validation/iteration-0.28.0-download-http-boundary.md) |
-| Workflow 编排 | [Edit snapshot](validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
-| 纯数据契约 | [上传身份](validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](validation/iteration-0.28.0-upload-metadata-contract.md) |
-| 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](validation/iteration-0.28.0-upload-attempt-receipts.md) |
+| 异步测试维护 | [三个封面完成等待、诊断日志并发预算与精确差分门禁](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md) |
+| 本地恢复补充 | [跨进程锁/恢复、正式运行时重建与真实 Chromium 进程回收](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md) |
+| 当前数据保护与日志 | [Download/Upload 独立备份恢复及副本启动](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-application-data-recovery.md)、[8 个合法路由日志模板修复](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-runtime-route-logging.md) |
+| 环境回退与私有保护 | [旧版环境、Schema 3 普通启停和 DPAPI 加密验证](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md) |
+| main 门禁 | [精确配置提案、权限边界与远端验收步骤](docs/MAIN_MERGE_GATE.md) |
+| 固定负载与最新 CI | [9822454 存储 300 轮通过、正常停机及 PR 封面测试等待竞争](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-storage-soak-and-ci-follow-up.md) |
+| 上传页重连 | [恢复连接反馈、刷新当前会话并保留操作提示](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-poll-reconnection.md) |
+| 上传容量配置 | [部署阈值、接收/复制门槛与满盘清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-storage-threshold.md) |
+| 隔离验收与旧数据副本 | [1540a7e 普通启停、四页浏览器、Upload 副本迁移/恢复与流程文案修正](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md) |
+| 发布准备基线 | [7575773 的 push/PR CI、同提交安装 receipt 与待配置门禁](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-baseline.md) |
+| 当前状态与 CI 策略 | [文档状态收敛](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-document-status-consolidation.md) |
+| 封面规则与当前回归 | [Upload 封面所有权及备份审计](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-cover-ownership.md) |
+| AI 重试图所有权 | [Editing 统一校验与取消事务](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-ai-retry-ownership.md) |
+| Workflow 重试与取消 | [共用结果应用和取消尾段](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-retry-cancel-tails.md) |
+| 备份文件所有权 | [复制目标与 descriptor 失败清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-backup-file-ownership.md) |
+| 公共备份文件操作 | [公开 Module、领域策略与测试迁移缺口](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-public-backup-files.md) |
+| Editing render 重试图 | [公开解析、一致读与取消保护](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editing-render-retry-ownership.md) |
+| 表单校验与日期意图 | [Workflow 共享校验](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-shared-validation.md) |
+| Workflow 前端职责 | [recipe 分责](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-recipe-functions.md)、[上传表单分责](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-upload-form-functions.md) |
+| 文件与 HTTP 边界 | [受管文件读取（2026-09-10 S6b 基线；2026-09-11 bounded-byte 增量）](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-managed-file-read.md)、[下载 HTTP 防护](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-download-http-boundary.md) |
+| Workflow 编排 | [Edit snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-edit-snapshot-observation.md)、[Upload snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-snapshot-observation.md)、[AI snapshot](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ai-snapshot-application.md)、[AI retry lineage](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-ai-retry-lineage.md) |
+| 纯数据契约 | [上传身份](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-identity-contract.md)、[上传重试完整投稿身份](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-retry-payload-identity.md)、[Workflow profile](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-profile-contract.md)、[上传 metadata](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-metadata-contract.md) |
+| 上传尝试与人工核对 | [Upload Schema 4 attempt receipt](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-attempt-receipts.md) |
 | 当前系统结构 | [当前架构](docs/CURRENT_ARCHITECTURE.md)、[继续开发提示词](docs/HANDOFF_PROMPT.md) |
-| 用户功能 | [来源标题与网址即运行](validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](validation/iteration-0.28.0-source-cover-research-and-import.md) |
-| 当前本机 runtime | [应用根与 runtime 刷新](validation/iteration-0.28.0-local-runtime-refresh.md) |
-| CI | [托管 CI 执行链恢复](validation/iteration-0.28.0-hosted-ci-recovery.md) |
+| 本轮补充修复 | [字幕清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-caption-cleanup-errors.md)、[发行文档检查边界](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-documentation-boundary.md) |
+| Workflow 身份构造 | [请求键与冻结投稿字段](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-request-construction.md) |
+| 本轮架构重置 | [Worker/CLI 分责](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-worker-entry-boundary.md)、[启动回滚](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-start-rollback.md)、[媒体清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-media-cleanup-errors.md)、[辅助素材清理](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-auxiliary-cleanup-errors.md)、[adapter 解码](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-adapter-control-decoding.md)、[回执状态合同](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-upload-receipt-contract.md)、[Download 素材读取](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-download-asset-reader.md) |
+| 用户功能 | [来源标题与网址即运行](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-title.md)、[来源字幕优先复用](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-caption-reuse.md)、[Workflow 来源封面偏好](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)、[Workflow 投稿重试](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-upload-retry.md)、[配音断点重试](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-speech-checkpoint-retry.md)、[相对发布时间预设](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-relative-schedules.md)、[无 AI 完整视频](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-no-ai-full-video.md)、[编辑式玻璃前端](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-editorial-glass-frontend.md)、[来源封面调研与导入](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-source-cover-research-and-import.md) |
+| 当前本机 runtime | [应用根与 runtime 刷新](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-runtime-refresh.md) |
+| CI | [当前状态与历史失败](docs/CI.md)、[合同维护与恢复](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-ci-contract-maintenance.md) |
 
 这些记录分别绑定各自源码和环境。它们不能相互拼接成当前 release receipt，也不能把
 synthetic/offline/browser 结果解释成真实模型质量或平台接收。
@@ -140,16 +188,22 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
    真人试听仍未知。
 2. **真实三平台发布未验收。** 本地账号显示 ready 只说明本地 session 记录状态；不能证明
    远端 session 仍有效，也不能证明上传、审核、定时发布或公开可见成功。
-3. **当前源码尚未形成新的 release candidate。** Upload Schema 4 源码里程碑已冻结并签名
-   推送为 `496fb63f9d0010c22fa1abc660e6450cd403b6be`，但 `0592b6f` 之后的功能与架构提交仍需
-   新的 clean candidate、源码/wheel 独立安装和包外 receipt，才能形成新的发布结论。
-   2026-09-10 的当前应用根记录只验证上传库由 Schema 1 迁移到 Schema 3；本轮没有在该实际
-   应用根执行 Schema 4 迁移或审计，临时 Schema 4 浏览器 smoke 不能替代它。
-4. **托管 CI 仍为红色。** CI 已在 Windows/Linux 与 CPython 3.12/3.13 真实执行；环境和
-   提交范围门禁通过后，完整 pytest 因冻结历史测试与当前安全/Schema/版本合同不一致而失败。
-   本轮受影响的上传回归为 483 passed、56 failed；精确命令、分组原因与当前 validator 结果见
-   [Upload Schema 4 attempt receipt 记录](validation/iteration-0.28.0-upload-attempt-receipts.md)。
-   按仓库策略不得通过修改这些测试或弱化生产合同来伪造绿色结果。
+3. **发行与真实应用根的验收边界。** 制品、独立安装和包外 receipt 必须绑定同一提交；
+   `7575773` 已有同提交 source/wheel 安装 receipt，见发布准备基线；该结果不覆盖后续提交。
+   `c07b0af` / `65e5c48` 的历史结果单独保留。2026-09-10 的实际应用根记录
+   只验证 Upload Schema 1→3；本轮没有在该实际根执行 Schema 4 迁移或审计。
+   `1540a7e` 已完成该旧库的保护副本、Schema 3→4 迁移和独立备份恢复；
+   原库摘要未变，见隔离验收记录。`d970bce` 又完成当前 Download/Upload 的联合保护副本和
+   两套独立备份恢复；该实际根中 Editing/Workflow 目录缺席，不能据此宣称其历史内容已恢复。
+   恢复副本普通启停和四库检查通过，期间发现并修复合法预设等路由日志拒写，见本轮记录。
+   后续已完成环境保护及独立副本、旧 `97929f6` 普通启停、私有状态的 DPAPI 加密和独立进程
+   解密核验，见[回退演练](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-rollback-environment-drill.md)。
+   Upload venv 仍依赖原绝对路径解释器；真实凭据落盘恢复、异机/offsite 和实际根升级未执行。
+4. **精确测试维护已应用，合并门禁尚未配置。** 维护前 `0dfcf82` push 四格 success，PR 的
+   Windows 3.13 诊断日志并发用例失败。v3 已修正三个封面用例的完成等待，并限定诊断日志
+   用例子进程预算、补充失败详情，实际两模块 73 项通过，见[维护记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-async-test-maintenance.md)。
+   新提交须核对自己的 CI。main 规则清单仍为空，当前 API 身份未显示 admin 权限；
+   [门禁提案](docs/MAIN_MERGE_GATE.md)已准备，配置、真实阻断验证和合并仍各自待办。
 5. **目标 Linux/Docker 未验收。** Windows 本地与 synthetic 结果不关闭 T15 的 namespace、
    ACL、mount、AF_UNIX、恢复和第三方 runtime 分发边界。
 6. **真实下载能力仍按样本证据限定。** 历史少量 YouTube/X/Instagram 成功、Bilibili 412、
@@ -162,24 +216,34 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 7. **来源字幕内容仍需核对。** ready caption 与 `origin=platform` 只证明登记关系和文件完整性；
    不能区分人工字幕与平台自动字幕，也不能证明语言、文字或时间轴准确。没有合适 SRT/VTT
    时会回退 AI 听写，因此 transcribe capability、授权、外发范围与费用仍须在流程创建前冻结。
-8. **两个本地 P2 失败路径仍待修复。** `WorkflowManager.get()` 在首次 `Thread.start()` 抛错时
-   尚未回滚已发布的 service/owner 状态；Editing 与 verified response 的部分构造失败清理仍可能
-   由 `handle.close()` 异常覆盖原始校验错误。未跟踪评审中的隔离探针曾复现两项，当前源码复核
-   仍能确认相应路径存在；没有真实环境事故或数据丢失证据。当前源码的完整说明与保持条件见
+8. **后续架构精简按收益分段。** 线程启动回滚、媒体失败清理、Upload 源文件消费期保护、
+   Download 受管读取、CLI 分责和跨页纯规则已实施；最新故障修复保留上述所有权边界。
+   本轮工程验证已恢复；可继续收敛的职责与复杂度集中点见
    [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md#9-当前缺陷复杂度集中点与下一切片)。
 
 ## 下一入口
 
-1. 若没有新的外部测试反馈，先把上述两个 P2 失败路径分别做成小修提交：先处理 Workflow
-   首次线程启动回滚，再处理 close 清理不覆盖原异常。复用现有回归；新的故障注入只能放在
-   已忽略的 `validation/local/`，不能修改 tracked tests。
+1. 以[隔离验收记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-release-readiness-drill.md)定位并重新核对
+   HEAD/PR/CI。普通启停、四页浏览器与旧 Upload 数据副本迁移/独立恢复已完成限定验证；
+   上传剩余空间阈值已贯通启动、服务、API 和页面；重启后残留的连接错误与旧 CSRF 已修复。
+   `9822454` 固定合成存储负载已完成 600.77 秒/300 轮及正常停机。
+   下一步核对本次精确维护提交的 CI，再按已获准范围继续实际根维护与真实业务；
+   总配额和跨进程空间预订仍未实现。
+   当前实际根的 Download/Upload 业务数据保护与独立恢复、同机旧版环境回退及加密私有状态
+   验证已完成限定检查；恢复解释器正式重建、跨进程恢复和 Chromium 回收补充见
+   [本地恢复记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-local-recovery-validation.md)。旧环境原路径依赖、
+   凭据落盘恢复、门禁配置及实际根维护仍分别待办。
+   当前 upload backup create 只接受 Schema 4；
+   原库保护、迁移和 restore 分开取证，不用启动 service/manager 做只读检查。
+   外部反馈出现时优先复现。已批准并应用的测试差分不重复审批，也不扩大授权范围；
+   临时故障注入仍放在已忽略的 `validation/local/`。
 2. 外部测试人员从 [`TESTING.md`](TESTING.md) 开始，按
    [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) 定位问题，并用
    [`docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md`](docs/EXTERNAL_TESTER_HANDOFF_TEMPLATE.md)
    返回环境、精确 commit、步骤、脱敏日志与结果。不要提交 Cookie、token、URL 样本、媒体、
    本机路径或 `validation/local/` 内容。
-3. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交并直推
-   `origin/main`。首批上传范围保持 Bilibili、抖音、视频号。
+3. 收到外部反馈后，先复现并修复本地可证明的问题；每个关键修复独立签名提交到当前开发
+   分支，通过分支/PR 交付。首批上传范围保持 Bilibili、抖音、视频号。
    对 `unknown` 上传先保存数据库与日志、读取本次 receipt 并在对应平台后台核对；只有固定
    `not_accepted` 结论落库后才能建立 retry 草稿，不得使用旧请求体或手工改库直接重传。
 4. 真实 OpenAI、真人试听、扫码/登录、上传、定时发布和公开可见性验证必须在该具体动作已
@@ -198,7 +262,7 @@ synthetic/offline/browser 结果解释成真实模型质量或平台接收。
 - 继续工作前阅读 [`AGENTS.md`](AGENTS.md)、
   [`docs/FOLLOW_UP_EXECUTION_PLAN.md`](docs/FOLLOW_UP_EXECUTION_PLAN.md) 和改动范围对应的
   最新 evidence。
-- 后续提交不得新增或修改自动化测试文件。现有 `tests/` 只用于本地/CI 回归；临时探针、
+- 除 `AGENTS.md` 中明确批准的限定维护外，后续提交不得新增或修改自动化测试文件。现有 `tests/` 只用于本地/CI 回归；临时探针、
   日志、截图和结果放在已忽略的 `validation/local/`。提交前运行
   `scripts/verify_commit_scope.py --staged`；仓库 hook 与 hosted CI 共用该分类器。
 - 生产页面沿用编辑式玻璃 token、组件、焦点、减少动态、窄屏和文字缩放规则。轮询不得覆盖

@@ -191,7 +191,7 @@ workflow.edit_project_id
 
 重启时，已成功导入的唯一来源 timeline 会先按 project 和完整 provenance 复用，不应仅因原 sidecar 随后不可读而创建第二条 timeline；同一 project 出现多条匹配来源 timeline 应按数据不一致处理。来源 timeline 已批准而 translation 失败时，显式 retry 只能创建 translation successor，并继续绑定同一 parent revision；若出现新的 transcribe task，记录两条 AI task lineage 和 workflow events，按回归处理。
 
-来源封面排障先核对显式 `upload.prefer_download_cover=true`、生成封面 fallback、冻结的 `download_asset_id` 与 `upload_cover_id`：只有可信 owner envelope 下的 0 个 thumbnail 才正常回退；多候选为 `workflow_source_cover_ambiguous`，登记/受管路径/owner 异常为 `workflow_source_cover_unavailable`，实际 hash 漂移由 Download resolver 与 Upload `expected_sha256` 双重拒绝。`preparing_upload` 已有 `upload_cover_id` 但本段尚无 source/job 是合法的两阶段 checkpoint；不要清空它。响应丢失后应从稳定 Upload request 的共同封面槽恢复，封面媒体已合法删除也不应阻止收回 job IDs；尚无本段请求的取消会先写专用空 tombstone，重复取消不得再查询 Editing/Download，也必须继续处理前序分段 jobs。sentinel digest 不匹配应进入 `upload_request_invalid`，不要改库“修复”。完整核对链见[来源封面偏好验证](../validation/iteration-0.28.0-workflow-source-cover-preference.md)。
+来源封面排障先核对显式 `upload.prefer_download_cover=true`、生成封面 fallback、冻结的 `download_asset_id` 与 `upload_cover_id`：只有可信 owner envelope 下的 0 个 thumbnail 才正常回退；多候选为 `workflow_source_cover_ambiguous`，登记/受管路径/owner 异常为 `workflow_source_cover_unavailable`，实际 hash 漂移由 Download resolver 与 Upload `expected_sha256` 双重拒绝。`preparing_upload` 已有 `upload_cover_id` 但本段尚无 source/job 是合法的两阶段 checkpoint；不要清空它。响应丢失后应从稳定 Upload request 的共同封面槽恢复，封面媒体已合法删除也不应阻止收回 job IDs；尚无本段请求的取消会先写专用空 tombstone，重复取消不得再查询 Editing/Download，也必须继续处理前序分段 jobs。sentinel digest 不匹配应进入 `upload_request_invalid`，不要改库“修复”。完整核对链见[来源封面偏好验证](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-source-cover-preference.md)。
 
 - `attention_required` 是需要核对的终止点，不等于失败可重试。
 - 自动确认只适用于该 workflow 的冻结 intent。重启、retry、legacy migration、running/canceling 和 unknown 有各自保守规则。
@@ -233,7 +233,7 @@ workflow.edit_project_id
 - `upload_request_invalid` / `upload_job_set_invalid` / `job_retry_lineage_invalid`：request 或 retry lineage 不完整、分叉、循环或身份异常；保留 Upload/Workflow 数据库、WAL 与日志，停止确认和重试。
 - `account_session_changed`、source/cover 校验失败或发布时间已过：修复账号或素材后重建 workflow；冻结投稿参数不会在 retry 中被静默替换。
 
-如果 Upload 已建立 successor，但 Workflow 仍保存父 job ID，先刷新或点一次“立即对账/建立失败投稿重试”。正常恢复会沿唯一 lineage 写回当前 leaf 并停在确认门，不会再建一代；不要手工改 `upload_job_ids` 或 `retry_of`。完整本地验证见[Workflow 投稿重试记录](../validation/iteration-0.28.0-workflow-upload-retry.md)。
+如果 Upload 已建立 successor，但 Workflow 仍保存父 job ID，先刷新或点一次“立即对账/建立失败投稿重试”。正常恢复会沿唯一 lineage 写回当前 leaf 并停在确认门，不会再建一代；不要手工改 `upload_job_ids` 或 `retry_of`。完整本地验证见[Workflow 投稿重试记录](https://github.com/HedgehogsGX/Open-Flame/blob/7b48a9fe4dae09279a3e986642af68263386e796/validation/iteration-0.28.0-workflow-upload-retry.md)。
 
 不确定结果处理顺序：停止自动重试 → 读取并保存本地 job/attempt/code/revision/time → 到对应平台后台搜索测试编号 → 勾选已经完成平台核对 → 只提交固定 `not_accepted`、`submission_acknowledged` 或视频号草稿的 `draft_saved` 结论。仍不确定时保持 `unknown`，不要提交猜测；只有 `not_accepted` 落库后才按产品入口创建并再次确认显式 retry。操作者勾选与人工结论是声明，不是独立平台证明。
 

@@ -157,6 +157,56 @@ def normalize_platform_options(platform: str, value: object) -> dict:
     return options
 
 
+def cover_slot(platform: str, width: int, height: int) -> str | None:
+    """Choose the target cover field for verified positive image dimensions."""
+    if platform == "bilibili":
+        return "cover_landscape_asset_id" if width >= height else None
+    if platform == "douyin":
+        return "cover_landscape_asset_id" if width >= height else "cover_portrait_asset_id"
+    if platform == "tencent":
+        ratio = width / height
+        if abs(ratio - 4 / 3) <= 0.04:
+            return "cover_landscape_asset_id"
+        if abs(ratio - 3 / 4) <= 0.04:
+            return "cover_portrait_asset_id"
+    return None
+
+
+def cover_slot_error(
+    platform: str, *, landscape: bool, portrait: bool
+) -> str | None:
+    """Check slot presence before callers read media or inspect its dimensions."""
+    if portrait and platform not in {"douyin", "tencent"}:
+        return "portrait_cover_unsupported"
+    if platform == "douyin" and landscape and portrait:
+        return "multiple_covers_unsupported"
+    return None
+
+
+def cover_dimensions_error(
+    platform: str,
+    *,
+    landscape: tuple[int, int] | None,
+    portrait: tuple[int, int] | None,
+) -> str | None:
+    """Check a valid slot combination using verified positive dimensions only.
+
+    The caller owns media presence, byte identity and error/transaction policy.
+    Reusing cover_slot keeps Workflow selection and persisted job rules aligned.
+    """
+    code = {
+        "bilibili": "bilibili_cover_orientation_invalid",
+        "douyin": "douyin_cover_orientation_invalid",
+        "tencent": "tencent_cover_ratio_invalid",
+    }.get(platform)
+    if code is not None and (
+        landscape is not None and cover_slot(platform, *landscape) != "cover_landscape_asset_id"
+        or portrait is not None and cover_slot(platform, *portrait) != "cover_portrait_asset_id"
+    ):
+        return code
+    return None
+
+
 def validate_publish_schedule(
     platform: str,
     publish_at_unix: object,
@@ -194,6 +244,9 @@ def validate_publish_schedule(
 
 
 __all__ = [
+    "cover_slot",
+    "cover_slot_error",
+    "cover_dimensions_error",
     "DOUYIN_DECLARATIONS",
     "PLATFORM_OPTION_KEYS",
     "SCHEDULE_LEAD_SECONDS",

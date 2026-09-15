@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 from pathlib import Path
 
 import pytest
@@ -77,7 +79,7 @@ def test_raw_csv_api_creates_batch_without_multipart_dependency(
 ) -> None:
     from fastapi.testclient import TestClient
 
-    with TestClient(create_app(settings(tmp_path))) as client:
+    with download_client(create_app(settings(tmp_path))) as client:
         response = client.post(
             "/api/v1/batches/import",
             params={"filename": "urls.csv", "name": "CSV import"},
@@ -101,7 +103,7 @@ def test_import_api_rejects_media_type_and_stream_over_limit(
 ) -> None:
     from fastapi.testclient import TestClient
 
-    with TestClient(create_app(settings(tmp_path))) as client:
+    with download_client(create_app(settings(tmp_path))) as client:
         wrong_type = client.post(
             "/api/v1/batches/import",
             params={"filename": "urls.csv"},

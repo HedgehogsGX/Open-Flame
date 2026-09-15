@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from video_download_control import download_assets as download_assets_module
+
+from local_http_client import download_client
+
 import asyncio
 import hashlib
 import os
@@ -145,9 +149,9 @@ def _asgi_get_messages(app, path: str) -> list[dict[str, Any]]:
                 "raw_path": path.encode("ascii"),
                 "query_string": b"",
                 "root_path": "",
-                "headers": [(b"host", b"testserver")],
+                "headers": [(b"host", b"127.0.0.1")],
                 "client": ("testclient", 50000),
-                "server": ("testserver", 80),
+                "server": ("127.0.0.1", 80),
                 "state": {},
             },
             receive,
@@ -162,7 +166,7 @@ def test_asset_listing_skips_malformed_auxiliary_rows_and_keeps_original(
     settings: Settings,
 ) -> None:
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         batch_id, valid_asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -199,7 +203,7 @@ def test_large_auxiliary_download_streams_with_exact_content_length(
     payload = b"large-sidecar\n" + bytes(range(256)) * 4097
     assert len(payload) > 1024 * 1024
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         _, asset = _create_ready_auxiliary_asset(
             client,
             app,
@@ -238,7 +242,7 @@ def test_large_original_download_streams_verified_bytes_in_chunks(
     payload = b"large-original\n" + bytes(range(256)) * 4097
     assert len(payload) > 1024 * 1024
     app = create_app(settings)
-    with TestClient(app) as client:
+    with download_client(app) as client:
         created = client.post(
             "/api/v1/batches",
             json={"inputs": ["https://youtu.be/original-resilience"]},
@@ -487,7 +491,7 @@ def test_original_snapshot_response_outer_cancel_stops_copy_and_listener(
         return handle
 
     spools = []
-    real_spooled_file = api_module.tempfile.SpooledTemporaryFile
+    real_spooled_file = download_assets_module.tempfile.SpooledTemporaryFile
 
     def tracked_spool(**kwargs):
         spool = real_spooled_file(**kwargs)
@@ -496,7 +500,7 @@ def test_original_snapshot_response_outer_cancel_stops_copy_and_listener(
 
     monkeypatch.setattr(Path, "open", slow_open)
     monkeypatch.setattr(
-        api_module.tempfile,
+        download_assets_module.tempfile,
         "SpooledTemporaryFile",
         tracked_spool,
     )
@@ -575,7 +579,7 @@ def test_original_snapshot_response_send_failure_stops_listener_and_closes_spool
     source = tmp_path / "source.mp4"
     source.write_bytes(payload)
     spools = []
-    real_spooled_file = api_module.tempfile.SpooledTemporaryFile
+    real_spooled_file = download_assets_module.tempfile.SpooledTemporaryFile
 
     def tracked_spool(**kwargs):
         spool = real_spooled_file(**kwargs)
@@ -583,7 +587,7 @@ def test_original_snapshot_response_send_failure_stops_listener_and_closes_spool
         return spool
 
     monkeypatch.setattr(
-        api_module.tempfile,
+        download_assets_module.tempfile,
         "SpooledTemporaryFile",
         tracked_spool,
     )

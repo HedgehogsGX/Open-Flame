@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from local_http_client import download_client
+
 import os
 from pathlib import Path
 
@@ -38,7 +40,7 @@ def _payload(*, state: str) -> dict[str, object]:
 def test_toolchain_endpoint_integrates_with_the_real_unconfigured_inspector(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()
@@ -65,7 +67,7 @@ def test_unconfigured_toolchain_is_visible_without_changing_worker_health(
 
     monkeypatch.setattr(api_module, "inspect_toolchain", inspect)
 
-    with TestClient(create_app(settings)) as client:
+    with download_client(create_app(settings)) as client:
         health = client.get("/health")
         response = client.get("/api/v1/operations/tools")
 
@@ -106,7 +108,7 @@ def test_ready_local_tools_never_claim_an_isolated_or_verified_worker(
 
     monkeypatch.setattr(api_module, "inspect_toolchain", inspect)
 
-    with TestClient(create_app(configured)) as client:
+    with download_client(create_app(configured)) as client:
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()
@@ -141,7 +143,7 @@ def test_invalid_toolchain_returns_a_bounded_detail_code(
         lambda observed: _Inspection(_payload(state="invalid")),
     )
 
-    with TestClient(create_app(configured)) as client:
+    with download_client(create_app(configured)) as client:
         response = client.get("/api/v1/operations/tools")
 
     payload = response.json()
