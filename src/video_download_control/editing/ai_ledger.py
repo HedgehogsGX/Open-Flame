@@ -11,7 +11,7 @@ import hmac
 import json
 import re
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -148,25 +148,19 @@ class AiInvocationLedger:
             connection.execute("PRAGMA busy_timeout=30000")
             yield connection
             connection.commit()
-        except AiInvocationLedgerError:
+        except BaseException as exc:
             if connection is not None:
-                try:
+                with suppress(BaseException):
                     connection.rollback()
-                except sqlite3.Error:
-                    pass
+                with suppress(BaseException):
+                    connection.close()
+            if isinstance(exc, (OSError, sqlite3.Error)):
+                raise AiInvocationLedgerError(
+                    "ai_invocation_database_unavailable"
+                ) from exc
             raise
-        except (OSError, sqlite3.Error) as exc:
-            if connection is not None:
-                try:
-                    connection.rollback()
-                except sqlite3.Error:
-                    pass
-            raise AiInvocationLedgerError(
-                "ai_invocation_database_unavailable"
-            ) from exc
-        finally:
-            if connection is not None:
-                connection.close()
+        else:
+            connection.close()
 
     @staticmethod
     def _owner(

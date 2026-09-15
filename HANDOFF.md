@@ -8,7 +8,13 @@
 数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
-2026-09-16 当前修复 Download 数据库连接所有权与 graph fake 的回调合同：普通连接、WAL
+2026-09-16 当前修复 Workflow、Editing、AI ledger 和 Upload 的连接清理：Workflow 设置
+失败立即关库；各域回滚、关闭及 Upload 活动租约的二次错误保留原始业务/提交/中断异常，
+成功路径的关闭错误仍可见。四处连接 owner 保持本域错误映射、timeout、PRAGMA 与 SQL，
+同组故障反馈分别从 24/45、8/22 提升到 45/45、22/22。完整现有回归 2442 passed、
+16 skipped，临时材料留在忽略目录，见[当前验收](validation/README.md#domain-connection-ownership-2026-09-16)。
+
+同日上一轮修复 Download 数据库连接所有权与 graph fake 的回调合同：普通连接、WAL
 初始化和 Schema 8 专用迁移共用路径复核及关闭规则；设置、业务、提交或中断失败时保留
 原始错误并尝试回滚/关闭，成功路径的关闭失败仍可见。graph fake 不再把 Worker 进度回调
 的存储错误转换为 AdapterFailure，Worker 能按原异常暂停队列。Schema 声明、迁移 SQL、
@@ -25,7 +31,8 @@ WAL 重试预算和真实适配器能力保持，见[本轮验收](validation/RE
 数据库、公开命令、依赖或 tracked 自动化测试；临时反馈统一保存在忽略目录。
 
 已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
-本轮基线 `ec9d2a6` push/PR 八格已全部首轮 success；该结论只绑定此提交。
+本轮基线 `905ee46` 的 push/PR 八格最终 success，其中 PR Windows 3.13 首轮账号 ready
+等待超时、一次原样复跑通过；首轮根因未确认，原日志与诊断保留，不能用复跑推定已修复。
 更早 `9989aaf` 的 PR Windows 3.12 首轮时序断言失败和单次复跑仍保留在 PR 中，不将
 复跑解释为已修复偶发测试；后续源码继续读取自己的 CI。
 旧测试补丁的通用摘要豁免已撤除，暂存测试一律拦截；仅保留本 PR 固定已提交历史的

@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -308,6 +308,7 @@ class EditingService:
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
+        connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(self.database_path, timeout=30)
             connection.row_factory = sqlite3.Row
@@ -315,17 +316,17 @@ class EditingService:
             connection.execute("PRAGMA busy_timeout=30000")
             yield connection
             connection.commit()
-        except sqlite3.Error as exc:
-            try:
-                connection.rollback()
-            except (UnboundLocalError, sqlite3.Error):
-                pass
-            raise EditingError("editing_database_unavailable") from exc
-        finally:
-            try:
-                connection.close()
-            except UnboundLocalError:
-                pass
+        except BaseException as exc:
+            if connection is not None:
+                with suppress(BaseException):
+                    connection.rollback()
+                with suppress(BaseException):
+                    connection.close()
+            if isinstance(exc, sqlite3.Error):
+                raise EditingError("editing_database_unavailable") from exc
+            raise
+        else:
+            connection.close()
 
     def recover_interrupted(self, *, cleanup_orphans: bool = False) -> None:
         """Fail local work safely and revoke queued confirmation after restart."""

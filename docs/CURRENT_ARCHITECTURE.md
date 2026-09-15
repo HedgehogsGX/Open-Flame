@@ -190,6 +190,11 @@ API 负责 response 投影，Workflow 得到普通 mapping。AdapterFailure 与 
 progress 回调在转换范围之外，因此存储故障保留 Worker 暂停队列的语义。共享 Protocol、
 graph 身份和真实 exact-selector capability 不变，见[验收记录](../validation/README.md#database-and-graph-callback-ownership-2026-09-16)。
 
+Workflow、Editing、AI ledger 与 Upload 的私有 `_db` 也各自从取得连接起持有设置、事务和
+关闭责任。失败时分别尝试回滚与关闭并保留首个异常，再沿用本域的错误映射；成功路径的
+关闭错误仍传播。Upload 短期 activity lease 的释放遵循相同优先级。各域保持自己的
+timeout、PRAGMA 与 SQL，没有引入共享数据库配置或跨域连接 owner，见[对应反馈](../validation/README.md#domain-connection-ownership-2026-09-16)。
+
 ## 4. 数据所有权与存储布局
 
 默认 `LocalAppConfig` 把 `<app-root>/data` 作为下载 data root，其余域使用同级目录。实际路径可由

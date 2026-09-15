@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -276,13 +276,19 @@ class WorkflowService:
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=30000")
         try:
-            with connection:
-                yield connection
-        finally:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=30000")
+            yield connection
+            connection.commit()
+        except BaseException:
+            with suppress(BaseException):
+                connection.rollback()
+            with suppress(BaseException):
+                connection.close()
+            raise
+        else:
             connection.close()
 
     def _preflight(

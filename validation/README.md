@@ -13,6 +13,34 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Domain connection ownership (2026-09-16)
+
+Baseline `905ee46` finished all eight current push/PR entries successfully,
+including one unchanged repeat after the PR Windows 3.13 account-ready timeout.
+Its original failure and unconfirmed cause remain in the PR and frozen receipt.
+This repair has separate evidence and does not explain that hosted timeout.
+
+Workflow now closes acquired connections after setup failures. Workflow,
+Editing, AI ledger and Upload preserve the first body/commit/interruption error
+while independently attempting rollback and close; otherwise-successful close
+errors remain visible. Upload's activity lease preserves the same precedence.
+Real service calls retain missing-record or duplicate-account domain codes.
+The same real-SQLite feedback improves **24/45 to 45/45** for the first three
+owners and **8/22 to 22/22** for Upload. Native deferred-FK and authorizer
+controls exercise commit/rollback failures. Close/release faults occur after
+native disposal; they do not prove recovery from permanently unclosable resources.
+
+The complete existing Windows CPython 3.13.14 suite reports **2442 passed,
+16 skipped**, zero failures/errors, in 358.915 JUnit seconds. AST and SQL
+checks limit the source change to four private connection owners, Upload's
+private activity context and contextlib imports. Timeout, PRAGMA, Schema,
+domain mappings, dependencies, public commands, tests, CI and the 235-file
+inventory stay unchanged. Current-commit CI and frozen installation identity
+are recorded in the PR. Raw before/after evidence, scripts and logs remain in
+ignored `validation/local/domain-connection-audit-20260916/`. No module or
+tracked test is added. No original application root or real-platform operation
+was used; the four failed YT inputs remain unavailable.
+
 ## Database and graph callback ownership (2026-09-16)
 
 Baseline `ec9d2a6` completed all eight push/PR jobs on their first attempt.

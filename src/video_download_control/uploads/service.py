@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -258,7 +258,11 @@ class UploadService:
         lease = self._acquire_activity_lease()
         try:
             yield
-        finally:
+        except BaseException:
+            with suppress(BaseException):
+                lease.release()
+            raise
+        else:
             lease.release()
 
     @contextmanager
@@ -360,9 +364,15 @@ class UploadService:
                 db.row_factory = sqlite3.Row
                 db.execute("PRAGMA foreign_keys=ON")
                 db.execute("PRAGMA journal_mode=WAL")
-                with db:
-                    yield db
-            finally:
+                yield db
+                db.commit()
+            except BaseException:
+                with suppress(BaseException):
+                    db.rollback()
+                with suppress(BaseException):
+                    db.close()
+                raise
+            else:
                 db.close()
 
     def start(self) -> None:
