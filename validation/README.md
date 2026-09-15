@@ -13,33 +13,36 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Upload migration error ownership (2026-09-16)
+
+Upload legacy migration now preserves its first schema/business/interruption
+error through independent rollback and close attempts. Successful-path close
+errors remain visible. The redundant committed flag is removed; all 24 migration
+declarations, ordered transaction body, path validation and locks are unchanged.
+
+Same real-SQLite feedback: **19/32 to 32/32**, including direct Schema 1/2/3
+upgrades, native DDL/PRAGMA/commit/rollback failures and actual service/HTTP
+calls. Failed migrations retain original database bytes and account/source rows;
+HTTP again returns 409 `upload_schema_unsupported`. Close faults follow native
+disposal, so these controls do not prove recovery from permanently failing OS
+close or cancellation after a durable commit.
+
+Complete existing Windows CPython 3.13.14 regression: **2442 passed, 16 skipped**,
+zero failures/errors, 353.502 JUnit seconds. No tracked test, CI, Schema,
+dependency, public command or source-inventory change. Current-commit CI and
+independent frozen installs are recorded in the PR; raw evidence stays in ignored
+`validation/local/upload-migration-ownership-20260916/`. The initial feedback
+harness's cross-thread cleanup mistake is separately retained and not counted
+as production feedback. YT's four failed inputs and real-platform acceptance
+remain outstanding.
+
 ## Domain connection ownership (2026-09-16)
 
-Baseline `905ee46` finished all eight current push/PR entries successfully,
-including one unchanged repeat after the PR Windows 3.13 account-ready timeout.
-Its original failure and unconfirmed cause remain in the PR and frozen receipt.
-This repair has separate evidence and does not explain that hosted timeout.
-
-Workflow now closes acquired connections after setup failures. Workflow,
-Editing, AI ledger and Upload preserve the first body/commit/interruption error
-while independently attempting rollback and close; otherwise-successful close
-errors remain visible. Upload's activity lease preserves the same precedence.
-Real service calls retain missing-record or duplicate-account domain codes.
-The same real-SQLite feedback improves **24/45 to 45/45** for the first three
-owners and **8/22 to 22/22** for Upload. Native deferred-FK and authorizer
-controls exercise commit/rollback failures. Close/release faults occur after
-native disposal; they do not prove recovery from permanently unclosable resources.
-
-The complete existing Windows CPython 3.13.14 suite reports **2442 passed,
-16 skipped**, zero failures/errors, in 358.915 JUnit seconds. AST and SQL
-checks limit the source change to four private connection owners, Upload's
-private activity context and contextlib imports. Timeout, PRAGMA, Schema,
-domain mappings, dependencies, public commands, tests, CI and the 235-file
-inventory stay unchanged. Current-commit CI and frozen installation identity
-are recorded in the PR. Raw before/after evidence, scripts and logs remain in
-ignored `validation/local/domain-connection-audit-20260916/`. No module or
-tracked test is added. No original application root or real-platform operation
-was used; the four failed YT inputs remain unavailable.
+Completed at `0ab7c75`: Workflow/Editing/AI ledger and Upload ordinary connection
+ownership, with 45/45 and 22/22 feedback and eight first-attempt CI successes.
+The [complete frozen record](https://github.com/HedgehogsGX/Open-Flame/blob/0ab7c75e6de486a636e860d36591751b00678065/validation/README.md#domain-connection-ownership-2026-09-16)
+and ignored `validation/local/domain-connection-audit-20260916/` retain the
+original failures, complete regression, installs and sealed receipt.
 
 ## Database and graph callback ownership (2026-09-16)
 

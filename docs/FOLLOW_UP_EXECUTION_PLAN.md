@@ -1,10 +1,10 @@
 # Open-Flame 后续执行计划
 
-2026-09-16 当前入口：按六类核心职责加 CLI 继续修复架构。Workflow、Editing、AI ledger
-和 Upload 各自管理连接，补齐 setup 失败关闭与主异常保留；Upload 活动租约沿用同一清理
-原则。四域数据库、事务 SQL、Schema、错误映射和已有测试保持，见[当前验收](../validation/README.md#domain-connection-ownership-2026-09-16)。
-基线 `905ee46` 的八格最终 success 包含一次首轮失败和原样复跑，根因未确认。新提交继续
-绑定自己的完整回归、CI、构建和安装；前一轮 Download/graph 修复见[对应记录](../validation/README.md#database-and-graph-callback-ownership-2026-09-16)。
+2026-09-16 当前入口：Upload 旧库迁移的失败清理现在保留首个错误，既有 Schema/API
+错误映射与成功关闭语义保持，见[当前验收](../validation/README.md#upload-migration-error-ownership-2026-09-16)。该修复不改变
+迁移 SQL、锁、Schema 或其他域；旧连接摘要收敛为固定提交链接，完整材料留在原 evidence。
+基线 `0ab7c75` 的八项 CI 均首轮 success；新提交仍须独立完成回归、CI、构建和安装。
+继续按已复现问题推进六类核心职责与 CLI 分层，真实平台验收沿用下方输入和授权边界。
 
 2026-09-15 阶段记录：工具链文件的 hash/snapshot
 复用同句柄、有界读取和结束身份复核；代理策略加载归安全层，CLI 只保留参数转交。

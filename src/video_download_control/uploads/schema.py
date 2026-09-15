@@ -9,7 +9,7 @@ import stat
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -1446,7 +1446,6 @@ def _preserve_v3_legacy_review_state_reasons(
 def _migrate_to_latest(path: Path) -> None:
     before = _require_plain_database(path)
     db = None
-    committed = False
     try:
         db = sqlite3.connect(path, timeout=30)
         db.row_factory = sqlite3.Row
@@ -1486,17 +1485,17 @@ def _migrate_to_latest(path: Path) -> None:
         else:
             raise UploadSchemaError
         db.commit()
-        committed = True
-    except (OSError, sqlite3.Error, UploadSchemaError):
-        if db is not None and not committed:
-            try:
-                db.rollback()
-            except sqlite3.Error:
-                pass
-        raise UploadSchemaError from None
-    finally:
+    except BaseException as exc:
         if db is not None:
-            db.close()
+            with suppress(BaseException):
+                db.rollback()
+            with suppress(BaseException):
+                db.close()
+        if isinstance(exc, (OSError, sqlite3.Error, UploadSchemaError)):
+            raise UploadSchemaError from None
+        raise
+    else:
+        db.close()
 
 
 def _publish_upload_schema(path: Path) -> None:

@@ -194,6 +194,8 @@ Workflow、Editing、AI ledger 与 Upload 的私有 `_db` 也各自从取得连�
 关闭责任。失败时分别尝试回滚与关闭并保留首个异常，再沿用本域的错误映射；成功路径的
 关闭错误仍传播。Upload 短期 activity lease 的释放遵循相同优先级。各域保持自己的
 timeout、PRAGMA 与 SQL，没有引入共享数据库配置或跨域连接 owner，见[对应反馈](../validation/README.md#domain-connection-ownership-2026-09-16)。
+Upload 的旧版本迁移也在本域管理失败回滚/关闭与成功关闭；原始 Schema 错误不会再被
+二次关闭失败替换。24 条迁移声明、一次事务和路径/锁边界保持，见[迁移反馈](../validation/README.md#upload-migration-error-ownership-2026-09-16)。
 
 ## 4. 数据所有权与存储布局
 
