@@ -15,12 +15,13 @@ from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from .egress import (
+    BoundedResolver,
     EgressPolicyError,
     ResolvedTarget,
     Resolver,
     _ascii_host,
     assert_connected_peer,
-    resolve_public_target,
+    resolve_public_target_async,
 )
 
 
@@ -179,7 +180,7 @@ class ControlledForwardProxy:
     """A small, fail-closed HTTP forward proxy with DNS pinning.
 
     The proxy validates every CONNECT or plain HTTP target with
-    :func:`resolve_public_target`, connects to one of the returned numeric IP
+    the shared egress target policy, connects to a returned numeric IP
     addresses, and verifies the actual connected peer. It does not follow
     redirects: a redirect followed by the client becomes a new request and is
     validated again.
@@ -209,10 +210,10 @@ class ControlledForwardProxy:
         normalized_hosts = tuple(
             dict.fromkeys(_ascii_host(host) for host in configured_hosts)
         )
-        self.resolver = resolver
         self.connector = connector or self._open_numeric_connection
         self.allowed_hosts = normalized_hosts
         self.limits = limits or ForwardProxyLimits()
+        self._dns = BoundedResolver(resolver, max_active=self.limits.max_connections)
         self.audit = audit
         self.unix_connector = unix_connector
         self.unix_server_factory = unix_server_factory
@@ -520,17 +521,14 @@ class ControlledForwardProxy:
 
     async def _resolve(self, url: str, host: str) -> ResolvedTarget:
         try:
-            return await self._idle(
-                asyncio.to_thread(
-                    resolve_public_target,
-                    url,
-                    resolver=self.resolver,
-                    allowed_hosts=self.allowed_hosts,
-                    allow_ip_literal=False,
-                ),
-                host,
-                timeout_reason="resolution_timeout",
+            return await resolve_public_target_async(
+                url,
+                resolver=self._dns,
+                allowed_hosts=self.allowed_hosts,
+                timeout_seconds=self.limits.idle_timeout_seconds,
             )
+        except TimeoutError:
+            raise _ProxyFailure("resolution_timeout", host, 504) from None
         except EgressPolicyError as exc:
             raise _ProxyFailure(exc.reason, host, 403) from None
         except _ProxyFailure:

@@ -164,6 +164,16 @@ API 负责 response 投影，Workflow 得到普通 mapping。AdapterFailure 与 
 领域层的有限、非负数值合同；RetryPolicy 用调用者提供的失败时刻判断可排程范围，
 不缩短上游的重试提示，Worker 持久化终态或重试。验证记录见[验收索引](../validation/README.md#core-ownership-repair-2026-09-15)。
 
+生命周期的后续修复将 `recover_before_claim` 作为 Repository 的显式恢复阶段：按旧观察时刻
+回收 intent 和过期任务，Worker 随后检查 stop 并读取新时钟领取；领取事务仍复核 gate、queue
+和 pending intent。旧 `claim_next` 显式时刻的便利路径保留原事务线性化。Adapter 自行管理
+两类控制记录的 descriptor 与清理，失败初始化复用 `discard_created_file`，主异常不会被
+关闭/删除错误覆盖；否则成功的操作仍须通过严格清理。`security.egress.BoundedResolver`
+统一短链与代理的 DNS 执行：超时/取消只放弃观察，实际解析结束才释放容量；异步等待不使用
+默认 executor，late completion 不阻止事件循环退出。代理 DNS 容量沿用连接上限，每次最多
+64 个答案；同步短链保留原容量、答案上限和默认 DNS 注入入口。验证见
+[生命周期记录](../validation/README.md#lifecycle-ownership-repair-2026-09-15)。
+
 ## 4. 数据所有权与存储布局
 
 默认 `LocalAppConfig` 把 `<app-root>/data` 作为下载 data root，其余域使用同级目录。实际路径可由

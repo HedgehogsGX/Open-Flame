@@ -12,25 +12,23 @@ redirect outside policy.
 from __future__ import annotations
 
 import math
-import queue
 import re
-import socket
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import islice
 from typing import Protocol
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .domain import Platform, SourceType
 from .normalization import NormalizedURL, URLNormalizationError, normalize_url
 from .security.egress import (
+    BoundedResolver,
     EgressPolicyError,
     ResolvedTarget,
     Resolver,
     assert_connected_peer,
     resolve_public_target,
+    system_dns_answers as _system_dns_answers,
 )
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -172,67 +170,6 @@ _POLICIES: Mapping[Platform, _PlatformPolicy] = {
 }
 
 
-def _system_dns_answers(host: str, port: int) -> tuple[str, ...]:
-    answers = socket.getaddrinfo(
-        host,
-        port,
-        family=socket.AF_UNSPEC,
-        type=socket.SOCK_STREAM,
-        proto=socket.IPPROTO_TCP,
-    )
-    return tuple(answer[4][0] for answer in answers)
-
-
-class _BoundedResolver:
-    """Bound blocking DNS without pretending the underlying call is cancellable."""
-
-    def __init__(self, resolver: Resolver, *, max_active: int = 4) -> None:
-        self._resolver = resolver
-        self._slots = threading.BoundedSemaphore(max_active)
-
-    def resolve(
-        self,
-        host: str,
-        port: int,
-        *,
-        timeout_seconds: float,
-        max_answers: int,
-    ) -> tuple[str, ...]:
-        if not self._slots.acquire(blocking=False):
-            raise OSError("bounded DNS capacity unavailable")
-        result: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
-
-        def worker() -> None:
-            try:
-                answers = tuple(islice(self._resolver(host, port), max_answers + 1))
-                if len(answers) > max_answers:
-                    result.put_nowait((False, None))
-                else:
-                    result.put_nowait((True, answers))
-            except Exception:  # noqa: BLE001 - DNS exceptions are redacted
-                result.put_nowait((False, None))
-            finally:
-                self._slots.release()
-
-        thread = threading.Thread(
-            target=worker,
-            name="vdc-bounded-dns",
-            daemon=True,
-        )
-        try:
-            thread.start()
-        except RuntimeError:
-            self._slots.release()
-            raise OSError("bounded DNS worker unavailable") from None
-        try:
-            succeeded, payload = result.get(timeout=timeout_seconds)
-        except queue.Empty:
-            raise OSError("bounded DNS deadline exceeded") from None
-        if not succeeded or not isinstance(payload, tuple):
-            raise OSError("bounded DNS resolution failed")
-        return payload
-
-
 class ControlledShortLinkResolver:
     """Resolve a known platform short link one manually validated hop at a time."""
 
@@ -246,7 +183,7 @@ class ControlledShortLinkResolver:
     ) -> None:
         self.transport = transport
         self.limits = limits or ShortLinkLimits()
-        self._resolver = _BoundedResolver(resolver or _system_dns_answers)
+        self._resolver = BoundedResolver(resolver or _system_dns_answers)
         self.monotonic = monotonic or time.monotonic
 
     def resolve(

@@ -349,22 +349,32 @@ class Worker:
                     list_attempt_ids=self.asset_store.list_managed_attempt_ids,
                     cleanup_attempt=self.asset_store.cleanup_attempt_identity,
                 )
+                if self.stop_event.is_set():
+                    return None
+                if not self.repository.recover_before_claim(
+                    worker_id=self.worker_id,
+                    now=self.clock(),
+                    remove_pending_asset=self.asset_store.remove_pending_asset,
+                    claim_gate_run_id=self.claim_gate_run_id,
+                ):
+                    return None
             if self.stop_event.is_set():
                 return None
+            # Recovery observes abandoned work at its own time. Read a fresh
+            # claim time only after cleanup and the stop check have returned.
             lease = self.repository.claim_next(
                 worker_id=self.worker_id,
                 adapter=self.adapter.name,
                 adapter_version=self.adapter.version,
                 now=self.clock(),
                 lease_seconds=self.lease_seconds,
-                remove_pending_asset=self.asset_store.remove_pending_asset,
                 supports_exact_selector=getattr(
                     self.adapter, "supports_exact_selector", False
                 ),
                 skip_unsupported_graph_jobs=self.skip_unsupported_graph_jobs,
                 supported_routes=self.supported_routes,
                 claim_gate_run_id=self.claim_gate_run_id,
-                perform_recovery=perform_recovery,
+                perform_recovery=False,
                 excluded_job_ids=excluded_job_ids,
             )
         except OSError as exc:

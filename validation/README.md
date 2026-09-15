@@ -13,6 +13,50 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Lifecycle ownership repair (2026-09-15)
+
+Baseline `9989aaf` was re-read with eight latest push/PR CI checks successful.
+Its first PR Windows 3.12 failure and one failed-job rerun remain documented in
+the PR; a passing rerun does not repair its timing-sensitive assertion.
+
+- Worker now completes Repository recovery, checks stop, and reads a fresh
+  clock before claiming. The original path consumed a new 60-second lease
+  during slow cleanup and could claim after a stop requested during recovery.
+  Repository retains the recovery observation, expired-job handling, intent
+  ownership and transaction gates. Its convenience claim path keeps its
+  original gate/recovery/claim linearization. Twelve fault/control scenarios and
+  five real-Repository gap races pass, including a newly inserted intent that
+  blocks this claim and is cleaned on the next quiescent cycle.
+- Adapter owns its two attempt-private control records. Failed initialization
+  uses the existing created-file identity cleanup; descriptor and file cleanup
+  preserve the primary failure while successful operations still fail closed
+  on cleanup errors. Both original filepath fields reject JSON null before
+  path construction; legitimate no-thumbnail null pairs remain accepted.
+  The same fault matrix improves from **5/13 to 13/13**.
+- Security owns bounded synchronous/asynchronous DNS. A real loopback proxy
+  reproduced event-loop shutdown blocked after the request timed out, listener
+  closed and proxy tasks completed. Releasing only the stalled DNS fixed the
+  control; the repair exits normally even while DNS remains stalled. Capacity
+  stays occupied until DNS actually returns, async observation is cancellable,
+  and late completion is safe after loop closure. The proxy limits DNS capacity
+  to its connection budget and answers to 64; existing short-link limits remain.
+  Independent cancellation, capacity and shared URL/IP-policy checks pass **22/22**.
+
+Existing targeted modules pass: Adapter/Worker media **164**, Worker lifecycle
+**91**, network policy/proxy/short links **144**, local short-link integration
+**15**. Groups overlap and must not be summed. The shared DNS implementation
+retains the existing default injection name through an import alias, after an
+integration recheck caught its initial removal. No tracked tests, CI, dependency
+locks, Schema, public command, page markup or module inventory changed. Raw
+scripts and logs are under ignored `validation/local/architecture-continuation-20260915/`.
+The full existing Windows CPython 3.13.14 suite reports **2442 passed, 16 skipped**
+in 334.73 seconds. The original platform/tool-bundle skips and collection remain.
+The real loopback DNS shutdown case also exits normally on exact CPython 3.12.10.
+CI definition, locked dependencies, whitespace and the unchanged 235-file source
+inventory pass; current-commit hosted CI and frozen artifacts are recorded in the PR.
+These cases do not identify the user's four missing YT failures or prove real
+platform, Linux-container isolation, or original-root acceptance.
+
 ## Core ownership repair (2026-09-15)
 
 Development starts from clean `d7f0c60`. Its

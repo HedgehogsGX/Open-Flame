@@ -8,15 +8,17 @@
 数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
-2026-09-15 当前开发继续按六类核心职责加 CLI 修复边界：AssetStore 统一完整输出库存校验，
-目录不可读或不可信时拒绝登记；能力证据 CLI 复用受管文件的有界读取与身份核对；
-supervisor 返回不依赖 HTTP 的不可变观察值，由 API 转为 DTO；重试数值合同由领域层共享，
-RetryPolicy 判断可排程范围，Worker 将非法延时收敛为明确失败，保留原有 CAS 和存储异常处理。
-复现、现有回归和真实 loopback HTTP/Workflow 预检结果见[本轮验收](validation/README.md#core-ownership-repair-2026-09-15)。
-没有新增运行时、数据库、公共命令或 tracked 自动化测试。
+2026-09-15 当前继续修复三个生命周期：Repository 显式恢复后，Worker 检查 stop、读取新时钟
+再领取，慢恢复不再消耗新租约；Adapter 控制文件按创建身份清理并保留主异常；安全层统一
+有界同步/异步 DNS，阻塞解析不再占住默认 executor 并阻止代理进程退出。原状态、CAS、
+claim gate、队列与取消语义保持，见[本轮验收](validation/README.md#lifecycle-ownership-repair-2026-09-15)。
+此前的素材库存、证据读取、运行状态 DTO 分离与重试合同修复见
+[上一轮记录](validation/README.md#core-ownership-repair-2026-09-15)。未新增 Module 文件、
+数据库、公开命令、依赖或 tracked 自动化测试；临时反馈统一保存在忽略目录。
 
 已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
-本轮开始前重新读取 GitHub，确认修正后的 `d7f0c60` push/PR 共八格均 success；该结论只绑定此提交。
+本轮开始前重新读取 GitHub，确认 `9989aaf` push/PR 最新八格均 success；该结论只绑定此提交。
+其 PR Windows 3.12 首轮时序断言失败和单次复跑均保留在 PR 中，不将复跑解释为已修复偶发测试。
 旧测试补丁的通用摘要豁免已撤除，暂存测试一律拦截；仅保留本 PR 固定已提交历史的
 范围校验，base 前移即失效。发行清单移出 118 份历史报告，保留固定提交链接、索引、
 两份 Stage 0 模板及 Linux 操作指南。当前修复验证与剩余评论见 [验收索引](validation/README.md)。
