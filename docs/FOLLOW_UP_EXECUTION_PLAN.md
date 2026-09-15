@@ -1,10 +1,11 @@
 # Open-Flame 后续执行计划
 
-2026-09-15 当前入口：按六类核心职责加 CLI 继续修复架构。恢复观察和新 claim 时钟分开，
-Adapter 控制文件统一身份清理与主异常保留，同步/异步有界 DNS 归安全层。
-本轮开始前的 `9989aaf` push/PR 最新八格已重新核实为 success；其首轮时序断言失败和单次
-复跑已单独保留。当前验证见[生命周期记录](../validation/README.md#lifecycle-ownership-repair-2026-09-15)，
-之后每个提交仍需读取自己的 CI。此前素材库存、证据读取、运行状态和重试合同见
+2026-09-15 当前入口：按六类核心职责加 CLI 继续修复架构。工具链文件的 hash/snapshot
+复用同句柄、有界读取和结束身份复核；代理策略加载归安全层，CLI 只保留参数转交。
+`6885764` push/PR 八格已全部首轮 success，新读取修复须核对自己的验证，见
+[本轮记录](../validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。此前恢复/新租约
+时钟、Adapter 控制文件和有界 DNS 见[生命周期记录](../validation/README.md#lifecycle-ownership-repair-2026-09-15)。
+更早素材库存、证据读取、运行状态和重试合同见
 [上一轮记录](../validation/README.md#core-ownership-repair-2026-09-15)。
 [PR #2 评论](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057) 的测试门禁与
 发行清理已处理，详见[评论处理记录](../validation/README.md#pr-2-review-follow-up-2026-09-15)。

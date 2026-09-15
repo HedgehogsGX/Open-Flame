@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import queue
 import re
 import socket
@@ -9,11 +10,24 @@ import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import islice
+from pathlib import Path
 from urllib.parse import urljoin, urlsplit, urlunsplit
+
+from ..managed_files import (
+    ManagedFileChanged,
+    ManagedFileSizeExceeded,
+    close_binary_on_error,
+    file_signature,
+    is_plain_entry,
+    open_matching_binary,
+    require_matching_fstat,
+    snapshot_open_binary,
+)
 
 
 Resolver = Callable[[str, int], Iterable[str]]
 MAX_EGRESS_URL_LENGTH = 4096
+_HOST_POLICY_MAX_BYTES = 16 * 1024
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _BLOCKED_TRANSITION_NETWORKS = (
     ipaddress.ip_network("64:ff9b::/96"),
@@ -36,6 +50,66 @@ class ResolvedTarget:
     host: str
     port: int
     addresses: tuple[str, ...]
+
+
+def _is_host_policy_file(info: os.stat_result) -> bool:
+    return (
+        is_plain_entry(info)
+        and info.st_size <= _HOST_POLICY_MAX_BYTES
+        and not (os.name == "posix" and info.st_mode & 0o222)
+    )
+
+
+def load_allowed_hosts(
+    allowed_hosts: Sequence[str], *, policy_path: Path | None = None
+) -> tuple[str, ...]:
+    """Load bounded operator policy, retaining file identity and permissions.
+
+    The caller supplies command-line host entries. Network authorization still
+    validates host syntax and suffix matching when constructing the proxy.
+    """
+    hosts = list(allowed_hosts)
+    if policy_path is not None:
+        if not policy_path.is_absolute():
+            raise ValueError("allowed-host file path must be absolute")
+        try:
+            info = policy_path.lstat()
+            if not _is_host_policy_file(info):
+                raise ValueError("allowed-host file is not a bounded plain file")
+            expected = file_signature(info)
+            try:
+                opened = open_matching_binary(policy_path, expected=expected)
+            except ManagedFileChanged as exc:
+                raise ValueError("allowed-host file changed before reading") from exc
+            with close_binary_on_error(opened.handle) as handle:
+                if not _is_host_policy_file(opened.info):
+                    raise ValueError("allowed-host file changed before reading")
+                snapshot = snapshot_open_binary(handle, maximum=_HOST_POLICY_MAX_BYTES)
+                after = require_matching_fstat(handle, expected=expected)
+                current = policy_path.lstat()
+                if (
+                    not _is_host_policy_file(after)
+                    or not _is_host_policy_file(current)
+                    or file_signature(current) != expected
+                    or snapshot.size != info.st_size
+                ):
+                    raise ManagedFileChanged
+                handle.close()
+            text = snapshot.payload.decode("utf-8", errors="strict")
+        except (ManagedFileChanged, ManagedFileSizeExceeded) as exc:
+            raise ValueError("allowed-host file changed while reading") from exc
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("allowed-host file could not be read safely") from exc
+        hosts.extend(
+            line
+            for raw_line in text.splitlines()
+            if (line := raw_line.strip()) and not line.startswith("#")
+        )
+    if not hosts or len(hosts) > 128:
+        raise ValueError("one to 128 allowed hosts are required")
+    if len(set(hosts)) != len(hosts):
+        raise ValueError("allowed hosts must be unique")
+    return tuple(hosts)
 
 
 def system_dns_answers(host: str, port: int) -> Iterable[str]:

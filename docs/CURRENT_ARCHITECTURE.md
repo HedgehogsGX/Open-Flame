@@ -174,6 +174,13 @@ API 负责 response 投影，Workflow 得到普通 mapping。AdapterFailure 与 
 64 个答案；同步短链保留原容量、答案上限和默认 DNS 注入入口。验证见
 [生命周期记录](../validation/README.md#lifecycle-ownership-repair-2026-09-15)。
 
+工具链校验通过现有受管文件原语完成同句柄 hash/snapshot、实际字节上限与结束身份复核；
+`toolchain.py` 保留各类文件的尺寸、摘要、版本和错误码，以及应用包 lock 允许硬链接的
+既有合同。代理策略的文件与列表规则归 `security.egress.load_allowed_hosts`，CLI 只转交
+参数；初始、打开后及读取结束的身份、单链接和 POSIX 只读属性都须有效，16 KiB 与
+1–128 项、顺序/注释/重复规则保持。两处沿用现有 Module 和 `managed_files`，不增加
+存储、执行器或通用文件框架，见[读取校验记录](../validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。
+
 ## 4. 数据所有权与存储布局
 
 默认 `LocalAppConfig` 把 `<app-root>/data` 作为下载 data root，其余域使用同级目录。实际路径可由

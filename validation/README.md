@@ -13,6 +13,47 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Bounded policy and toolchain reads (2026-09-15)
+
+Baseline `6885764` completed all eight push/PR CI jobs on their first attempt.
+Each Windows job reports 2442 passed / 16 skipped, and Ubuntu 2321 passed /
+137 skipped. Current working-tree repairs require their own validation.
+
+- Toolchain retains artifact/version/hash/size policy while using managed
+  matching-open, bounded hash/snapshot and final identity checks. Previously,
+  same-size modification during hashing could still produce `ready`; a lock
+  growing after size precheck could be accepted beyond its 256 KiB limit.
+  The same expanded feedback improves from **9/16 to 16/16**, covering actual
+  mutation after data/EOF reads, new hard links, growth and primary/close errors.
+  Normal package-manager hard links for the application lock remain accepted;
+  installed artifacts remain single-link. Installed lock, checksum evidence and
+  smoke marker reads use the same boundary and retain their own limits. Cache
+  copies also stop at the locked size plus one sentinel: a growing 20-byte
+  fixture previously read/wrote 65556 bytes before rejection; now it reads 21
+  and writes zero before the same `bundle_invalid` outcome.
+- Security owns `load_allowed_hosts`; proxy CLI delegates argument values.
+  A real hard link added after the first read was accepted by the original CLI
+  loader. The same eight controls improve **7/8 to 8/8**. Ten independent
+  controls cover exact 16 KiB / 128-entry acceptance, combined overflow,
+  order/comments, replacement/mutation, bounded growth and failure before CLI
+  startup. File identity, single-link and POSIX read-only requirements are
+  rechecked through the read; errors still preserve their original cause.
+
+Existing toolchain/API/CLI/local-Worker regression reports **72 passed**;
+proxy/policy/deployment reports **112 passed, 4 skipped**. These groups are not
+an aggregate full-suite count.
+The complete existing Windows CPython 3.13.14 suite reports **2442 passed,
+16 skipped** in 321.26 seconds, with zero failures/errors. CI definition,
+locked dependencies, compatibility, whitespace and the unchanged 235-file source
+inventory pass. Current-commit CI and frozen artifact identity are recorded in
+the PR; neither earlier CI nor earlier packages substitute for those checks.
+The POSIX metadata control uses real chmod/stat on Windows to exercise that
+branch; it is not a target Linux/container or Unix-socket acceptance claim.
+Scripts and original failures remain under ignored
+`validation/local/architecture-completion-audit-20260915/`. No tracked tests,
+Schema, public command or dependency changed; no module file was added. These
+cases do not identify the four missing YT failures or prove platform acceptance.
+
 ## Lifecycle ownership repair (2026-09-15)
 
 Baseline `9989aaf` was re-read with eight latest push/PR CI checks successful.
