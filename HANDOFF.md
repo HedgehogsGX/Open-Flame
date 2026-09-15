@@ -1,6 +1,6 @@
 # Open-Flame 当前开发交接
 
-> 最后更新：2026-09-15（Australia/Adelaide）
+> 最后更新：2026-09-16（Australia/Adelaide）
 > 本文件只保留当前源码身份、能力边界、风险与下一入口。逐轮结果见
 > [`validation/`](validation/README.md) 中的独立证据；旧交接内容仍可从 Git 历史读取。
 
@@ -8,7 +8,13 @@
 数据所有权和跨域一致性见 [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md)。
 提示词中的快照只用于定位，新任务仍须重新核对 HEAD、远端 main、Schema、CI 和签名。
 
-2026-09-15 当前修复工具链与代理策略的实际读取：工具链文件的 hash/snapshot 共用受管
+2026-09-16 当前修复 Download 数据库连接所有权与 graph fake 的回调合同：普通连接、WAL
+初始化和 Schema 8 专用迁移共用路径复核及关闭规则；设置、业务、提交或中断失败时保留
+原始错误并尝试回滚/关闭，成功路径的关闭失败仍可见。graph fake 不再把 Worker 进度回调
+的存储错误转换为 AdapterFailure，Worker 能按原异常暂停队列。Schema 声明、迁移 SQL、
+WAL 重试预算和真实适配器能力保持，见[本轮验收](validation/README.md#database-and-graph-callback-ownership-2026-09-16)。
+
+2026-09-15 修复工具链与代理策略的实际读取：工具链文件的 hash/snapshot 共用受管
 读取及结束身份复核，拒绝同长修改与超出预检大小的增长；代理策略加载归安全层，CLI
 只传参数，并在读取前后复核身份、单链接与 POSIX 只读属性。各自保留版本、尺寸、错误
 和文件类型合同，见[本轮验收](validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。
@@ -19,7 +25,7 @@
 数据库、公开命令、依赖或 tracked 自动化测试；临时反馈统一保存在忽略目录。
 
 已读取 [PR #2 审查意见](https://github.com/HedgehogsGX/Open-Flame/pull/2#issuecomment-5661999057)。
-本轮开始时等待的 `6885764` push/PR 八格已全部首轮 success；该结论只绑定此提交。
+本轮基线 `ec9d2a6` push/PR 八格已全部首轮 success；该结论只绑定此提交。
 更早 `9989aaf` 的 PR Windows 3.12 首轮时序断言失败和单次复跑仍保留在 PR 中，不将
 复跑解释为已修复偶发测试；后续源码继续读取自己的 CI。
 旧测试补丁的通用摘要豁免已撤除，暂存测试一律拦截；仅保留本 PR 固定已提交历史的

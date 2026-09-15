@@ -329,7 +329,13 @@ class ScriptedGraphFakeAdapter:
 
         try:
             request.output_dir.mkdir(parents=True, exist_ok=True)
-            progress(ProgressUpdate(phase="downloading", fraction=0.1))
+        except OSError:
+            raise AdapterFailure(
+                ErrorCode.STORAGE_ERROR,
+                _GRAPH_STORAGE_DIAGNOSTIC,
+            ) from None
+        progress(ProgressUpdate(phase="downloading", fraction=0.1))
+        try:
             target = request.output_dir / "attachment.fake"
             with target.open("xb") as handle:
                 handle.write(self._payload)

@@ -13,6 +13,47 @@ Linux operator guide. The 118 historical reports stay in Git; links below bind
 them to commit `7b48a9fe4dae09279a3e986642af68263386e796`. They require online
 access when reading an extracted source package.
 
+## Database and graph callback ownership (2026-09-16)
+
+Baseline `ec9d2a6` completed all eight push/PR jobs on their first attempt.
+These results, its packages and its ordinary runtime/browser smoke remain
+bound to that baseline; this repair requires its own checks.
+
+- Download `Database` now owns every acquired connection through one private
+  context, including ordinary transactions, WAL setup and the dedicated
+  Schema 8 migration. Path validation runs before initialization writes and
+  before/after each opening. Setup/body/commit/interruption failures retain
+  their original exception while rollback and close are attempted; otherwise
+  successful close errors remain visible. The same real-SQLite ownership
+  feedback improves **3/11 to 11/11**. Independent migration/WAL controls
+  improve **7/13 to 13/13**, preserving Schema 7 data and DDL after a failed
+  Schema 8 rebuild, per-connection PRAGMA settings, and the five-attempt WAL
+  budget/backoffs. Seventeen Schema/SQL declarations and fourteen migration
+  statements remain unchanged apart from removal of the discarded
+  connection's two reset PRAGMAs. Close faults are injected after native close;
+  recorded backoffs do not establish real lock-wait timing or recovery from
+  an OS close that permanently fails.
+- Graph fake's first progress callback previously converted a Worker-owned
+  storage error into `AdapterFailure`, leaving the queue unpaused. Narrow file
+  catches preserve mkdir-before-progress-before-write order and real storage
+  collision mapping, while callback errors reach Worker unchanged. The same
+  direct/real-Worker feedback improves **6/8 to 8/8**, including queue pause.
+  Ordinary fake behavior, graph identities, shared Protocol and the real
+  adapter's disabled exact-selector capability remain unchanged.
+
+Existing migration regression reports **28 passed**; the eight existing
+graph/adapter modules report **196 passed, 0 skipped**. These groups are not an
+aggregate full-suite count. The complete existing Windows CPython 3.13.14 suite
+reports **2442 passed, 16 skipped**, zero failures/errors, in 360.13 seconds.
+CI definition, locked dependencies, compatibility, whitespace and the unchanged
+235-file source inventory pass. Current-commit CI and frozen package/installation
+identity are recorded in the PR. Original failures, scripts, JSON and JUnit
+remain under ignored `validation/local/architecture-boundary-audit-20260916/`.
+Only two production files and existing documentation change; no tracked test,
+public command, Schema or dependency changes and no module file is added.
+This offline repair does not reproduce the user's
+four missing YT samples or establish real-platform acceptance.
+
 ## Bounded policy and toolchain reads (2026-09-15)
 
 Baseline `6885764` completed all eight push/PR CI jobs on their first attempt.

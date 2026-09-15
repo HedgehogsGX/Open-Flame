@@ -1,6 +1,6 @@
 # Open-Flame 当前架构
 
-> 状态日期：2026-09-15（Australia/Adelaide）
+> 状态日期：2026-09-16（Australia/Adelaide）
 > 文档起始源码基线：`30548f32e072ee549a322b840374d09486d63110`
 > 产品版本：`0.28.0` 发布后的持续开发源码
 
@@ -180,6 +180,15 @@ API 负责 response 投影，Workflow 得到普通 mapping。AdapterFailure 与 
 参数；初始、打开后及读取结束的身份、单链接和 POSIX 只读属性都须有效，16 KiB 与
 1–128 项、顺序/注释/重复规则保持。两处沿用现有 Module 和 `managed_files`，不增加
 存储、执行器或通用文件框架，见[读取校验记录](../validation/README.md#bounded-policy-and-toolchain-reads-2026-09-15)。
+
+2026-09-16 的连接修复收敛在 `Database` 内部：`_owned_connection` 从取得 SQLite 句柄
+起拥有路径前后复核、row factory 和关闭；普通事务、WAL 初始化与 Schema 8 专用迁移共用
+它，仍各自拥有事务设置及重试语义。初始化在 mkdir/WAL 前校验路径，失败的回滚/关闭不再
+替换主异常；成功路径的关闭错误仍传播。专用迁移连接关闭后，其 connection-local PRAGMA
+不再做无效复位。Schema SQL、五次 WAL 尝试和退避不变，没有向 Repository 或 CLI 泄漏
+连接管理。`ScriptedGraphFakeAdapter` 只转换自己 mkdir/写文件的 OSError，Worker 提供的
+progress 回调在转换范围之外，因此存储故障保留 Worker 暂停队列的语义。共享 Protocol、
+graph 身份和真实 exact-selector capability 不变，见[验收记录](../validation/README.md#database-and-graph-callback-ownership-2026-09-16)。
 
 ## 4. 数据所有权与存储布局
 
